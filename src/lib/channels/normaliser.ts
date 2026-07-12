@@ -77,6 +77,19 @@ export async function normaliseAndPersist(
     };
   }
 
+  // Advance the customer's service window on every inbound message. A failure
+  // here shouldn't fail the whole webhook — the message is already persisted.
+  const { error: windowError } = await supabase
+    .from("customers")
+    .update({ last_customer_message_at: parsed.receivedAt })
+    .eq("id", customerId);
+  if (windowError) {
+    console.error("[normaliser] Failed to update service window", {
+      customerId,
+      error: windowError.message,
+    });
+  }
+
   const message: NormalisedMessage = {
     businessId: business.id,
     customerId,
