@@ -5,6 +5,7 @@ import {
   deriveIdempotencyKey,
   handleVerifiedWebhook,
 } from "@/lib/webhooks/handlers/stub";
+import { handleTwilioWhatsApp } from "@/lib/webhooks/handlers/whatsapp";
 import { checkIdempotency } from "@/lib/webhooks/idempotency";
 import { isWebhookSource } from "@/lib/webhooks/types";
 import { verifyWebhookSignature } from "@/lib/webhooks/verify";
@@ -65,6 +66,24 @@ export async function POST(request: NextRequest) {
       console.error("[stripe-webhook] Handler error", message);
       // Acknowledge so Stripe retries via a later event rather than flooding
       // the endpoint; never surface a 500 for a validly-signed event.
+      return NextResponse.json(
+        { ok: true, handled: false, reason: "handler_error" },
+        { status: 200 },
+      );
+    }
+  }
+
+  // Inbound WhatsApp: normalise the verified payload into the messages table.
+  if (sourceHeader === "twilio-whatsapp") {
+    if (isDuplicate) {
+      return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+    }
+    try {
+      const result = await handleTwilioWhatsApp(rawBody);
+      return NextResponse.json(result.body, { status: result.status });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[whatsapp] Handler error", message);
       return NextResponse.json(
         { ok: true, handled: false, reason: "handler_error" },
         { status: 200 },
