@@ -17,9 +17,6 @@ type FormData = {
   dispatch_address_line1: string;
   dispatch_city: string;
   dispatch_postcode: string;
-  payout_account_holder_name: string;
-  payout_sort_code: string;
-  payout_account_number: string;
 };
 
 const STEPS: Step[] = ["A", "B", "C", "D"];
@@ -31,6 +28,7 @@ export function OnboardingWizard() {
   const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
   const [slugChecking, setSlugChecking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormData>({
     name: "",
@@ -38,9 +36,6 @@ export function OnboardingWizard() {
     dispatch_address_line1: "",
     dispatch_city: "",
     dispatch_postcode: "",
-    payout_account_holder_name: "",
-    payout_sort_code: "",
-    payout_account_number: "",
   });
 
   const checkSlug = useCallback(async (slug: string) => {
@@ -89,11 +84,9 @@ export function OnboardingWizard() {
           form.dispatch_postcode.trim().length > 0
         );
       case "C":
-        return (
-          form.payout_account_holder_name.trim().length > 0 &&
-          form.payout_sort_code.trim().length > 0 &&
-          form.payout_account_number.trim().length > 0
-        );
+        // Bank connection via Stripe is optional at onboarding time — sellers
+        // can connect now or complete it later from their dashboard.
+        return true;
       case "D":
         return true;
       default:
@@ -117,10 +110,9 @@ export function OnboardingWizard() {
     }
   }
 
-  async function completeOnboarding() {
-    setSubmitting(true);
-    setError(null);
-
+  // Idempotently creates the business row for the signed-in user. Returns true
+  // once a row exists (either freshly created here or already present).
+  async function ensureBusiness(): Promise<boolean> {
     const supabase = createClient();
     const {
       data: { user },
@@ -128,10 +120,18 @@ export function OnboardingWizard() {
 
     if (!user) {
       setError("Session expired. Please sign in again.");
-      setSubmitting(false);
       router.push("/login");
-      return;
+      return false;
     }
+
+    const { data: existing } = await supabase
+      .from("businesses")
+      .select("id")
+      .eq("owner_user_id", user.id)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    if (existing) return true;
 
     const { error: insertError } = await supabase.from("businesses").insert({
       owner_user_id: user.id,
@@ -140,20 +140,51 @@ export function OnboardingWizard() {
       dispatch_address_line1: form.dispatch_address_line1.trim(),
       dispatch_city: form.dispatch_city.trim(),
       dispatch_postcode: form.dispatch_postcode.trim(),
-      // Plain fields per Step 2 schema. Encryption-at-rest review required
-      // before production (Spec Section 21 non-functional requirement).
-      payout_account_holder_name: form.payout_account_holder_name.trim(),
-      payout_sort_code: form.payout_sort_code.trim(),
-      payout_account_number: form.payout_account_number.trim(),
     });
-
-    setSubmitting(false);
 
     if (insertError) {
       setError(insertError.message);
+      return false;
+    }
+
+    return true;
+  }
+
+  // Persists the business (if needed) then redirects into Stripe's hosted
+  // Express onboarding so Stripe collects and verifies bank details directly.
+  async function connectBank() {
+    setConnecting(true);
+    setError(null);
+
+    if (!(await ensureBusiness())) {
+      setConnecting(false);
       return;
     }
 
+    const response = await fetch("/api/onboarding/stripe-connect", {
+      method: "POST",
+    });
+    const result = await response.json();
+
+    if (!response.ok || !result.url) {
+      setError(result.error ?? "Could not start Stripe onboarding.");
+      setConnecting(false);
+      return;
+    }
+
+    window.location.href = result.url;
+  }
+
+  async function completeOnboarding() {
+    setSubmitting(true);
+    setError(null);
+
+    if (!(await ensureBusiness())) {
+      setSubmitting(false);
+      return;
+    }
+
+    setSubmitting(false);
     router.push("/dashboard");
     router.refresh();
   }
@@ -255,42 +286,24 @@ export function OnboardingWizard() {
 
       {step === "C" && (
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Bank details for payouts. Stored as plain fields for now.
-          </p>
-          <div className="space-y-2">
-            <Label htmlFor="holder">Account holder name</Label>
-            <Input
-              id="holder"
-              value={form.payout_account_holder_name}
-              onChange={(event) =>
-                updateField("payout_account_holder_name", event.target.value)
-              }
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="sort">Sort code</Label>
-            <Input
-              id="sort"
-              value={form.payout_sort_code}
-              onChange={(event) =>
-                updateField("payout_sort_code", event.target.value)
-              }
-              placeholder="12-34-56"
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="account">Account number</Label>
-            <Input
-              id="account"
-              value={form.payout_account_number}
-              onChange={(event) =>
-                updateField("payout_account_number", event.target.value)
-              }
-              required
-            />
+          <div className="rounded-lg border border-border p-6 space-y-3">
+            <h2 className="font-medium">Get paid with Stripe</h2>
+            <p className="text-sm text-muted-foreground">
+              Connect your bank securely through Stripe. Stripe collects and
+              verifies your details directly — TradeFlow never stores your raw
+              bank information.
+            </p>
+            <Button
+              type="button"
+              className="w-full"
+              disabled={connecting}
+              onClick={connectBank}
+            >
+              {connecting ? "Redirecting to Stripe…" : "Connect your bank via Stripe"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              You can also connect later from your dashboard.
+            </p>
           </div>
         </div>
       )}
