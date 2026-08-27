@@ -1,5 +1,7 @@
 import type Stripe from "stripe";
 
+import { ORDER_STATUS } from "@/lib/orders/status";
+import { releaseOrderReservation } from "@/lib/orders/reservations";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface StripeHandlerResult {
@@ -22,6 +24,12 @@ export async function handleStripeEvent(
   switch (event.type) {
     case "account.updated":
       return handleAccountUpdated(event.data.object as Stripe.Account);
+    case "payment_intent.payment_failed":
+      return handlePaymentFailed(event.data.object as Stripe.PaymentIntent);
+    case "checkout.session.expired":
+      return handleCheckoutSessionExpired(
+        event.data.object as Stripe.Checkout.Session,
+      );
     default:
       console.info("[stripe-webhook] Unhandled event type", {
         type: event.type,
@@ -32,6 +40,90 @@ export async function handleStripeEvent(
         body: { ok: true, handled: false, type: event.type },
       };
   }
+}
+
+async function resolveOrderIdFromMetadata(
+  metadata: Stripe.Metadata | null | undefined,
+): Promise<string | null> {
+  const orderId = metadata?.order_id;
+  return typeof orderId === "string" && orderId.length > 0 ? orderId : null;
+}
+
+async function handlePaymentFailed(
+  paymentIntent: Stripe.PaymentIntent,
+): Promise<StripeHandlerResult> {
+  const orderId = await resolveOrderIdFromMetadata(paymentIntent.metadata);
+  if (!orderId) {
+    console.info("[stripe-webhook] payment_failed without order_id metadata", {
+      paymentIntent: paymentIntent.id,
+    });
+    return {
+      status: 200,
+      body: { ok: true, handled: false, reason: "no_order_id" },
+    };
+  }
+
+  const supabase = createAdminClient();
+  await releaseOrderReservation(supabase, orderId, ORDER_STATUS.PAYMENT_FAILED);
+
+  console.info("[stripe-webhook] payment_failed — reservation released", {
+    orderId,
+    paymentIntent: paymentIntent.id,
+  });
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      handled: true,
+      type: "payment_intent.payment_failed",
+      orderId,
+    },
+  };
+}
+
+async function handleCheckoutSessionExpired(
+  session: Stripe.Checkout.Session,
+): Promise<StripeHandlerResult> {
+  let orderId = await resolveOrderIdFromMetadata(session.metadata);
+
+  const supabase = createAdminClient();
+
+  if (!orderId && session.id) {
+    const { data: order } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("stripe_checkout_session_id", session.id)
+      .maybeSingle();
+    orderId = order?.id ?? null;
+  }
+
+  if (!orderId) {
+    console.info("[stripe-webhook] checkout.session.expired without order", {
+      session: session.id,
+    });
+    return {
+      status: 200,
+      body: { ok: true, handled: false, reason: "no_order_id" },
+    };
+  }
+
+  await releaseOrderReservation(supabase, orderId, ORDER_STATUS.EXPIRED);
+
+  console.info("[stripe-webhook] checkout.session.expired — reservation released", {
+    orderId,
+    session: session.id,
+  });
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      handled: true,
+      type: "checkout.session.expired",
+      orderId,
+    },
+  };
 }
 
 async function handleAccountUpdated(

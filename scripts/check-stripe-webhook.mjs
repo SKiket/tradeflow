@@ -35,20 +35,27 @@ async function main() {
   console.log(`Events:   ${JSON.stringify(ep.enabled_events)}`);
 
   const receivesAll = ep.enabled_events.includes("*");
-  const hasAccountUpdated = receivesAll || ep.enabled_events.includes("account.updated");
+  const required = [
+    "account.updated",
+    "payment_intent.payment_failed",
+    "checkout.session.expired",
+  ];
+  const missing = receivesAll
+    ? []
+    : required.filter((e) => !ep.enabled_events.includes(e));
 
-  if (hasAccountUpdated) {
+  if (missing.length === 0) {
     console.log(
       receivesAll
-        ? "\naccount.updated covered (endpoint receives all events '*')."
-        : "\naccount.updated already registered — no change needed.",
+        ? "\nAll required events covered (endpoint receives '*')."
+        : "\nAll required events already registered — no change needed.",
     );
     return;
   }
 
-  console.log("\naccount.updated NOT registered — adding it now…");
+  console.log(`\nMissing events: ${JSON.stringify(missing)} — adding now…`);
   const updated = await stripe.webhookEndpoints.update(ENDPOINT_ID, {
-    enabled_events: [...ep.enabled_events, "account.updated"],
+    enabled_events: [...new Set([...ep.enabled_events, ...missing])],
   });
   console.log(`Updated events: ${JSON.stringify(updated.enabled_events)}`);
 }
