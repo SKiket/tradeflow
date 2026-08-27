@@ -1,6 +1,7 @@
 import { parseOrder } from "@/lib/ai/tasks/order-parse";
 import { twilioWhatsAppAdapter } from "@/lib/channels/adapters/twilio-whatsapp";
 import { normaliseAndPersist } from "@/lib/channels/normaliser";
+import { createDraftOrderFromParse } from "@/lib/orders/create-draft-order";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { parseFormBody } from "@/lib/webhooks/verify/signatures";
 
@@ -12,7 +13,8 @@ export interface WhatsAppHandlerResult {
 /**
  * Handles a verified inbound Twilio WhatsApp webhook: parse → normalise →
  * resolve business/customer/thread → persist as an inbound message → run
- * catalog-grounded order_parse and store the result on the message row.
+ * catalog-grounded order_parse → create/update a PENDING_CONFIRMATION draft
+ * (or send clarification / stock message).
  *
  * Runs in unauthenticated webhook context, so it uses the service-role client.
  * Every outcome is acknowledged with 200 (with a clear log) so Twilio does not
@@ -31,6 +33,7 @@ export async function handleTwilioWhatsApp(
     case "persisted": {
       let parseStored = false;
       let parseError: string | null = null;
+      let draftOutcome: Record<string, unknown> | null = null;
 
       // Run order_parse on every inbound customer message (simplest correct
       // default). Failures must not fail the webhook — the message is already
@@ -63,6 +66,34 @@ export async function handleTwilioWhatsApp(
             itemCount: parseResult.items.length,
             needsClarification: parseResult.needs_clarification,
           });
+
+          // Step 9: draft confirmation / clarification. Failures are logged
+          // but must not fail the inbound webhook.
+          try {
+            const outcome = await createDraftOrderFromParse({
+              businessId: result.message.businessId,
+              customerId: result.message.customerId,
+              customerPhoneE164: result.message.customerPhone,
+              threadId: result.message.threadId,
+              parseResult,
+              supabase,
+            });
+            draftOutcome = { ...outcome };
+            console.info("[whatsapp] draft-order outcome", {
+              messageId: result.messageId,
+              action: outcome.action,
+            });
+          } catch (draftError) {
+            const message =
+              draftError instanceof Error
+                ? draftError.message
+                : String(draftError);
+            console.error("[whatsapp] draft-order failed", {
+              messageId: result.messageId,
+              error: message,
+            });
+            draftOutcome = { action: "error", error: message };
+          }
         }
       } catch (error) {
         parseError = error instanceof Error ? error.message : String(error);
@@ -83,6 +114,7 @@ export async function handleTwilioWhatsApp(
         mediaCount: result.message.mediaUrls.length,
         hasText: result.message.normalisedText.length > 0,
         parseStored,
+        draftAction: draftOutcome?.action ?? null,
       });
 
       return {
@@ -98,6 +130,7 @@ export async function handleTwilioWhatsApp(
           mediaCount: result.message.mediaUrls.length,
           parseStored,
           ...(parseError ? { parseError } : {}),
+          ...(draftOutcome ? { draft: draftOutcome } : {}),
         },
       };
     }
