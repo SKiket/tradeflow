@@ -39,6 +39,9 @@ async function main() {
     "account.updated",
     "payment_intent.payment_failed",
     "checkout.session.expired",
+    "checkout.session.completed",
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed",
   ];
   const missing = receivesAll
     ? []

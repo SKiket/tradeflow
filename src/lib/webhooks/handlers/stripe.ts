@@ -1,5 +1,7 @@
 import type Stripe from "stripe";
 
+import { fulfilPaidOrder, notifyBuyerPaymentFailed } from "@/lib/orders/fulfil-order";
+import { resolveOrderIdFromCheckoutSession } from "@/lib/orders/resolve-order-from-checkout";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { releaseOrderReservation } from "@/lib/orders/reservations";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -30,6 +32,18 @@ export async function handleStripeEvent(
       return handleCheckoutSessionExpired(
         event.data.object as Stripe.Checkout.Session,
       );
+    case "checkout.session.completed":
+      return handleCheckoutSessionCompleted(
+        event.data.object as Stripe.Checkout.Session,
+      );
+    case "checkout.session.async_payment_succeeded":
+      return handleCheckoutAsyncPaymentSucceeded(
+        event.data.object as Stripe.Checkout.Session,
+      );
+    case "checkout.session.async_payment_failed":
+      return handleCheckoutAsyncPaymentFailed(
+        event.data.object as Stripe.Checkout.Session,
+      );
     default:
       console.info("[stripe-webhook] Unhandled event type", {
         type: event.type,
@@ -47,6 +61,154 @@ async function resolveOrderIdFromMetadata(
 ): Promise<string | null> {
   const orderId = metadata?.order_id;
   return typeof orderId === "string" && orderId.length > 0 ? orderId : null;
+}
+
+/**
+ * checkout.session.completed — synchronous card payments fulfil when
+ * payment_status === 'paid'. Delayed methods (Pay by Bank) log and wait
+ * for checkout.session.async_payment_succeeded.
+ */
+async function handleCheckoutSessionCompleted(
+  session: Stripe.Checkout.Session,
+): Promise<StripeHandlerResult> {
+  const supabase = createAdminClient();
+  const orderId = await resolveOrderIdFromCheckoutSession(supabase, session);
+
+  if (!orderId) {
+    console.info("[stripe-webhook] checkout.session.completed without order", {
+      session: session.id,
+    });
+    return {
+      status: 200,
+      body: { ok: true, handled: false, reason: "no_order_id" },
+    };
+  }
+
+  const paymentStatus = session.payment_status;
+
+  if (paymentStatus === "paid") {
+    const result = await fulfilPaidOrder(supabase, orderId);
+    console.info("[stripe-webhook] checkout.session.completed — paid", {
+      orderId,
+      session: session.id,
+      fulfilAction: result.action,
+    });
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        handled: true,
+        type: "checkout.session.completed",
+        paymentStatus,
+        orderId,
+        fulfil: result,
+      },
+    };
+  }
+
+  console.info(
+    "[stripe-webhook] checkout.session.completed — payment pending (awaiting async event)",
+    {
+      orderId,
+      session: session.id,
+      paymentStatus,
+    },
+  );
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      handled: true,
+      type: "checkout.session.completed",
+      paymentStatus,
+      orderId,
+      fulfil: { action: "deferred", reason: "async_payment_pending" },
+    },
+  };
+}
+
+/** Delayed notification success (e.g. Pay by Bank cleared). */
+async function handleCheckoutAsyncPaymentSucceeded(
+  session: Stripe.Checkout.Session,
+): Promise<StripeHandlerResult> {
+  const supabase = createAdminClient();
+  const orderId = await resolveOrderIdFromCheckoutSession(supabase, session);
+
+  if (!orderId) {
+    console.info(
+      "[stripe-webhook] checkout.session.async_payment_succeeded without order",
+      { session: session.id },
+    );
+    return {
+      status: 200,
+      body: { ok: true, handled: false, reason: "no_order_id" },
+    };
+  }
+
+  const result = await fulfilPaidOrder(supabase, orderId);
+  console.info("[stripe-webhook] checkout.session.async_payment_succeeded", {
+    orderId,
+    session: session.id,
+    fulfilAction: result.action,
+  });
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      handled: true,
+      type: "checkout.session.async_payment_succeeded",
+      orderId,
+      fulfil: result,
+    },
+  };
+}
+
+/** Delayed notification failure (e.g. Pay by Bank rejected). */
+async function handleCheckoutAsyncPaymentFailed(
+  session: Stripe.Checkout.Session,
+): Promise<StripeHandlerResult> {
+  const supabase = createAdminClient();
+  const orderId = await resolveOrderIdFromCheckoutSession(supabase, session);
+
+  if (!orderId) {
+    console.info(
+      "[stripe-webhook] checkout.session.async_payment_failed without order",
+      { session: session.id },
+    );
+    return {
+      status: 200,
+      body: { ok: true, handled: false, reason: "no_order_id" },
+    };
+  }
+
+  const { data: order } = await supabase
+    .from("orders")
+    .select("status")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (order?.status === ORDER_STATUS.AWAITING_PAYMENT) {
+    await releaseOrderReservation(supabase, orderId, ORDER_STATUS.PAYMENT_FAILED);
+    await notifyBuyerPaymentFailed(supabase, orderId);
+  }
+
+  console.info("[stripe-webhook] checkout.session.async_payment_failed", {
+    orderId,
+    session: session.id,
+    priorStatus: order?.status,
+  });
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      handled: true,
+      type: "checkout.session.async_payment_failed",
+      orderId,
+    },
+  };
 }
 
 async function handlePaymentFailed(
@@ -85,18 +247,8 @@ async function handlePaymentFailed(
 async function handleCheckoutSessionExpired(
   session: Stripe.Checkout.Session,
 ): Promise<StripeHandlerResult> {
-  let orderId = await resolveOrderIdFromMetadata(session.metadata);
-
   const supabase = createAdminClient();
-
-  if (!orderId && session.id) {
-    const { data: order } = await supabase
-      .from("orders")
-      .select("id")
-      .eq("stripe_checkout_session_id", session.id)
-      .maybeSingle();
-    orderId = order?.id ?? null;
-  }
+  let orderId = await resolveOrderIdFromCheckoutSession(supabase, session);
 
   if (!orderId) {
     console.info("[stripe-webhook] checkout.session.expired without order", {
@@ -144,8 +296,6 @@ async function handleAccountUpdated(
       account: account.id,
       error: lookupError.message,
     });
-    // Acknowledge with 200 so Stripe retries via a later event rather than
-    // hammering the endpoint; the state will re-sync on the next update.
     return {
       status: 200,
       body: { ok: true, handled: false, reason: "lookup_error" },
@@ -153,8 +303,6 @@ async function handleAccountUpdated(
   }
 
   if (!business) {
-    // Event for an account that isn't a TradeFlow seller (e.g. unrelated test
-    // events). Nothing to do — acknowledge so Stripe stops retrying.
     console.info("[stripe-webhook] account.updated for unknown account", {
       account: account.id,
     });

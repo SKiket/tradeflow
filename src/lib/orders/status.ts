@@ -6,11 +6,13 @@ export const ORDER_STATUS = {
   PENDING_CONFIRMATION: "PENDING_CONFIRMATION",
   /** Buyer confirmed; stock reserved; Stripe Checkout link sent. */
   AWAITING_PAYMENT: "AWAITING_PAYMENT",
+  /** Payment received; stock permanently decremented; reservation released. */
+  PAID: "PAID",
   /** Buyer declined or draft abandoned before payment. */
   CANCELLED: "CANCELLED",
   /** Reservation expired (lazy sweep or checkout.session.expired). */
   EXPIRED: "EXPIRED",
-  /** Payment failed (payment_intent.payment_failed). */
+  /** Payment failed (payment_intent.payment_failed / async_payment_failed). */
   PAYMENT_FAILED: "PAYMENT_FAILED",
 } as const;
 
