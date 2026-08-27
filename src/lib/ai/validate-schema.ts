@@ -32,6 +32,10 @@ export function assertMatchesSchema(data: unknown, schema: JSONSchema7): void {
 }
 
 function validateProperty(value: unknown, schema: JSONSchema7): void {
+  // Structured-output providers frequently return null for optional/nullable
+  // fields; treat null as valid rather than failing the whole parse.
+  if (value === null) return;
+
   if (schema.type === "string" && typeof value !== "string") {
     throw new Error(`Schema validation failed: expected string, got ${typeof value}`);
   }
