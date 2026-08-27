@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { ORDER_STATUS } from "@/lib/orders/status";
+import { capturePaymentIntentForOrder } from "@/lib/stripe/capture-payment-intent";
 
 export type FulfilOrderOutcome =
   | {
@@ -91,6 +92,15 @@ export async function fulfilPaidOrder(
 
   if (outcome !== "fulfilled") {
     return { action: "skipped", orderId, reason: outcome };
+  }
+
+  try {
+    await capturePaymentIntentForOrder(orderId);
+  } catch (err) {
+    console.error("[orders] Failed to capture payment_intent_id", {
+      orderId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const { data: customer } = await supabase

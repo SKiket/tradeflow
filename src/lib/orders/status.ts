@@ -12,6 +12,12 @@ export const ORDER_STATUS = {
   DISPATCHED: "DISPATCHED",
   /** Seller marked the order delivered to the buyer. */
   DELIVERED: "DELIVERED",
+  /** Refund initiated; awaiting Stripe refund.updated confirmation. */
+  REFUND_PENDING: "REFUND_PENDING",
+  /** Fully refunded (cumulative refunded_amount_pence === total_pence). */
+  REFUNDED: "REFUNDED",
+  /** Partially refunded; further refunds may be possible. */
+  PARTIALLY_REFUNDED: "PARTIALLY_REFUNDED",
   /** Buyer declined or draft abandoned before payment. */
   CANCELLED: "CANCELLED",
   /** Reservation expired (lazy sweep or checkout.session.expired). */
@@ -21,3 +27,11 @@ export const ORDER_STATUS = {
 } as const;
 
 export type OrderStatus = (typeof ORDER_STATUS)[keyof typeof ORDER_STATUS];
+
+/** Statuses from which a refund may be initiated (payment must have succeeded). */
+export const REFUNDABLE_STATUSES = [
+  ORDER_STATUS.PAID,
+  ORDER_STATUS.DISPATCHED,
+  ORDER_STATUS.DELIVERED,
+  ORDER_STATUS.PARTIALLY_REFUNDED,
+] as const;

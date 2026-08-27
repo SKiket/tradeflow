@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 
 import { fulfilPaidOrder, notifyBuyerPaymentFailed } from "@/lib/orders/fulfil-order";
+import { processRefundUpdated } from "@/lib/orders/refund-order";
 import { resolveOrderIdFromCheckoutSession } from "@/lib/orders/resolve-order-from-checkout";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { releaseOrderReservation } from "@/lib/orders/reservations";
@@ -44,6 +45,8 @@ export async function handleStripeEvent(
       return handleCheckoutAsyncPaymentFailed(
         event.data.object as Stripe.Checkout.Session,
       );
+    case "refund.updated":
+      return handleRefundUpdated(event.data.object as Stripe.Refund);
     default:
       console.info("[stripe-webhook] Unhandled event type", {
         type: event.type,
@@ -207,6 +210,26 @@ async function handleCheckoutAsyncPaymentFailed(
       handled: true,
       type: "checkout.session.async_payment_failed",
       orderId,
+    },
+  };
+}
+
+async function handleRefundUpdated(
+  refund: Stripe.Refund,
+): Promise<StripeHandlerResult> {
+  const result = await processRefundUpdated(refund);
+  console.info("[stripe-webhook] refund.updated", {
+    refundId: refund.id,
+    status: refund.status,
+    result,
+  });
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      handled: result.action !== "skipped",
+      type: "refund.updated",
+      refund: result,
     },
   };
 }
