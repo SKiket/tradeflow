@@ -8,6 +8,10 @@ export const ORDER_STATUS = {
   AWAITING_PAYMENT: "AWAITING_PAYMENT",
   /** Payment received; stock permanently decremented; reservation released. */
   PAID: "PAID",
+  /** Seller marked the order dispatched (post-payment fulfilment). */
+  DISPATCHED: "DISPATCHED",
+  /** Seller marked the order delivered to the buyer. */
+  DELIVERED: "DELIVERED",
   /** Buyer declined or draft abandoned before payment. */
   CANCELLED: "CANCELLED",
   /** Reservation expired (lazy sweep or checkout.session.expired). */
