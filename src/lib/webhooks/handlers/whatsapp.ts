@@ -3,8 +3,10 @@ import { parseOrder } from "@/lib/ai/tasks/order-parse";
 import { twilioWhatsAppAdapter } from "@/lib/channels/adapters/twilio-whatsapp";
 import { normaliseAndPersist } from "@/lib/channels/normaliser";
 import {
+  cancelAwaitingPaymentOrder,
   cancelPendingDraft,
   confirmDraftOrder,
+  findAwaitingPaymentForThread,
   findPendingDraftForThread,
 } from "@/lib/orders/confirm-draft-order";
 import { createDraftOrderFromParse } from "@/lib/orders/create-draft-order";
@@ -25,9 +27,27 @@ type ReplyOutcome =
   | { handled: true; outcome: Record<string, unknown> }
   | { handled: false };
 
+async function classifyInboundReply(text: string): Promise<{
+  classification: "affirmative" | "negative" | "other";
+  usedAi: boolean;
+}> {
+  if (isAffirmativeReply(text)) {
+    return { classification: "affirmative", usedAi: false };
+  }
+  if (isNegativeReply(text)) {
+    return { classification: "negative", usedAi: false };
+  }
+  const result = await classifyReply(text);
+  return { classification: result.classification, usedAi: true };
+}
+
 /**
- * Step 10 intercept: when a thread has an open PENDING_CONFIRMATION draft,
- * classify the buyer's reply before order_parse runs.
+ * Pre-order_parse intercept: PENDING_CONFIRMATION (Step 10) first, then
+ * AWAITING_PAYMENT. PENDING_CONFIRMATION behaviour is unchanged — corrections
+ * still fall through to order_parse and update the same draft.
+ *
+ * AWAITING_PAYMENT: a clear cancel expires Checkout + releases the hold;
+ * a change request falls through so Step 9 can supersede the unpaid order.
  */
 async function tryHandleDraftReply(params: {
   businessId: string;
@@ -42,66 +62,105 @@ async function tryHandleDraftReply(params: {
     params.businessId,
     params.threadId,
   );
-  if (!draft) {
+
+  if (draft) {
+    const { classification, usedAi } = await classifyInboundReply(
+      params.messageText.trim(),
+    );
+
+    if (classification === "affirmative") {
+      const outcome = await confirmDraftOrder({
+        businessId: params.businessId,
+        customerId: params.customerId,
+        customerPhoneE164: params.customerPhoneE164,
+        threadId: params.threadId,
+        orderId: draft.id,
+        usedAi,
+        supabase: params.supabase,
+      });
+      const replyAction =
+        outcome.action === "confirmed" ? "confirmed" : outcome.action;
+      return {
+        handled: true,
+        outcome: { replyAction, usedAi, ...outcome },
+      };
+    }
+
+    if (classification === "negative") {
+      const outcome = await cancelPendingDraft(params.supabase, {
+        businessId: params.businessId,
+        customerId: params.customerId,
+        customerPhoneE164: params.customerPhoneE164,
+        threadId: params.threadId,
+        orderId: draft.id,
+      });
+      return {
+        handled: true,
+        outcome: { replyAction: "cancelled", usedAi, ...outcome },
+      };
+    }
+
+    // Corrections / questions fall through to order_parse (Step 9).
     return { handled: false };
   }
 
-  const text = params.messageText.trim();
-  let classification: "affirmative" | "negative" | "other";
-  let usedAi = false;
-
-  if (isAffirmativeReply(text)) {
-    classification = "affirmative";
-  } else if (isNegativeReply(text)) {
-    classification = "negative";
-  } else {
-    const result = await classifyReply(text);
-    usedAi = true;
-    classification = result.classification;
+  const awaiting = await findAwaitingPaymentForThread(
+    params.supabase,
+    params.businessId,
+    params.threadId,
+  );
+  if (!awaiting) {
+    return { handled: false };
   }
 
-  if (classification === "affirmative") {
-    const outcome = await confirmDraftOrder({
-      businessId: params.businessId,
-      customerId: params.customerId,
-      customerPhoneE164: params.customerPhoneE164,
-      threadId: params.threadId,
-      orderId: draft.id,
-      usedAi,
-      supabase: params.supabase,
-    });
-    const replyAction =
-      outcome.action === "confirmed" ? "confirmed" : outcome.action;
-    return {
-      handled: true,
-      outcome: { replyAction, usedAi, ...outcome },
-    };
-  }
+  const { classification, usedAi } = await classifyInboundReply(
+    params.messageText.trim(),
+  );
 
   if (classification === "negative") {
-    const outcome = await cancelPendingDraft(params.supabase, {
+    const outcome = await cancelAwaitingPaymentOrder({
+      supabase: params.supabase,
       businessId: params.businessId,
+      orderId: awaiting.id,
+      notifyBuyer: true,
       customerId: params.customerId,
       customerPhoneE164: params.customerPhoneE164,
       threadId: params.threadId,
-      orderId: draft.id,
     });
+    if (outcome.action === "error") {
+      return {
+        handled: true,
+        outcome: {
+          replyAction: "error",
+          usedAi,
+          previousStatus: "AWAITING_PAYMENT",
+          ...outcome,
+        },
+      };
+    }
     return {
       handled: true,
-      outcome: { replyAction: "cancelled", usedAi, ...outcome },
+      outcome: {
+        replyAction: "cancelled",
+        usedAi,
+        previousStatus: "AWAITING_PAYMENT",
+        ...outcome,
+      },
     };
   }
 
-  // Corrections / questions fall through to order_parse (Step 9).
+  // Change requests (and stray "yes") fall through to order_parse.
   return { handled: false };
 }
 
 /**
  * Handles a verified inbound Twilio WhatsApp webhook: parse → normalise →
  * resolve business/customer/thread → persist as an inbound message →
- * (Step 10) intercept affirmative/negative replies on open drafts →
+ * (Step 10) intercept affirmative/negative replies on open drafts, and
+ * cancel an AWAITING_PAYMENT order when the buyer clearly declines →
  * catalog-grounded order_parse → for intent "order", create/update a
- * PENDING_CONFIRMATION draft; for "question", a context-grounded support
+ * PENDING_CONFIRMATION draft (superseding an unpaid AWAITING_PAYMENT
+ * order when one exists); for "question", a context-grounded support
  * reply (escalating to the seller when the answer isn't configured); for
  * "other", a fixed fallback.
  *
@@ -126,8 +185,8 @@ export async function handleTwilioWhatsApp(
       let replyOutcome: Record<string, unknown> | null = null;
       let supportOutcome: Record<string, unknown> | null = null;
 
-      // Step 10: intercept affirmative/negative replies on open drafts BEFORE
-      // order_parse so corrections still flow through parse when not matched.
+      // Intercept yes/no on PENDING_CONFIRMATION, and cancel on
+      // AWAITING_PAYMENT, BEFORE order_parse so corrections still parse.
       let replyHandled = false;
       try {
         const reply = await tryHandleDraftReply({

@@ -5,10 +5,14 @@ import { ORDER_STATUS } from "@/lib/orders/status";
 import {
   RESERVATION_MINUTES,
   checkOrderStockAvailable,
+  releaseOrderReservation,
   reserveOrderStock,
   sweepExpiredReservations,
 } from "@/lib/orders/reservations";
-import { createOrderCheckoutSession } from "@/lib/stripe/checkout";
+import {
+  createOrderCheckoutSession,
+  expireCheckoutSessionIfOpen,
+} from "@/lib/stripe/checkout";
 
 export type ConfirmDraftOutcome =
   | {
@@ -319,4 +323,178 @@ export async function findPendingDraftForThread(
     throw new Error(`Draft lookup failed: ${error.message}`);
   }
   return data;
+}
+
+/** Find the open AWAITING_PAYMENT order on a thread, if any. */
+export async function findAwaitingPaymentForThread(
+  supabase: SupabaseClient,
+  businessId: string,
+  threadId: string,
+): Promise<{
+  id: string;
+  order_ref: string;
+  stripe_checkout_session_id: string | null;
+} | null> {
+  const { data, error } = await supabase
+    .from("orders")
+    .select("id, order_ref, stripe_checkout_session_id")
+    .eq("business_id", businessId)
+    .eq("thread_id", threadId)
+    .eq("status", ORDER_STATUS.AWAITING_PAYMENT)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Awaiting-payment lookup failed: ${error.message}`);
+  }
+  return data;
+}
+
+export type CancelAwaitingPaymentOutcome =
+  | {
+      action: "cancelled";
+      orderId: string;
+      checkoutSessionId: string | null;
+      checkoutExpireOutcome: string;
+      outboundMessageId?: string;
+    }
+  | {
+      action: "error";
+      error: string;
+    };
+
+/**
+ * Buyer-initiated cancel (or supersede) of an AWAITING_PAYMENT order:
+ * expire the Checkout Session if still open, release the stock hold, set
+ * CANCELLED. Does not touch PAID-or-later orders.
+ */
+export async function cancelAwaitingPaymentOrder(params: {
+  supabase: SupabaseClient;
+  businessId: string;
+  orderId: string;
+  notifyBuyer?: boolean;
+  customerId?: string;
+  customerPhoneE164?: string;
+  threadId?: string;
+}): Promise<CancelAwaitingPaymentOutcome> {
+  const { supabase, businessId, orderId } = params;
+
+  const { data: order, error } = await supabase
+    .from("orders")
+    .select("id, status, stripe_checkout_session_id")
+    .eq("id", orderId)
+    .eq("business_id", businessId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) {
+    return { action: "error", error: error.message };
+  }
+  if (!order) {
+    return { action: "error", error: "Order not found" };
+  }
+  if (order.status === ORDER_STATUS.CANCELLED) {
+    return {
+      action: "cancelled",
+      orderId,
+      checkoutSessionId: order.stripe_checkout_session_id,
+      checkoutExpireOutcome: "already_cancelled",
+    };
+  }
+  if (order.status !== ORDER_STATUS.AWAITING_PAYMENT) {
+    return {
+      action: "error",
+      error: `Order is ${order.status}, not AWAITING_PAYMENT`,
+    };
+  }
+
+  const checkoutSessionId = order.stripe_checkout_session_id;
+  let checkoutExpireOutcome = "no_session";
+
+  if (checkoutSessionId) {
+    const expired = await expireCheckoutSessionIfOpen(checkoutSessionId);
+    checkoutExpireOutcome = expired.outcome;
+    if (expired.outcome === "complete") {
+      return {
+        action: "error",
+        error: "Payment already completed — cannot cancel pre-payment",
+      };
+    }
+  }
+
+  // Webhook for checkout.session.expired may already have set EXPIRED.
+  const { data: current } = await supabase
+    .from("orders")
+    .select("status")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (current?.status === ORDER_STATUS.AWAITING_PAYMENT) {
+    await releaseOrderReservation(supabase, orderId, ORDER_STATUS.CANCELLED);
+  } else if (current?.status === ORDER_STATUS.EXPIRED) {
+    await supabase
+      .from("orders")
+      .update({ status: ORDER_STATUS.CANCELLED, reserved_until: null })
+      .eq("id", orderId);
+    await supabase.from("order_status_history").insert({
+      order_id: orderId,
+      business_id: businessId,
+      from_status: ORDER_STATUS.EXPIRED,
+      to_status: ORDER_STATUS.CANCELLED,
+    });
+  } else if (
+    current?.status === ORDER_STATUS.PAID ||
+    current?.status === ORDER_STATUS.DISPATCHED ||
+    current?.status === ORDER_STATUS.DELIVERED ||
+    current?.status === ORDER_STATUS.REFUND_PENDING ||
+    current?.status === ORDER_STATUS.REFUNDED ||
+    current?.status === ORDER_STATUS.PARTIALLY_REFUNDED
+  ) {
+    return {
+      action: "error",
+      error: `Order is ${current.status}, not cancellable in the pre-payment window`,
+    };
+  }
+
+  let outboundMessageId: string | undefined;
+  if (
+    params.notifyBuyer &&
+    params.customerPhoneE164 &&
+    params.customerId &&
+    params.threadId
+  ) {
+    try {
+      const sent = await sendWhatsAppMessage({
+        businessId,
+        toPhoneE164: params.customerPhoneE164,
+        text: "No problem — I've cancelled that order. The payment link is no longer valid. Message us anytime if you'd like to order something else.",
+        threadId: params.threadId,
+        customerId: params.customerId,
+        supabase,
+      });
+      outboundMessageId = sent.messageId;
+    } catch (notifyError) {
+      const message =
+        notifyError instanceof Error ? notifyError.message : String(notifyError);
+      console.error("[orders] AWAITING_PAYMENT cancelled but buyer notify failed", {
+        orderId,
+        error: message,
+      });
+    }
+  }
+
+  console.info("[orders] AWAITING_PAYMENT cancelled", {
+    orderId,
+    checkoutSessionId,
+    checkoutExpireOutcome,
+    notifiedBuyer: Boolean(outboundMessageId),
+  });
+
+  return {
+    action: "cancelled",
+    orderId,
+    checkoutSessionId,
+    checkoutExpireOutcome,
+    ...(outboundMessageId ? { outboundMessageId } : {}),
+  };
 }

@@ -65,3 +65,43 @@ export async function createOrderCheckoutSession(params: {
 
   return session;
 }
+
+export type ExpireCheckoutOutcome =
+  | { outcome: "expired"; status: string }
+  | { outcome: "already_expired"; status: string }
+  | { outcome: "complete"; status: string }
+  | { outcome: "missing" };
+
+/**
+ * Expire an open Checkout Session so its payment link stops working.
+ * No-ops when already expired; reports "complete" when the buyer already paid
+ * so callers must not cancel a fulfilled order.
+ */
+export async function expireCheckoutSessionIfOpen(
+  sessionId: string,
+): Promise<ExpireCheckoutOutcome> {
+  const stripe = getStripe();
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    if (session.status === "complete") {
+      return { outcome: "complete", status: session.status };
+    }
+    if (session.status === "expired") {
+      return { outcome: "already_expired", status: session.status };
+    }
+    if (session.status !== "open") {
+      return {
+        outcome: "already_expired",
+        status: session.status ?? "unknown",
+      };
+    }
+    const expired = await stripe.checkout.sessions.expire(sessionId);
+    return { outcome: "expired", status: expired.status ?? "expired" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no such checkout session/i.test(message)) {
+      return { outcome: "missing" };
+    }
+    throw error;
+  }
+}

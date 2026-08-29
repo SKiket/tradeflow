@@ -54,7 +54,10 @@ export async function sweepExpiredReservations(
 export async function releaseOrderReservation(
   supabase: SupabaseClient,
   orderId: string,
-  finalStatus: typeof ORDER_STATUS.EXPIRED | typeof ORDER_STATUS.PAYMENT_FAILED,
+  finalStatus:
+    | typeof ORDER_STATUS.EXPIRED
+    | typeof ORDER_STATUS.PAYMENT_FAILED
+    | typeof ORDER_STATUS.CANCELLED,
 ): Promise<void> {
   const { data: order } = await supabase
     .from("orders")

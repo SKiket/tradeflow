@@ -4,6 +4,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { OrderParseItem, OrderParseResult } from "@/lib/ai/tasks/order-parse";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import {
+  cancelAwaitingPaymentOrder,
+  findAwaitingPaymentForThread,
+} from "@/lib/orders/confirm-draft-order";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -37,6 +41,8 @@ export type DraftOrderOutcome =
       totalPence: number;
       outboundMessageId: string;
       confirmationMessage: string;
+      /** Set when an unpaid AWAITING_PAYMENT order was cancelled to make room. */
+      supersededOrderId?: string;
     };
 
 export interface CreateDraftOrderParams {
@@ -70,7 +76,9 @@ interface ResolvedLine {
 /**
  * Turn a stored order_parse result into either a PENDING_CONFIRMATION draft
  * (with a confirmation WhatsApp) or a clarification/stock message — never a
- * confirmed order or payment.
+ * confirmed order or payment. An existing PENDING_CONFIRMATION on the thread
+ * is updated in place (case-d corrections). An existing AWAITING_PAYMENT
+ * order is cancelled/expired and replaced with a fresh draft.
  */
 export async function createDraftOrderFromParse(
   params: CreateDraftOrderParams,
@@ -151,6 +159,7 @@ export async function createDraftOrderFromParse(
   let orderId: string;
   let orderRef: string;
   let action: "draft_created" | "draft_updated";
+  let supersededOrderId: string | undefined;
 
   if (existing) {
     orderId = existing.id;
@@ -186,6 +195,26 @@ export async function createDraftOrderFromParse(
       toStatus: ORDER_STATUS.PENDING_CONFIRMATION,
     });
   } else {
+    const awaiting = await findAwaitingPaymentForThread(
+      supabase,
+      params.businessId,
+      params.threadId,
+    );
+    if (awaiting) {
+      const cancelled = await cancelAwaitingPaymentOrder({
+        supabase,
+        businessId: params.businessId,
+        orderId: awaiting.id,
+        notifyBuyer: false,
+      });
+      if (cancelled.action === "error") {
+        throw new Error(
+          `Failed to supersede unpaid order: ${cancelled.error}`,
+        );
+      }
+      supersededOrderId = awaiting.id;
+    }
+
     orderRef = generateOrderRef();
     const { data: created, error: createError } = await supabase
       .from("orders")
@@ -257,6 +286,7 @@ export async function createDraftOrderFromParse(
     totalPence,
     outboundMessageId: sent.messageId,
     confirmationMessage,
+    ...(supersededOrderId ? { supersededOrderId } : {}),
   };
 }
 
