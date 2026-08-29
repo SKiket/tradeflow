@@ -16,6 +16,7 @@ import {
   handleOtherFallback,
   handleQuestionReply,
 } from "@/lib/support/handle-inbound";
+import { notifySellerOfUnmatchedOrder } from "@/lib/support/notify-seller";
 import { parseFormBody } from "@/lib/webhooks/verify/signatures";
 
 export interface WhatsAppHandlerResult {
@@ -184,6 +185,7 @@ export async function handleTwilioWhatsApp(
       let draftOutcome: Record<string, unknown> | null = null;
       let replyOutcome: Record<string, unknown> | null = null;
       let supportOutcome: Record<string, unknown> | null = null;
+      let unmatchedNotify: Record<string, unknown> | null = null;
 
       // Intercept yes/no on PENDING_CONFIRMATION, and cancel on
       // AWAITING_PAYMENT, BEFORE order_parse so corrections still parse.
@@ -249,6 +251,33 @@ export async function handleTwilioWhatsApp(
               needsClarification: parseResult.needs_clarification,
             });
 
+            if (parseResult.needs_clarification) {
+              try {
+                const notify = await notifySellerOfUnmatchedOrder({
+                  businessId: result.message.businessId,
+                  customerPhoneE164: result.message.customerPhone,
+                  buyerMessage: result.message.normalisedText,
+                  supabase,
+                });
+                unmatchedNotify = { ...notify };
+                console.info("[whatsapp] unmatched-order seller notify", {
+                  messageId: result.messageId,
+                  attempted: notify.attempted,
+                  ok: notify.ok,
+                });
+              } catch (notifyError) {
+                const message =
+                  notifyError instanceof Error
+                    ? notifyError.message
+                    : String(notifyError);
+                console.error("[whatsapp] unmatched-order seller notify failed", {
+                  messageId: result.messageId,
+                  error: message,
+                });
+                unmatchedNotify = { attempted: true, ok: false, error: message };
+              }
+            }
+
             if (parseResult.intent === "order") {
               // Step 9: draft confirmation / clarification. Failures are logged
               // but must not fail the inbound webhook.
@@ -294,6 +323,21 @@ export async function handleTwilioWhatsApp(
                   escalateToSeller: outcome.escalateToSeller,
                   aiCalled: outcome.aiCalled,
                 });
+                const { error: escalateStoreError } = await supabase
+                  .from("messages")
+                  .update({
+                    ai_parse_result: {
+                      ...parseResult,
+                      escalate_to_seller: outcome.escalateToSeller,
+                    },
+                  })
+                  .eq("id", result.messageId);
+                if (escalateStoreError) {
+                  console.error("[whatsapp] Failed to store escalate_to_seller", {
+                    messageId: result.messageId,
+                    error: escalateStoreError.message,
+                  });
+                }
               } catch (supportError) {
                 const message =
                   supportError instanceof Error
@@ -375,6 +419,7 @@ export async function handleTwilioWhatsApp(
           ...(replyOutcome ? { reply: replyOutcome } : {}),
           ...(draftOutcome ? { draft: draftOutcome } : {}),
           ...(supportOutcome ? { support: supportOutcome } : {}),
+          ...(unmatchedNotify ? { unmatchedNotify } : {}),
         },
       };
     }

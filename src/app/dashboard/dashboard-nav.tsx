@@ -2,11 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, ClipboardList, Package, Settings } from "lucide-react";
+import { BarChart3, ClipboardList, Inbox, Package, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const NAV = [
+  {
+    href: "/dashboard/inbox",
+    label: "Inbox",
+    icon: Inbox,
+    live: true,
+  },
   {
     href: "/dashboard/orders",
     label: "Orders",

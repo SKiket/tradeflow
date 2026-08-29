@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateSupportReply } from "@/lib/ai/tasks/support-reply";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { notifySellerOfQuestion } from "@/lib/support/notify-seller";
 
 export const OTHER_FALLBACK_MESSAGE =
   "Sorry, I didn't quite catch that — did you want to place an order, or is there something else I can help with?";
@@ -129,65 +130,6 @@ export async function handleOtherFallback(
     escalateToSeller: false,
     aiCalled: false,
     buyerSend,
-  };
-}
-
-async function notifySellerOfQuestion(params: {
-  businessId: string;
-  customerPhoneE164: string;
-  question: string;
-  supabase: SupabaseClient;
-}): Promise<NonNullable<SupportInboundOutcome["sellerNotify"]>> {
-  const { data: business, error } = await params.supabase
-    .from("businesses")
-    .select("seller_whatsapp_phone_e164")
-    .eq("id", params.businessId)
-    .maybeSingle();
-
-  if (error) {
-    console.error("[support] seller phone lookup failed", {
-      businessId: params.businessId,
-      error: error.message,
-    });
-    return { attempted: true, ok: false, error: error.message };
-  }
-
-  const sellerPhone = business?.seller_whatsapp_phone_e164?.trim();
-  if (!sellerPhone) {
-    console.warn("[support] seller notify skipped — no seller_whatsapp_phone_e164", {
-      businessId: params.businessId,
-    });
-    return {
-      attempted: false,
-      ok: false,
-      error: "no_seller_whatsapp_phone_e164",
-    };
-  }
-
-  const sellerText = [
-    "A buyer asked a question your shop assistant couldn't answer from your settings:",
-    "",
-    `"${params.question.trim()}"`,
-    "",
-    `Buyer WhatsApp: ${params.customerPhoneE164}`,
-    "",
-    "Please reply to them directly.",
-  ].join("\n");
-
-  const sent = await trySend({
-    businessId: params.businessId,
-    toPhoneE164: sellerPhone,
-    text: sellerText,
-    supabase: params.supabase,
-    label: "seller question escalate",
-  });
-
-  return {
-    attempted: true,
-    ok: sent.ok,
-    messageId: sent.messageId,
-    error: sent.error,
-    text: sellerText,
   };
 }
 

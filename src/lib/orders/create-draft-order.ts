@@ -509,3 +509,53 @@ function formatStockShortageMessage(lines: ResolvedLine[]): string {
     "Want a smaller quantity, or a different item?",
   ].join("\n");
 }
+
+/**
+ * Buyer-facing draft/clarification text the live pipeline would send, without
+ * creating an order or sending WhatsApp.
+ */
+export async function previewDraftBuyerReply(
+  supabase: SupabaseClient,
+  businessId: string,
+  parse: OrderParseResult,
+): Promise<{
+  action: "ignored" | "clarification" | "stock_shortage" | "draft_confirmation";
+  reply: string | null;
+}> {
+  if (parse.intent !== "order") {
+    return { action: "ignored", reply: null };
+  }
+  if (!parse.items.length) {
+    return { action: "ignored", reply: null };
+  }
+
+  const gate = await evaluateConfirmGate(supabase, businessId, parse);
+  if (!gate.ok) {
+    return {
+      action: "clarification",
+      reply:
+        parse.clarification_message?.trim() ||
+        gate.fallbackMessage ||
+        "Sorry — I wasn't sure which items you wanted. Could you tell me the product name and size/colour again?",
+    };
+  }
+
+  const shortages = gate.lines.filter(
+    (line) => line.trackInventory && line.available < line.quantity,
+  );
+  if (shortages.length > 0) {
+    return {
+      action: "stock_shortage",
+      reply: formatStockShortageMessage(shortages),
+    };
+  }
+
+  const totalPence = gate.lines.reduce(
+    (sum, line) => sum + line.unitPricePence * line.quantity,
+    0,
+  );
+  return {
+    action: "draft_confirmation",
+    reply: formatConfirmationMessage(gate.lines, totalPence),
+  };
+}
