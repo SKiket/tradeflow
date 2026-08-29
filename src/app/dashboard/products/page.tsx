@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { requireSeller } from "./require-seller";
+import { requireSeller } from "../require-seller";
 import { ProductsList, type ProductListRow } from "./products-list";
 
 export default async function ProductsPage() {

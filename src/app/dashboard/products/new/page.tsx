@@ -2,10 +2,15 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 
 import { ProductForm } from "../product-form";
-import { requireSeller } from "../require-seller";
+import { requireSeller } from "../../require-seller";
 
 export default async function NewProductPage() {
-  const { businessId } = await requireSeller();
+  const { supabase, businessId } = await requireSeller();
+  const { data: business } = await supabase
+    .from("businesses")
+    .select("default_low_stock_threshold")
+    .eq("id", businessId)
+    .maybeSingle();
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -21,7 +26,12 @@ export default async function NewProductPage() {
           Add product
         </h1>
       </div>
-      <ProductForm businessId={businessId} />
+      <ProductForm
+        businessId={businessId}
+        defaultLowStockThreshold={
+          (business?.default_low_stock_threshold as number | null) ?? 5
+        }
+      />
     </div>
   );
 }

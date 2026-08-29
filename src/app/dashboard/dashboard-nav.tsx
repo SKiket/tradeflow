@@ -23,7 +23,7 @@ const NAV = [
     href: "/dashboard/settings",
     label: "Settings",
     icon: Settings,
-    live: false,
+    live: true,
   },
 ] as const;
 

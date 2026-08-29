@@ -44,12 +44,12 @@ function newClientId() {
   return `draft-${draftSeq}`;
 }
 
-function blankVariant(): VariantDraft {
+function blankVariant(lowStockThreshold = 5): VariantDraft {
   return {
     clientId: newClientId(),
     label: "",
     stockQuantity: "0",
-    lowStockThreshold: "5",
+    lowStockThreshold: String(lowStockThreshold),
     trackInventory: true,
     removed: false,
   };
@@ -63,9 +63,11 @@ function parseIntField(value: string, fallback: number) {
 export function ProductForm({
   businessId,
   product,
+  defaultLowStockThreshold = 5,
 }: {
   businessId: string;
   product?: ProductFormValues;
+  defaultLowStockThreshold?: number;
 }) {
   const router = useRouter();
   const isEdit = Boolean(product?.id);
@@ -88,7 +90,7 @@ export function ProductForm({
         removed: false,
       }));
     }
-    return isEdit ? [] : [blankVariant()];
+    return isEdit ? [] : [blankVariant(defaultLowStockThreshold)];
   });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -285,7 +287,12 @@ export function ProductForm({
             variant="outline"
             size="sm"
             disabled={pending}
-            onClick={() => setVariants((current) => [...current, blankVariant()])}
+            onClick={() =>
+              setVariants((current) => [
+                ...current,
+                blankVariant(defaultLowStockThreshold),
+              ])
+            }
           >
             Add variant
           </Button>

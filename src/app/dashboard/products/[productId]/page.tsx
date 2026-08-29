@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { ProductForm, type ProductFormValues } from "../product-form";
-import { requireSeller } from "../require-seller";
+import { requireSeller } from "../../require-seller";
 
 interface EditProductPageProps {
   params: Promise<{ productId: string }>;
