@@ -14,8 +14,17 @@ export type ProductListRow = {
   price_pence: number;
   active: boolean;
   variant_count: number;
+  low_stock: boolean;
   updated_at: string;
 };
+
+function LowStockBadge() {
+  return (
+    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
+      Low stock
+    </span>
+  );
+}
 
 export function ProductsList({ products }: { products: ProductListRow[] }) {
   const router = useRouter();
@@ -54,10 +63,15 @@ export function ProductsList({ products }: { products: ProductListRow[] }) {
                 router.push(`/dashboard/products/${product.id}`);
               }
             }}
-            className="flex w-full cursor-pointer flex-col gap-2 rounded-xl border bg-card p-4 text-left shadow-xs transition-colors hover:bg-muted/40"
+            className={`flex w-full cursor-pointer flex-col gap-2 rounded-xl border p-4 text-left shadow-xs transition-colors hover:bg-muted/40 ${
+              product.low_stock ? "border-amber-200 bg-amber-50/70" : "bg-card"
+            }`}
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="font-medium">{product.name}</span>
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="font-medium">{product.name}</span>
+                {product.low_stock ? <LowStockBadge /> : null}
+              </span>
               <ActiveToggle productId={product.id} active={product.active} />
             </div>
             <div className="flex items-center justify-between text-sm text-muted-foreground">
@@ -86,7 +100,9 @@ export function ProductsList({ products }: { products: ProductListRow[] }) {
               <tr
                 key={product.id}
                 tabIndex={0}
-                className="cursor-pointer border-b last:border-b-0 hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
+                className={`cursor-pointer border-b last:border-b-0 hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none ${
+                  product.low_stock ? "bg-amber-50/70" : ""
+                }`}
                 onClick={() => router.push(`/dashboard/products/${product.id}`)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
@@ -96,13 +112,16 @@ export function ProductsList({ products }: { products: ProductListRow[] }) {
                 }}
               >
                 <td className="px-4 py-3 font-medium">
-                  <Link
-                    href={`/dashboard/products/${product.id}`}
-                    className="hover:underline"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    {product.name}
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/dashboard/products/${product.id}`}
+                      className="hover:underline"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {product.name}
+                    </Link>
+                    {product.low_stock ? <LowStockBadge /> : null}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">
                   {formatPence(product.price_pence)}

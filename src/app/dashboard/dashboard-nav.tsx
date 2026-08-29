@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ClipboardList, Package, Settings } from "lucide-react";
+import { BarChart3, ClipboardList, Package, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -17,6 +17,12 @@ const NAV = [
     href: "/dashboard/products",
     label: "Products",
     icon: Package,
+    live: true,
+  },
+  {
+    href: "/dashboard/analytics",
+    label: "Analytics",
+    icon: BarChart3,
     live: true,
   },
   {
