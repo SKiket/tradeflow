@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { formatPence } from "@/lib/orders/display";
+import { formatPence, poundsToPence, penceToPoundsInput } from "@/lib/orders/display";
 import { ORDER_STATUS, REFUNDABLE_STATUSES } from "@/lib/orders/status";
 
 export type OrderActionsProps = {
@@ -42,18 +42,6 @@ async function postAction(
     throw new Error(apiErrorMessage(json, response.status));
   }
   return { ok: true, json };
-}
-
-function poundsToPence(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const n = Number(trimmed);
-  if (!Number.isFinite(n)) return null;
-  return Math.round(n * 100);
-}
-
-function penceToPoundsInput(pence: number): string {
-  return (pence / 100).toFixed(2);
 }
 
 export function OrderActions({

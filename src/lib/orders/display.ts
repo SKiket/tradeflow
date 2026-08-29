@@ -63,6 +63,18 @@ export function formatPence(pence: number): string {
   }).format(pence / 100);
 }
 
+export function poundsToPence(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100);
+}
+
+export function penceToPoundsInput(pence: number): string {
+  return (pence / 100).toFixed(2);
+}
+
 export function formatDateTime(iso: string): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/London",

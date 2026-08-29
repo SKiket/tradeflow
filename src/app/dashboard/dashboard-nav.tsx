@@ -17,7 +17,7 @@ const NAV = [
     href: "/dashboard/products",
     label: "Products",
     icon: Package,
-    live: false,
+    live: true,
   },
   {
     href: "/dashboard/settings",
