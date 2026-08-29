@@ -38,7 +38,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, shipping_address, created_at, channel, customers(phone_e164, name)",
+      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customers(phone_e164, name)",
     )
     .eq("id", orderId)
     .maybeSingle();
@@ -109,6 +109,19 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
               : ""}
           </p>
         )}
+        {typeof order.dispatch_label_url === "string" &&
+          order.dispatch_label_url.trim() && (
+            <p className="mt-3">
+              <a
+                href={order.dispatch_label_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+              >
+                View shipping label
+              </a>
+            </p>
+          )}
       </div>
 
       <OrderActions

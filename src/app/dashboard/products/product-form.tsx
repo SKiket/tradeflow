@@ -15,6 +15,7 @@ export type ProductFormVariant = {
   stock_quantity: number;
   low_stock_threshold: number;
   track_inventory: boolean;
+  weight_grams: number;
 };
 
 export type ProductFormValues = {
@@ -34,6 +35,7 @@ type VariantDraft = {
   stockQuantity: string;
   lowStockThreshold: string;
   trackInventory: boolean;
+  weightGrams: string;
   removed: boolean;
 };
 
@@ -51,6 +53,7 @@ function blankVariant(lowStockThreshold = 5): VariantDraft {
     stockQuantity: "0",
     lowStockThreshold: String(lowStockThreshold),
     trackInventory: true,
+    weightGrams: "200",
     removed: false,
   };
 }
@@ -87,6 +90,7 @@ export function ProductForm({
         stockQuantity: String(variant.stock_quantity),
         lowStockThreshold: String(variant.low_stock_threshold),
         trackInventory: variant.track_inventory,
+        weightGrams: String(variant.weight_grams ?? 200),
         removed: false,
       }));
     }
@@ -118,6 +122,22 @@ export function ProductForm({
     if (pricePence === null || pricePence < 0) {
       setError("Enter a valid price in pounds.");
       return;
+    }
+
+    const weightByClientId = new Map<string, number>();
+    for (const variant of variants) {
+      if (variant.removed) continue;
+      const raw = variant.weightGrams.trim();
+      if (variant.trackInventory && !raw) {
+        setError("Weight (grams) is required for inventory-tracked variants.");
+        return;
+      }
+      const grams = raw ? Number.parseInt(raw, 10) : 200;
+      if (!Number.isInteger(grams) || grams < 1) {
+        setError("Weight must be a whole number of grams greater than 0.");
+        return;
+      }
+      weightByClientId.set(variant.clientId, grams);
     }
 
     setPending(true);
@@ -178,6 +198,7 @@ export function ProductForm({
             parseIntField(variant.lowStockThreshold, 5),
           ),
           track_inventory: variant.trackInventory,
+          weight_grams: weightByClientId.get(variant.clientId) ?? 200,
         };
 
         if (variant.id) {
@@ -372,6 +393,31 @@ export function ProductForm({
                       }
                       disabled={pending}
                     />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`variant-weight-${variant.clientId}`}>
+                      Weight (grams)
+                      {variant.trackInventory ? "" : " — optional"}
+                    </Label>
+                    <Input
+                      id={`variant-weight-${variant.clientId}`}
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={variant.weightGrams}
+                      onChange={(event) =>
+                        updateVariant(variant.clientId, {
+                          weightGrams: event.target.value,
+                        })
+                      }
+                      placeholder="200"
+                      required={variant.trackInventory}
+                      disabled={pending}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Used for shipping rates. Default 200 g if left blank on
+                      untracked variants.
+                    </p>
                   </div>
                   <label className="flex items-center gap-2 self-end pb-2 text-sm">
                     <input

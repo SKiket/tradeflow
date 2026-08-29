@@ -13,6 +13,9 @@ interface OrderRow {
   status: string;
   dispatch_tracking_number: string | null;
   dispatch_carrier: string | null;
+  dispatch_label_url: string | null;
+  shippo_shipment_id: string | null;
+  shippo_transaction_id: string | null;
 }
 
 export type DispatchOrderOutcome =
@@ -114,7 +117,13 @@ function buildDispatchMessage(
 export async function dispatchOrder(
   supabase: SupabaseClient,
   orderId: string,
-  options?: { trackingNumber?: string; carrier?: string },
+  options: {
+    trackingNumber: string;
+    carrier: string;
+    labelUrl?: string | null;
+    shippoShipmentId?: string | null;
+    shippoTransactionId?: string | null;
+  },
 ): Promise<DispatchOrderOutcome> {
   const { data: order, error } = await supabase
     .from("orders")
@@ -152,15 +161,21 @@ export async function dispatchOrder(
     return { action: "invalid_status", orderId, status: row.status };
   }
 
-  const trackingNumber = options?.trackingNumber?.trim() || null;
-  const carrier = options?.carrier?.trim() || null;
+  const trackingNumber = options.trackingNumber.trim();
+  const carrier = options.carrier.trim();
+  if (!trackingNumber) {
+    throw new Error("A real tracking number is required to dispatch.");
+  }
 
   const { data: updated, error: updateError } = await supabase
     .from("orders")
     .update({
       status: ORDER_STATUS.DISPATCHED,
       dispatch_tracking_number: trackingNumber,
-      dispatch_carrier: carrier,
+      dispatch_carrier: carrier || null,
+      dispatch_label_url: options.labelUrl?.trim() || null,
+      shippo_shipment_id: options.shippoShipmentId?.trim() || null,
+      shippo_transaction_id: options.shippoTransactionId?.trim() || null,
     })
     .eq("id", orderId)
     .eq("status", ORDER_STATUS.PAID)
@@ -202,10 +217,38 @@ export async function dispatchOrder(
   const message = buildDispatchMessage(
     row.order_ref,
     itemLines,
-    trackingNumber ?? undefined,
-    carrier ?? undefined,
+    trackingNumber,
+    carrier || undefined,
   );
-  const outboundMessageId = await sendBuyerUpdate({ order: row, text: message });
+  let outboundMessageId = "";
+  try {
+    outboundMessageId = await sendBuyerUpdate({ order: row, text: message });
+  } catch (error) {
+    const sendError = error instanceof Error ? error.message : String(error);
+    console.error("[dispatch] buyer WhatsApp failed after DISPATCHED", {
+      orderId,
+      message: sendError,
+    });
+    const admin = createAdminClient();
+    const { data: inserted } = await admin
+      .from("messages")
+      .insert({
+        business_id: row.business_id,
+        customer_id: row.customer_id,
+        channel: "whatsapp",
+        direction: "outbound",
+        normalised_text: message,
+        thread_id: row.thread_id,
+        raw_payload: {
+          provider: "twilio",
+          send_failed: true,
+          error: sendError,
+        },
+      })
+      .select("id")
+      .maybeSingle();
+    outboundMessageId = inserted?.id ?? "";
+  }
 
   return {
     action: "dispatched",

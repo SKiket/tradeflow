@@ -16,7 +16,7 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
   const { data: product } = await supabase
     .from("products")
     .select(
-      "id, name, description, price_pence, photo_url, active, product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory)",
+      "id, name, description, price_pence, photo_url, active, product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory, weight_grams)",
     )
     .eq("id", productId)
     .maybeSingle();
@@ -42,6 +42,7 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
       stock_quantity: variant.stock_quantity as number,
       low_stock_threshold: variant.low_stock_threshold as number,
       track_inventory: variant.track_inventory as boolean,
+      weight_grams: (variant.weight_grams as number | null) ?? 200,
     })),
   };
 

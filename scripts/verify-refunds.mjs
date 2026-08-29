@@ -287,6 +287,33 @@ async function main() {
     .update({ stock_quantity: 50, reserved_quantity: 0, track_inventory: true })
     .eq("id", variant.id);
 
+  const TEST_SHIPPING = {
+    line1: "221B Baker Street",
+    line2: "Flat 2",
+    city: "London",
+    postcode: "NW1 6XE",
+    country: "GB",
+  };
+
+  async function dispatchWithShippo(token, orderId) {
+    await admin
+      .from("orders")
+      .update({ shipping_address: TEST_SHIPPING })
+      .eq("id", orderId);
+    const quoted = await apiPost(token, `/api/orders/${orderId}/shipping-rates`, {});
+    if (quoted.status !== 200 || !quoted.json.rates?.[0]) {
+      throw new Error(
+        `shipping-rates failed: ${quoted.status} ${JSON.stringify(quoted.json)}`,
+      );
+    }
+    const rate = quoted.json.rates[0];
+    return apiPost(token, `/api/orders/${orderId}/dispatch`, {
+      rateObjectId: rate.objectId,
+      shipmentId: quoted.json.shipmentId,
+      carrier: rate.carrier,
+    });
+  }
+
   const ownerToken = await signIn(ownerEmail);
   const threadId = crypto.randomUUID();
 
@@ -295,9 +322,10 @@ async function main() {
   const setup1 = await createPaidOrder(business, customer, variant, unitPrice, threadId);
   const stockBefore1 = await getVariantStock(setup1.variantId);
 
-  await apiPost(ownerToken, `/api/orders/${setup1.order.id}/dispatch`, {
-    trackingNumber: "RM123",
-  });
+  const dispatched1 = await dispatchWithShippo(ownerToken, setup1.order.id);
+  if (dispatched1.status !== 200) {
+    throw new Error(`dispatch failed: ${JSON.stringify(dispatched1.json)}`);
+  }
   await apiPost(ownerToken, `/api/orders/${setup1.order.id}/deliver`, {});
 
   const { data: deliveredOrder } = await admin

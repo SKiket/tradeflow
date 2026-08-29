@@ -90,6 +90,28 @@ async function countDispatchMessages(customerId, orderRef) {
   return data ?? [];
 }
 
+const BAKER_ST = {
+  line1: "221B Baker Street",
+  line2: "Flat 2",
+  city: "London",
+  postcode: "NW1 6XE",
+  country: "GB",
+};
+
+async function quoteAndDispatch(token, orderId) {
+  const quoted = await apiPost(token, `/api/orders/${orderId}/shipping-rates`, {});
+  if (quoted.status !== 200 || !quoted.json.rates?.[0]) {
+    return { quoted, dispatch: null, rate: null };
+  }
+  const rate = quoted.json.rates[0];
+  const dispatch = await apiPost(token, `/api/orders/${orderId}/dispatch`, {
+    rateObjectId: rate.objectId,
+    shipmentId: quoted.json.shipmentId,
+    carrier: rate.carrier,
+  });
+  return { quoted, dispatch, rate };
+}
+
 async function cleanupOtherUser(email) {
   const { data: users } = await admin.auth.admin.listUsers();
   const user = users?.users?.find((u) => u.email === email);
@@ -139,6 +161,9 @@ async function main() {
           status: "PAID",
           dispatch_tracking_number: null,
           dispatch_carrier: null,
+          dispatch_label_url: null,
+          shippo_shipment_id: null,
+          shippo_transaction_id: null,
         })
         .eq("id", anyOrder.id);
       orderId = anyOrder.id;
@@ -148,6 +173,11 @@ async function main() {
   }
 
   if (!orderId) throw new Error("No PAID order available for testing");
+
+  await admin
+    .from("orders")
+    .update({ shipping_address: BAKER_ST })
+    .eq("id", orderId);
 
   const ownerToken = await signIn(ownerEmail);
 
@@ -178,16 +208,18 @@ async function main() {
     paidOnlyId = created?.id;
   }
 
-  // ========== Case 1: dispatch with tracking ==========
-  const dispatch1 = await apiPost(ownerToken, `/api/orders/${orderId}/dispatch`, {
-    trackingNumber: "RM123456789GB",
-    carrier: "Royal Mail",
-  });
+  // ========== Case 1: dispatch with purchased Shippo label ==========
+  const { quoted, dispatch: dispatch1, rate } = await quoteAndDispatch(
+    ownerToken,
+    orderId,
+  );
   await new Promise((r) => setTimeout(r, 1500));
 
   const { data: orderAfterDispatch } = await admin
     .from("orders")
-    .select("status, dispatch_tracking_number, dispatch_carrier")
+    .select(
+      "status, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shippo_transaction_id",
+    )
     .eq("id", orderId)
     .single();
   const { data: history1 } = await admin
@@ -206,25 +238,25 @@ async function main() {
     .maybeSingle();
   dispatchMessageText = dispatchMsg?.normalised_text ?? "";
 
+  const tracking = orderAfterDispatch?.dispatch_tracking_number ?? "";
   const case1Pass =
-    dispatch1.status === 200 &&
+    dispatch1?.status === 200 &&
     dispatch1.json.action === "dispatched" &&
     orderAfterDispatch?.status === "DISPATCHED" &&
-    orderAfterDispatch?.dispatch_tracking_number === "RM123456789GB" &&
-    orderAfterDispatch?.dispatch_carrier === "Royal Mail" &&
+    Boolean(tracking) &&
+    Boolean(orderAfterDispatch?.dispatch_label_url) &&
     (history1 ?? []).length >= 1 &&
-    dispatchMessageText.includes("RM123456789GB");
+    dispatchMessageText.includes(tracking);
   record(
     "Case 1: owner dispatch PAID → DISPATCHED + tracking WhatsApp",
     case1Pass,
-    `status=${dispatch1.status} body=${JSON.stringify(dispatch1.json)}\nmsg=${dispatchMessageText}`,
+    `quoted=${quoted.status} rate=${rate?.carrier} ${rate?.service}\nstatus=${dispatch1?.status} body=${JSON.stringify(dispatch1?.json)}\nmsg=${dispatchMessageText}`,
   );
 
   // ========== Case 2: idempotent dispatch ==========
   const msgsBefore = await countDispatchMessages(customerId, orderRef);
   const dispatch2 = await apiPost(ownerToken, `/api/orders/${orderId}/dispatch`, {
-    trackingNumber: "RM123456789GB",
-    carrier: "Royal Mail",
+    rateObjectId: "already-dispatched",
   });
   await new Promise((r) => setTimeout(r, 500));
   const msgsAfter = await countDispatchMessages(customerId, orderRef);

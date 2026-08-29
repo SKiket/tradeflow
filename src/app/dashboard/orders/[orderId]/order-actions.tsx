@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatPence, poundsToPence, penceToPoundsInput } from "@/lib/orders/display";
 import { ORDER_STATUS, REFUNDABLE_STATUSES } from "@/lib/orders/status";
+
+type QuotedRate = {
+  objectId: string;
+  carrier: string;
+  service: string;
+  amount: string;
+  currency: string;
+  estimatedDays: number | null;
+};
 
 export type OrderActionsProps = {
   orderId: string;
@@ -44,6 +53,25 @@ async function postAction(
   return { ok: true, json };
 }
 
+function formatRatePrice(amount: string, currency: string) {
+  const value = Number.parseFloat(amount);
+  if (!Number.isFinite(value)) return `${amount} ${currency}`;
+  try {
+    return new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency: currency || "GBP",
+    }).format(value);
+  } catch {
+    return `${amount} ${currency}`;
+  }
+}
+
+function formatEta(days: number | null) {
+  if (days === null) return "Transit time not quoted";
+  if (days === 1) return "1 day";
+  return `${days} days`;
+}
+
 export function OrderActions({
   orderId,
   status,
@@ -62,8 +90,12 @@ export function OrderActions({
     remainingPence > 0 &&
     (REFUNDABLE_STATUSES as readonly string[]).includes(status);
 
-  const [trackingNumber, setTrackingNumber] = useState("");
-  const [carrier, setCarrier] = useState("");
+  const [rates, setRates] = useState<QuotedRate[]>([]);
+  const [shipmentId, setShipmentId] = useState<string | null>(null);
+  const [weightGrams, setWeightGrams] = useState<number | null>(null);
+  const [selectedRateId, setSelectedRateId] = useState<string | null>(null);
+  const [ratesLoading, setRatesLoading] = useState(false);
+  const [ratesError, setRatesError] = useState<string | null>(null);
   const [refundAmount, setRefundAmount] = useState(remainingPounds);
   const [refundReason, setRefundReason] = useState("");
   const [pending, setPending] = useState<
@@ -76,9 +108,38 @@ export function OrderActions({
     setRefundAmount(penceToPoundsInput(remainingPence));
   }, [remainingPence]);
 
+  const loadRates = useCallback(async () => {
+    setRatesLoading(true);
+    setRatesError(null);
+    try {
+      const { json } = await postAction(`/api/orders/${orderId}/shipping-rates`);
+      const list = Array.isArray(json.rates) ? (json.rates as QuotedRate[]) : [];
+      setRates(list);
+      setShipmentId(typeof json.shipmentId === "string" ? json.shipmentId : null);
+      setWeightGrams(typeof json.weightGrams === "number" ? json.weightGrams : null);
+      setSelectedRateId(list[0]?.objectId ?? null);
+    } catch (caught) {
+      setRates([]);
+      setShipmentId(null);
+      setSelectedRateId(null);
+      setRatesError(
+        caught instanceof Error ? caught.message : String(caught),
+      );
+    } finally {
+      setRatesLoading(false);
+    }
+  }, [orderId]);
+
+  useEffect(() => {
+    if (canDispatch) {
+      void loadRates();
+    }
+  }, [canDispatch, loadRates]);
+
   const typedRefundPence = poundsToPence(refundAmount);
   const refundOverCap =
     typedRefundPence !== null && typedRefundPence > remainingPence;
+  const selectedRate = rates.find((rate) => rate.objectId === selectedRateId);
 
   if (!canDispatch && !canDeliver && !canRefund && !error && !success) {
     return null;
@@ -113,39 +174,88 @@ export function OrderActions({
             onSubmit={(event) => {
               event.preventDefault();
               void run("dispatch", async () => {
+                if (!selectedRate) {
+                  throw new Error("Select a shipping rate before dispatching.");
+                }
                 await postAction(`/api/orders/${orderId}/dispatch`, {
-                  trackingNumber: trackingNumber.trim() || undefined,
-                  carrier: carrier.trim() || undefined,
+                  rateObjectId: selectedRate.objectId,
+                  shipmentId: shipmentId ?? undefined,
+                  carrier: selectedRate.carrier,
                 });
-                setSuccess("Order marked as dispatched.");
+                setSuccess("Label purchased and order marked as dispatched.");
               });
             }}
           >
-            <p className="text-sm font-medium">Mark as dispatched</p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label htmlFor="tracking-number">Tracking number</Label>
-                <Input
-                  id="tracking-number"
-                  value={trackingNumber}
-                  onChange={(event) => setTrackingNumber(event.target.value)}
-                  placeholder="Optional"
-                  disabled={pending !== null}
-                />
+            <p className="text-sm font-medium">Buy a shipping label</p>
+            <p className="text-xs text-muted-foreground">
+              Rates come from Shippo. Parcel is a single 20×15×10 cm box;
+              weight is the sum of item weights.
+              {weightGrams !== null ? ` Current parcel: ${weightGrams} g.` : ""}
+            </p>
+            {ratesLoading ? (
+              <p className="text-sm text-muted-foreground">Fetching rates…</p>
+            ) : ratesError ? (
+              <div className="space-y-2">
+                <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {ratesError}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={pending !== null || ratesLoading}
+                  onClick={() => {
+                    void loadRates();
+                  }}
+                >
+                  {ratesLoading ? "Retrying…" : "Retry rates"}
+                </Button>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="carrier">Carrier</Label>
-                <Input
-                  id="carrier"
-                  value={carrier}
-                  onChange={(event) => setCarrier(event.target.value)}
-                  placeholder="Optional"
-                  disabled={pending !== null}
-                />
-              </div>
-            </div>
-            <Button type="submit" disabled={pending !== null}>
-              {pending === "dispatch" ? "Dispatching…" : "Mark as Dispatched"}
+            ) : (
+              <fieldset className="space-y-2" disabled={pending !== null}>
+                <legend className="sr-only">Shipping rates</legend>
+                {rates.map((rate) => (
+                  <label
+                    key={rate.objectId}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 text-sm ${
+                      selectedRateId === rate.objectId
+                        ? "border-foreground bg-muted/40"
+                        : "border-border"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="shippo-rate"
+                      className="mt-1"
+                      value={rate.objectId}
+                      checked={selectedRateId === rate.objectId}
+                      onChange={() => setSelectedRateId(rate.objectId)}
+                    />
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="font-medium">
+                        {rate.carrier} · {rate.service}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {formatRatePrice(rate.amount, rate.currency)} ·{" "}
+                        {formatEta(rate.estimatedDays)}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            <Button
+              type="submit"
+              disabled={
+                pending !== null ||
+                ratesLoading ||
+                Boolean(ratesError) ||
+                !selectedRate
+              }
+            >
+              {pending === "dispatch"
+                ? "Purchasing label…"
+                : "Purchase label and dispatch"}
             </Button>
           </form>
         )}
