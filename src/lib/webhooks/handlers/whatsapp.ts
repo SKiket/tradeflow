@@ -10,6 +10,10 @@ import {
 import { createDraftOrderFromParse } from "@/lib/orders/create-draft-order";
 import { isAffirmativeReply, isNegativeReply } from "@/lib/orders/detect-reply";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  handleOtherFallback,
+  handleQuestionReply,
+} from "@/lib/support/handle-inbound";
 import { parseFormBody } from "@/lib/webhooks/verify/signatures";
 
 export interface WhatsAppHandlerResult {
@@ -96,8 +100,10 @@ async function tryHandleDraftReply(params: {
  * Handles a verified inbound Twilio WhatsApp webhook: parse → normalise →
  * resolve business/customer/thread → persist as an inbound message →
  * (Step 10) intercept affirmative/negative replies on open drafts →
- * catalog-grounded order_parse → create/update a PENDING_CONFIRMATION draft
- * (or send clarification / stock message).
+ * catalog-grounded order_parse → for intent "order", create/update a
+ * PENDING_CONFIRMATION draft; for "question", a context-grounded support
+ * reply (escalating to the seller when the answer isn't configured); for
+ * "other", a fixed fallback.
  *
  * Runs in unauthenticated webhook context, so it uses the service-role client.
  * Every outcome is acknowledged with 200 (with a clear log) so Twilio does not
@@ -118,6 +124,7 @@ export async function handleTwilioWhatsApp(
       let parseError: string | null = null;
       let draftOutcome: Record<string, unknown> | null = null;
       let replyOutcome: Record<string, unknown> | null = null;
+      let supportOutcome: Record<string, unknown> | null = null;
 
       // Step 10: intercept affirmative/negative replies on open drafts BEFORE
       // order_parse so corrections still flow through parse when not matched.
@@ -183,32 +190,89 @@ export async function handleTwilioWhatsApp(
               needsClarification: parseResult.needs_clarification,
             });
 
-            // Step 9: draft confirmation / clarification. Failures are logged
-            // but must not fail the inbound webhook.
-            try {
-              const outcome = await createDraftOrderFromParse({
-                businessId: result.message.businessId,
-                customerId: result.message.customerId,
-                customerPhoneE164: result.message.customerPhone,
-                threadId: result.message.threadId,
-                parseResult,
-                supabase,
-              });
-              draftOutcome = { ...outcome };
-              console.info("[whatsapp] draft-order outcome", {
-                messageId: result.messageId,
-                action: outcome.action,
-              });
-            } catch (draftError) {
-              const message =
-                draftError instanceof Error
-                  ? draftError.message
-                  : String(draftError);
-              console.error("[whatsapp] draft-order failed", {
-                messageId: result.messageId,
-                error: message,
-              });
-              draftOutcome = { action: "error", error: message };
+            if (parseResult.intent === "order") {
+              // Step 9: draft confirmation / clarification. Failures are logged
+              // but must not fail the inbound webhook.
+              try {
+                const outcome = await createDraftOrderFromParse({
+                  businessId: result.message.businessId,
+                  customerId: result.message.customerId,
+                  customerPhoneE164: result.message.customerPhone,
+                  threadId: result.message.threadId,
+                  parseResult,
+                  supabase,
+                });
+                draftOutcome = { ...outcome };
+                console.info("[whatsapp] draft-order outcome", {
+                  messageId: result.messageId,
+                  action: outcome.action,
+                });
+              } catch (draftError) {
+                const message =
+                  draftError instanceof Error
+                    ? draftError.message
+                    : String(draftError);
+                console.error("[whatsapp] draft-order failed", {
+                  messageId: result.messageId,
+                  error: message,
+                });
+                draftOutcome = { action: "error", error: message };
+              }
+            } else if (parseResult.intent === "question") {
+              try {
+                const outcome = await handleQuestionReply({
+                  businessId: result.message.businessId,
+                  customerId: result.message.customerId,
+                  customerPhoneE164: result.message.customerPhone,
+                  threadId: result.message.threadId,
+                  messageText: result.message.normalisedText,
+                  supabase,
+                });
+                supportOutcome = { ...outcome };
+                console.info("[whatsapp] support-reply outcome", {
+                  messageId: result.messageId,
+                  action: outcome.action,
+                  escalateToSeller: outcome.escalateToSeller,
+                  aiCalled: outcome.aiCalled,
+                });
+              } catch (supportError) {
+                const message =
+                  supportError instanceof Error
+                    ? supportError.message
+                    : String(supportError);
+                console.error("[whatsapp] support-reply failed", {
+                  messageId: result.messageId,
+                  error: message,
+                });
+                supportOutcome = { action: "error", error: message };
+              }
+            } else {
+              try {
+                const outcome = await handleOtherFallback({
+                  businessId: result.message.businessId,
+                  customerId: result.message.customerId,
+                  customerPhoneE164: result.message.customerPhone,
+                  threadId: result.message.threadId,
+                  messageText: result.message.normalisedText,
+                  supabase,
+                });
+                supportOutcome = { ...outcome };
+                console.info("[whatsapp] other-fallback outcome", {
+                  messageId: result.messageId,
+                  action: outcome.action,
+                  aiCalled: outcome.aiCalled,
+                });
+              } catch (fallbackError) {
+                const message =
+                  fallbackError instanceof Error
+                    ? fallbackError.message
+                    : String(fallbackError);
+                console.error("[whatsapp] other-fallback failed", {
+                  messageId: result.messageId,
+                  error: message,
+                });
+                supportOutcome = { action: "error", error: message };
+              }
             }
           }
         } catch (error) {
@@ -233,6 +297,7 @@ export async function handleTwilioWhatsApp(
         parseStored,
         replyAction: replyOutcome?.replyAction ?? null,
         draftAction: draftOutcome?.action ?? null,
+        supportAction: supportOutcome?.action ?? null,
       });
 
       return {
@@ -250,6 +315,7 @@ export async function handleTwilioWhatsApp(
           ...(parseError ? { parseError } : {}),
           ...(replyOutcome ? { reply: replyOutcome } : {}),
           ...(draftOutcome ? { draft: draftOutcome } : {}),
+          ...(supportOutcome ? { support: supportOutcome } : {}),
         },
       };
     }
