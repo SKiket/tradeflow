@@ -20,14 +20,13 @@ function badRequest(message: string) {
 }
 
 export async function POST(request: NextRequest) {
-  const sourceHeader = resolveSource(request);
+  const rawBody = await request.text();
+  const sourceHeader = resolveSource(request, rawBody);
 
   if (!isWebhookSource(sourceHeader)) {
-    return badRequest("Missing or unrecognised X-Source header");
+    return badRequest("Missing or unrecognised webhook source");
   }
-
-  const rawBody = await request.text();
-  const requestUrl = request.url;
+  const requestUrl = publicRequestUrl(request);
 
   const verification = await verifyWebhookSignature(
     sourceHeader,
@@ -113,15 +112,48 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Determines the webhook source. Prefers an explicit X-Source header, but
- * falls back to Stripe when a Stripe-Signature header is present — Stripe's
- * hosted webhook deliveries cannot attach custom headers.
+ * Determines the webhook source. Prefers an explicit X-Source header.
+ *
+ * Hosted providers cannot attach custom headers, so we also infer:
+ *   - Stripe: Stripe-Signature header
+ *   - Twilio WhatsApp: X-Twilio-Signature plus a whatsapp: From/To (or WaId)
+ *   - Twilio SMS: X-Twilio-Signature without a WhatsApp address
  */
-function resolveSource(request: NextRequest): string | null {
+function resolveSource(
+  request: NextRequest,
+  rawBody: string,
+): string | null {
   const explicit = request.headers.get("x-source");
   if (explicit) return explicit;
   if (request.headers.get("stripe-signature")) return "stripe";
+
+  if (request.headers.get("x-twilio-signature")) {
+    const params = parseFormBody(rawBody);
+    if (isTwilioWhatsAppPayload(params)) return "twilio-whatsapp";
+    return "twilio-sms";
+  }
+
   return null;
+}
+
+function publicRequestUrl(request: NextRequest): string {
+  const url = new URL(request.url);
+  const proto =
+    request.headers.get("x-forwarded-proto") ??
+    url.protocol.replace(":", "") ??
+    "https";
+  const host =
+    request.headers.get("x-forwarded-host") ??
+    request.headers.get("host") ??
+    url.host;
+  return `${proto}://${host}${url.pathname}${url.search}`;
+}
+
+function isTwilioWhatsAppPayload(params: Record<string, string>): boolean {
+  const from = params.From ?? "";
+  const to = params.To ?? "";
+  if (/^whatsapp:/i.test(from) || /^whatsapp:/i.test(to)) return true;
+  return typeof params.WaId === "string" && params.WaId.length > 0;
 }
 
 function tryParseJson(rawBody: string): Record<string, string> {

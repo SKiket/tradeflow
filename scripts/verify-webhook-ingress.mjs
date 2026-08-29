@@ -143,6 +143,37 @@ async function main() {
     JSON.stringify(valid.json),
   );
 
+  // Twilio Console webhooks cannot set X-Source. Infer WhatsApp from payload.
+  const waParams = {
+    MessageSid: "SM_VERIFY_WA_HEADERLESS",
+    AccountSid: "ACtest",
+    Body: "hello from sandbox",
+    From: "whatsapp:+447700900001",
+    To: "whatsapp:+14155238886",
+    WaId: "447700900001",
+    NumMedia: "0",
+  };
+  const waBody = new URLSearchParams(waParams).toString();
+  const waSig = signTwilio(ENDPOINT, waParams);
+  const headerlessWa = await fetch(ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-Twilio-Signature": waSig,
+    },
+    body: waBody,
+    redirect: "manual",
+  });
+  const headerlessJson = await headerlessWa.json().catch(() => ({}));
+  record(
+    "Headerless Twilio WhatsApp (X-Twilio-Signature only) routes without X-Source",
+    headerlessWa.status === 200 &&
+      headerlessJson.ok === true &&
+      (headerlessJson.handled === true ||
+        headerlessJson.reason === "unresolved_business"),
+    JSON.stringify(headerlessJson),
+  );
+
   // Test 4: duplicate idempotency key
   const duplicate = await postWebhook({
     source: "twilio-sms",
