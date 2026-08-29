@@ -6,7 +6,6 @@ import {
   PAYMENT_CHASE_AUTO_CANCEL_MESSAGE,
 } from "@/lib/orders/confirm-draft-order";
 import { ORDER_STATUS } from "@/lib/orders/status";
-import { RESERVATION_MINUTES } from "@/lib/orders/reservations";
 import { getOpenCheckoutUrl } from "@/lib/stripe/checkout";
 
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -27,6 +26,7 @@ interface ChaseOrder {
   stripe_checkout_session_id: string | null;
   payment_reminder_12h_sent_at: string | null;
   payment_reminder_23h_sent_at: string | null;
+  status: string;
   awaiting_since: Date;
 }
 
@@ -67,14 +67,28 @@ interface CustomerRow {
  * Process unpaid AWAITING_PAYMENT orders: 12h/23h WhatsApp reminders, then
  * 24h auto-cancel via the existing cancelAwaitingPaymentOrder path.
  *
+ * 24h expiry — who wins:
+ *   payment_chase owns the buyer-facing outcome (CANCELLED + timeout
+ *   notify). Stripe's checkout.session.expired webhook is the stock-release
+ *   backstop (EXPIRED). They land at ~the same instant because Checkout
+ *   Session expires_at and reserved_until are both ~24h.
+ *
+ *   Webhook first: CAS AWAITING_PAYMENT → EXPIRED (stock released once).
+ *   Chase then upgrades EXPIRED → CANCELLED (no second stock decrement)
+ *   and notifies the buyer.
+ *
+ *   Chase first: expire session + CAS AWAITING_PAYMENT → CANCELLED + notify.
+ *   The subsequent checkout.session.expired webhook sees CANCELLED and
+ *   releaseOrderReservation no-ops.
+ *
  * Idempotent under overlapping invocations: reminder sends are claimed by an
  * atomic NULL → NOW() update on *_sent_at; cancels rely on the CAS inside
- * releaseOrderReservation (called only from cancelAwaitingPaymentOrder).
+ * releaseOrderReservation / the EXPIRED→CANCELLED update.
  */
 export async function runPaymentChase(
   supabase: SupabaseClient,
 ): Promise<PaymentChaseRunResult> {
-  const candidates = await loadAwaitingPaymentCandidates(supabase);
+  const candidates = await loadPaymentChaseCandidates(supabase);
   const now = Date.now();
 
   const reminders12h: ReminderResult[] = [];
@@ -86,6 +100,11 @@ export async function runPaymentChase(
 
     if (ageMs >= AUTO_CANCEL_MS) {
       cancelled.push(await autoCancelOrder(supabase, order));
+      continue;
+    }
+
+    // EXPIRED orders only belong on the 24h cancel path (webhook already ran).
+    if (order.status !== ORDER_STATUS.AWAITING_PAYMENT) {
       continue;
     }
 
@@ -105,15 +124,15 @@ export async function runPaymentChase(
   return { reminders12h, reminders23h, cancelled };
 }
 
-async function loadAwaitingPaymentCandidates(
+async function loadPaymentChaseCandidates(
   supabase: SupabaseClient,
 ): Promise<ChaseOrder[]> {
   const { data: orders, error } = await supabase
     .from("orders")
     .select(
-      "id, business_id, customer_id, thread_id, order_ref, stripe_checkout_session_id, payment_reminder_12h_sent_at, payment_reminder_23h_sent_at",
+      "id, business_id, customer_id, thread_id, order_ref, status, stripe_checkout_session_id, payment_reminder_12h_sent_at, payment_reminder_23h_sent_at",
     )
-    .eq("status", ORDER_STATUS.AWAITING_PAYMENT)
+    .in("status", [ORDER_STATUS.AWAITING_PAYMENT, ORDER_STATUS.EXPIRED])
     .is("deleted_at", null);
 
   if (error) {
@@ -146,7 +165,7 @@ async function loadAwaitingPaymentCandidates(
   for (const row of orders) {
     const awaitingSince = latestIntoAwaiting.get(row.id as string);
     if (!awaitingSince) {
-      console.warn("[payment-chase] AWAITING_PAYMENT order missing status history", {
+      console.warn("[payment-chase] order missing AWAITING_PAYMENT status history", {
         orderId: row.id,
       });
       continue;
@@ -163,6 +182,7 @@ async function loadAwaitingPaymentCandidates(
         (row.payment_reminder_12h_sent_at as string | null) ?? null,
       payment_reminder_23h_sent_at:
         (row.payment_reminder_23h_sent_at as string | null) ?? null,
+      status: row.status as string,
       awaiting_since: awaitingSince,
     });
   }
@@ -303,12 +323,12 @@ function buildReminderText(
 ): string {
   if (kind === "12h") {
     if (checkoutUrl) {
-      return `Just a reminder — here's your secure payment link: ${checkoutUrl} — valid for ${RESERVATION_MINUTES} minutes.`;
+      return `Just a reminder — here's your secure payment link: ${checkoutUrl} — still valid.`;
     }
     return `Just a reminder — we haven't received payment for order ${orderRef} yet. Reply here if you'd still like to complete it.`;
   }
   if (checkoutUrl) {
-    return `Final reminder — your order ${orderRef} will be cancelled in about an hour if we don't receive payment. Here's your secure payment link: ${checkoutUrl} — valid for ${RESERVATION_MINUTES} minutes.`;
+    return `Final reminder — your order ${orderRef} will be cancelled in about an hour if we don't receive payment. Here's your secure payment link: ${checkoutUrl} — still valid.`;
   }
   return `Final reminder — your order ${orderRef} will be cancelled in about an hour if we don't receive payment. Reply here if you'd still like to complete it.`;
 }

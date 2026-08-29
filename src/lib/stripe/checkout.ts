@@ -1,5 +1,6 @@
 import type Stripe from "stripe";
 
+import { reservationExpiryUnix } from "@/lib/orders/reservations";
 import { getStripe } from "@/lib/stripe/client";
 
 function getAppBaseUrl(): string {
@@ -58,9 +59,9 @@ export async function createOrderCheckoutSession(params: {
     },
     success_url: `${base}/pay/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${base}/pay/cancelled?order_ref=${encodeURIComponent(params.orderRef)}`,
-    ...(params.expiresAtUnix
-      ? { expires_at: params.expiresAtUnix }
-      : {}),
+    // Explicit 24h (Stripe's max / default). Callers pass the same unix
+    // used for orders.reserved_until so the two clocks stay aligned.
+    expires_at: params.expiresAtUnix ?? reservationExpiryUnix(),
   });
 
   return session;

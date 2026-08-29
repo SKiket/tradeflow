@@ -3,8 +3,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import {
-  RESERVATION_MINUTES,
+  RESERVATION_HOURS,
   checkOrderStockAvailable,
+  reservationExpiryDate,
   releaseOrderReservation,
   reserveOrderStock,
   sweepExpiredReservations,
@@ -132,7 +133,8 @@ export async function confirmDraftOrder(
     };
   }
 
-  await reserveOrderStock(supabase, orderId, businessId);
+  const expiresAt = reservationExpiryDate();
+  await reserveOrderStock(supabase, orderId, businessId, expiresAt);
 
   const { data: items, error: itemsError } = await supabase
     .from("order_items")
@@ -162,8 +164,6 @@ export async function confirmDraftOrder(
     };
   });
 
-  const expiresAtUnix = Math.floor(Date.now() / 1000) + RESERVATION_MINUTES * 60;
-
   let session;
   try {
     session = await createOrderCheckoutSession({
@@ -171,7 +171,7 @@ export async function confirmDraftOrder(
       orderId,
       orderRef: order.order_ref,
       lineItems,
-      expiresAtUnix,
+      expiresAtUnix: Math.floor(expiresAt.getTime() / 1000),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -190,7 +190,7 @@ export async function confirmDraftOrder(
     .update({ stripe_checkout_session_id: session.id })
     .eq("id", orderId);
 
-  const paymentMessage = `Great — here's your secure payment link: ${session.url} — valid for ${RESERVATION_MINUTES} minutes.`;
+  const paymentMessage = `Great — here's your secure payment link: ${session.url} — valid for ${RESERVATION_HOURS} hours.`;
   const sent = await sendWhatsAppMessage({
     businessId,
     toPhoneE164: params.customerPhoneE164,
@@ -413,7 +413,12 @@ export async function cancelAwaitingPaymentOrder(params: {
       performed: false,
     };
   }
-  if (order.status !== ORDER_STATUS.AWAITING_PAYMENT) {
+  // EXPIRED is allowed: checkout.session.expired may have already released
+  // the hold (Stripe's 24h backstop). Chase then upgrades EXPIRED → CANCELLED.
+  if (
+    order.status !== ORDER_STATUS.AWAITING_PAYMENT &&
+    order.status !== ORDER_STATUS.EXPIRED
+  ) {
     return {
       action: "error",
       error: `Order is ${order.status}, not AWAITING_PAYMENT`,

@@ -267,6 +267,14 @@ async function handlePaymentFailed(
   };
 }
 
+/**
+ * checkout.session.expired — Stripe's 24h backstop (or an explicit expire).
+ *
+ * Compare-and-swap inside releaseOrderReservation: if payment_chase already
+ * set CANCELLED, this is a no-op (stock is not released twice). If this
+ * wins first, the order becomes EXPIRED and the next chase tick upgrades
+ * it to CANCELLED and notifies the buyer.
+ */
 async function handleCheckoutSessionExpired(
   session: Stripe.Checkout.Session,
 ): Promise<StripeHandlerResult> {

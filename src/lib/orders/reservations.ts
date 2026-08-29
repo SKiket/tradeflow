@@ -2,7 +2,26 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ORDER_STATUS } from "@/lib/orders/status";
 
-export const RESERVATION_MINUTES = 30;
+/**
+ * Unpaid hold window. Matches Stripe Checkout's maximum `expires_at` (24h)
+ * and spec Section 12 payment_chase (12h/23h reminders, 24h auto-cancel).
+ *
+ * Stripe rejects expires_at more than 24h from session creation, so the
+ * unix helper subtracts 60s of clock-skew margin. reserved_until uses the
+ * same instant so the local hold and the Checkout Session die together.
+ */
+export const RESERVATION_HOURS = 24;
+const RESERVATION_SKEW_SECONDS = 60;
+export const RESERVATION_SECONDS =
+  RESERVATION_HOURS * 60 * 60 - RESERVATION_SKEW_SECONDS;
+
+export function reservationExpiryUnix(fromMs = Date.now()): number {
+  return Math.floor(fromMs / 1000) + RESERVATION_SECONDS;
+}
+
+export function reservationExpiryDate(fromMs = Date.now()): Date {
+  return new Date(reservationExpiryUnix(fromMs) * 1000);
+}
 
 interface OrderItemRow {
   id: string;
@@ -20,8 +39,9 @@ interface VariantRow {
 /**
  * Lazy sweep: release expired holds for THIS business only.
  *
- * Known gap: no scheduled cron — relies on opportunistic calls during
- * confirmation flows. A real scheduled cleanup job is future work.
+ * Keys off reserved_until, not a hardcoded duration — safe after the
+ * 30-minute → 24-hour window change. Known gap: no scheduled cron;
+ * relies on opportunistic calls during confirmation flows.
  */
 export async function sweepExpiredReservations(
   supabase: SupabaseClient,
@@ -179,9 +199,10 @@ export async function reserveOrderStock(
   supabase: SupabaseClient,
   orderId: string,
   businessId: string,
+  reservedUntil?: Date,
 ): Promise<void> {
-  const reservedUntil = new Date(
-    Date.now() + RESERVATION_MINUTES * 60 * 1000,
+  const reservedUntilIso = (
+    reservedUntil ?? reservationExpiryDate()
   ).toISOString();
 
   const { data: items } = await supabase
@@ -216,7 +237,7 @@ export async function reserveOrderStock(
     .from("orders")
     .update({
       status: ORDER_STATUS.AWAITING_PAYMENT,
-      reserved_until: reservedUntil,
+      reserved_until: reservedUntilIso,
     })
     .eq("id", orderId);
 

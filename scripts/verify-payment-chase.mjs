@@ -143,7 +143,7 @@ async function createAwaitingOrder(ctx, { hoursAgo, withCheckout }) {
     : ctx.variant.products;
   const unitPrice = product?.price_pence ?? 100;
   const ref = orderRef();
-  const reservedUntil = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const reservedUntil = new Date(Date.now() + (24 * 60 * 60 - 60) * 1000).toISOString();
 
   const { data: order, error: orderError } = await admin
     .from("orders")
@@ -182,7 +182,7 @@ async function createAwaitingOrder(ctx, { hoursAgo, withCheckout }) {
 
   let checkoutSessionId = null;
   if (withCheckout) {
-    const expiresAtUnix = Math.floor(Date.now() / 1000) + 30 * 60;
+    const expiresAtUnix = Math.floor(Date.now() / 1000) + 24 * 60 * 60 - 60;
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
