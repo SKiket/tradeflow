@@ -73,6 +73,29 @@ export type ExpireCheckoutOutcome =
   | { outcome: "missing" };
 
 /**
+ * Return the hosted Checkout URL when the session is still open.
+ * Used by payment-chase reminders so we never send an already-expired link.
+ */
+export async function getOpenCheckoutUrl(
+  sessionId: string,
+): Promise<string | null> {
+  const stripe = getStripe();
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    if (session.status === "open" && typeof session.url === "string") {
+      return session.url;
+    }
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no such checkout session/i.test(message)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
  * Expire an open Checkout Session so its payment link stops working.
  * No-ops when already expired; reports "complete" when the buyer already paid
  * so callers must not cancel a fulfilled order.

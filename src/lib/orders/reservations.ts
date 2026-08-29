@@ -50,7 +50,13 @@ export async function sweepExpiredReservations(
   return count;
 }
 
-/** Decrement reserved_quantity for all items on an order and set final status. */
+/**
+ * Decrement reserved_quantity for all items on an order and set final status.
+ *
+ * The status write is compare-and-swap on the current status so two callers
+ * (cron + buyer cancel, or overlapping cron ticks) cannot both release stock.
+ * Returns true when this invocation won the race and performed the release.
+ */
 export async function releaseOrderReservation(
   supabase: SupabaseClient,
   orderId: string,
@@ -58,19 +64,34 @@ export async function releaseOrderReservation(
     | typeof ORDER_STATUS.EXPIRED
     | typeof ORDER_STATUS.PAYMENT_FAILED
     | typeof ORDER_STATUS.CANCELLED,
-): Promise<void> {
+): Promise<boolean> {
   const { data: order } = await supabase
     .from("orders")
     .select("id, business_id, status")
     .eq("id", orderId)
     .maybeSingle();
 
-  if (!order) return;
+  if (!order) return false;
   if (
     order.status !== ORDER_STATUS.AWAITING_PAYMENT &&
     order.status !== ORDER_STATUS.PENDING_CONFIRMATION
   ) {
-    return;
+    return false;
+  }
+
+  const { data: claimed } = await supabase
+    .from("orders")
+    .update({
+      status: finalStatus,
+      reserved_until: null,
+    })
+    .eq("id", orderId)
+    .eq("status", order.status)
+    .select("id")
+    .maybeSingle();
+
+  if (!claimed) {
+    return false;
   }
 
   const { data: items } = await supabase
@@ -97,20 +118,14 @@ export async function releaseOrderReservation(
       .eq("id", variant.id);
   }
 
-  await supabase
-    .from("orders")
-    .update({
-      status: finalStatus,
-      reserved_until: null,
-    })
-    .eq("id", orderId);
-
   await supabase.from("order_status_history").insert({
     order_id: orderId,
     business_id: order.business_id,
     from_status: order.status,
     to_status: finalStatus,
   });
+
+  return true;
 }
 
 export interface StockCheckResult {

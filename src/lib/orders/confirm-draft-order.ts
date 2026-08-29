@@ -350,12 +350,20 @@ export async function findAwaitingPaymentForThread(
   return data;
 }
 
+export const BUYER_CANCELLED_AWAITING_PAYMENT_MESSAGE =
+  "No problem — I've cancelled that order. The payment link is no longer valid. Message us anytime if you'd like to order something else.";
+
+export const PAYMENT_CHASE_AUTO_CANCEL_MESSAGE =
+  "Your order has been cancelled because we didn't receive payment in time. The payment link is no longer valid. Message us anytime if you'd like to order again.";
+
 export type CancelAwaitingPaymentOutcome =
   | {
       action: "cancelled";
       orderId: string;
       checkoutSessionId: string | null;
       checkoutExpireOutcome: string;
+      /** False when another caller already cancelled (safe no-op). */
+      performed: boolean;
       outboundMessageId?: string;
     }
   | {
@@ -364,9 +372,10 @@ export type CancelAwaitingPaymentOutcome =
     };
 
 /**
- * Buyer-initiated cancel (or supersede) of an AWAITING_PAYMENT order:
- * expire the Checkout Session if still open, release the stock hold, set
- * CANCELLED. Does not touch PAID-or-later orders.
+ * Cancel (or supersede) an AWAITING_PAYMENT order: expire the Checkout
+ * Session if still open, release the stock hold, set CANCELLED. Does not
+ * touch PAID-or-later orders. Used by the buyer-cancel path and by the
+ * payment-chase auto-cancel cron — do not duplicate this logic elsewhere.
  */
 export async function cancelAwaitingPaymentOrder(params: {
   supabase: SupabaseClient;
@@ -376,6 +385,8 @@ export async function cancelAwaitingPaymentOrder(params: {
   customerId?: string;
   customerPhoneE164?: string;
   threadId?: string;
+  /** Override the buyer WhatsApp copy (payment-chase uses a timeout notice). */
+  buyerMessage?: string;
 }): Promise<CancelAwaitingPaymentOutcome> {
   const { supabase, businessId, orderId } = params;
 
@@ -399,6 +410,7 @@ export async function cancelAwaitingPaymentOrder(params: {
       orderId,
       checkoutSessionId: order.stripe_checkout_session_id,
       checkoutExpireOutcome: "already_cancelled",
+      performed: false,
     };
   }
   if (order.status !== ORDER_STATUS.AWAITING_PAYMENT) {
@@ -429,19 +441,31 @@ export async function cancelAwaitingPaymentOrder(params: {
     .eq("id", orderId)
     .maybeSingle();
 
+  let performed = false;
+
   if (current?.status === ORDER_STATUS.AWAITING_PAYMENT) {
-    await releaseOrderReservation(supabase, orderId, ORDER_STATUS.CANCELLED);
+    performed = await releaseOrderReservation(
+      supabase,
+      orderId,
+      ORDER_STATUS.CANCELLED,
+    );
   } else if (current?.status === ORDER_STATUS.EXPIRED) {
-    await supabase
+    const { data: claimedExpired } = await supabase
       .from("orders")
       .update({ status: ORDER_STATUS.CANCELLED, reserved_until: null })
-      .eq("id", orderId);
-    await supabase.from("order_status_history").insert({
-      order_id: orderId,
-      business_id: businessId,
-      from_status: ORDER_STATUS.EXPIRED,
-      to_status: ORDER_STATUS.CANCELLED,
-    });
+      .eq("id", orderId)
+      .eq("status", ORDER_STATUS.EXPIRED)
+      .select("id")
+      .maybeSingle();
+    if (claimedExpired) {
+      await supabase.from("order_status_history").insert({
+        order_id: orderId,
+        business_id: businessId,
+        from_status: ORDER_STATUS.EXPIRED,
+        to_status: ORDER_STATUS.CANCELLED,
+      });
+      performed = true;
+    }
   } else if (
     current?.status === ORDER_STATUS.PAID ||
     current?.status === ORDER_STATUS.DISPATCHED ||
@@ -458,6 +482,7 @@ export async function cancelAwaitingPaymentOrder(params: {
 
   let outboundMessageId: string | undefined;
   if (
+    performed &&
     params.notifyBuyer &&
     params.customerPhoneE164 &&
     params.customerId &&
@@ -467,7 +492,7 @@ export async function cancelAwaitingPaymentOrder(params: {
       const sent = await sendWhatsAppMessage({
         businessId,
         toPhoneE164: params.customerPhoneE164,
-        text: "No problem — I've cancelled that order. The payment link is no longer valid. Message us anytime if you'd like to order something else.",
+        text: params.buyerMessage ?? BUYER_CANCELLED_AWAITING_PAYMENT_MESSAGE,
         threadId: params.threadId,
         customerId: params.customerId,
         supabase,
@@ -487,6 +512,7 @@ export async function cancelAwaitingPaymentOrder(params: {
     orderId,
     checkoutSessionId,
     checkoutExpireOutcome,
+    performed,
     notifiedBuyer: Boolean(outboundMessageId),
   });
 
@@ -495,6 +521,7 @@ export async function cancelAwaitingPaymentOrder(params: {
     orderId,
     checkoutSessionId,
     checkoutExpireOutcome,
+    performed,
     ...(outboundMessageId ? { outboundMessageId } : {}),
   };
 }
