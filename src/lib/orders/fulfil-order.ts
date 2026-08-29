@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import {
+  persistOrderShippingAddress,
+  type OrderShippingAddress,
+} from "@/lib/orders/shipping-address";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { capturePaymentIntentForOrder } from "@/lib/stripe/capture-payment-intent";
 
@@ -39,6 +43,7 @@ function formatPence(pence: number): string {
 export async function fulfilPaidOrder(
   supabase: SupabaseClient,
   orderId: string,
+  options?: { shippingAddress?: OrderShippingAddress | null },
 ): Promise<FulfilOrderOutcome> {
   const { data: order, error: orderError } = await supabase
     .from("orders")
@@ -53,6 +58,10 @@ export async function fulfilPaidOrder(
   }
 
   const row = order as OrderRow;
+
+  if (options?.shippingAddress) {
+    await persistOrderShippingAddress(supabase, orderId, options.shippingAddress);
+  }
 
   if (row.status === ORDER_STATUS.PAID) {
     console.info("[orders] fulfil skipped — already PAID", { orderId });

@@ -57,6 +57,9 @@ export async function createOrderCheckoutSession(params: {
       order_id: params.orderId,
       order_ref: params.orderRef,
     },
+    shipping_address_collection: {
+      allowed_countries: ["GB"],
+    },
     success_url: `${base}/pay/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${base}/pay/cancelled?order_ref=${encodeURIComponent(params.orderRef)}`,
     // Explicit 24h (Stripe's max / default). Callers pass the same unix

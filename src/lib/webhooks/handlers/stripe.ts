@@ -2,6 +2,7 @@ import type Stripe from "stripe";
 
 import { fulfilPaidOrder, notifyBuyerPaymentFailed } from "@/lib/orders/fulfil-order";
 import { processRefundUpdated } from "@/lib/orders/refund-order";
+import { persistOrderShippingAddress, shippingAddressFromSession } from "@/lib/orders/shipping-address";
 import { resolveOrderIdFromCheckoutSession } from "@/lib/orders/resolve-order-from-checkout";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { releaseOrderReservation } from "@/lib/orders/reservations";
@@ -88,9 +89,11 @@ async function handleCheckoutSessionCompleted(
   }
 
   const paymentStatus = session.payment_status;
+  const shippingAddress = shippingAddressFromSession(session);
+  await persistOrderShippingAddress(supabase, orderId, shippingAddress);
 
   if (paymentStatus === "paid") {
-    const result = await fulfilPaidOrder(supabase, orderId);
+    const result = await fulfilPaidOrder(supabase, orderId, { shippingAddress });
     console.info("[stripe-webhook] checkout.session.completed — paid", {
       orderId,
       session: session.id,
@@ -149,7 +152,10 @@ async function handleCheckoutAsyncPaymentSucceeded(
     };
   }
 
-  const result = await fulfilPaidOrder(supabase, orderId);
+  const shippingAddress = shippingAddressFromSession(session);
+  await persistOrderShippingAddress(supabase, orderId, shippingAddress);
+
+  const result = await fulfilPaidOrder(supabase, orderId, { shippingAddress });
   console.info("[stripe-webhook] checkout.session.async_payment_succeeded", {
     orderId,
     session: session.id,

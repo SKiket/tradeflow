@@ -13,6 +13,15 @@ import { createClient } from "@/lib/supabase/server";
 
 import { OrderActions } from "./order-actions";
 
+function shippingLines(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  const address = value as Record<string, unknown>;
+  return ["line1", "line2", "city", "postcode", "country"]
+    .map((key) => address[key])
+    .filter((line): line is string => typeof line === "string" && line.trim().length > 0)
+    .map((line) => line.trim());
+}
+
 interface OrderDetailPageProps {
   params: Promise<{ orderId: string }>;
 }
@@ -29,7 +38,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, created_at, channel, customers(phone_e164, name)",
+      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, shipping_address, created_at, channel, customers(phone_e164, name)",
     )
     .eq("id", orderId)
     .maybeSingle();
@@ -57,6 +66,8 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
       | { phone_e164: string; name: string | null }[]
       | null,
   );
+
+  const shipping = shippingLines(order.shipping_address);
 
   const lines = (items ?? []).map((item) => {
     const variant = unwrapRelation(item.product_variants as VariantJoin | VariantJoin[]);
@@ -122,6 +133,23 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
             <dd className="font-medium">{customer?.name ?? "—"}</dd>
           </div>
         </dl>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Delivery address
+        </h2>
+        {shipping.length === 0 ? (
+          <p className="rounded-xl border px-4 py-6 text-sm text-muted-foreground">
+            No delivery address captured yet.
+          </p>
+        ) : (
+          <address className="rounded-xl border px-4 py-3 text-sm not-italic leading-6">
+            {shipping.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </address>
+        )}
       </section>
 
       <section className="space-y-3">
