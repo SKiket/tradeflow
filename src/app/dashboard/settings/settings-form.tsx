@@ -78,29 +78,34 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
 
     setPending(true);
     const supabase = createClient();
-    const { error: updateError } = await supabase
-      .from("businesses")
-      .update({
-        name: trimmedName,
-        dispatch_address_line1: line1.trim() || null,
-        dispatch_city: city.trim() || null,
-        dispatch_postcode: postcode.trim() || null,
-        returns_policy_text: returnsPolicy.trim() || null,
-        ai_tone: aiTone.trim() || "friendly",
-        default_low_stock_threshold: parseThreshold(
-          lowStock,
-          business.default_low_stock_threshold ?? 5,
-        ),
-      })
-      .eq("id", business.id);
+    try {
+      const { data, error: updateError } = await supabase
+        .from("businesses")
+        .update({
+          name: trimmedName,
+          dispatch_address_line1: line1.trim() || null,
+          dispatch_city: city.trim() || null,
+          dispatch_postcode: postcode.trim() || null,
+          returns_policy_text: returnsPolicy.trim() || null,
+          ai_tone: aiTone.trim() || "friendly",
+          default_low_stock_threshold: parseThreshold(
+            lowStock,
+            business.default_low_stock_threshold ?? 5,
+          ),
+        })
+        .eq("id", business.id)
+        .select("id")
+        .maybeSingle();
 
-    setPending(false);
-    if (updateError) {
-      setError(updateError.message);
-      return;
+      if (updateError) throw new Error(updateError.message);
+      if (!data) throw new Error("Couldn't save settings.");
+      setSuccess("Settings saved.");
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setPending(false);
     }
-    setSuccess("Settings saved.");
-    router.refresh();
   }
 
   return (
@@ -220,7 +225,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
         </Button>
       </form>
 
-      <section className="space-y-3 rounded-xl border p-4">
+      <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Stripe
         </h2>
@@ -247,7 +252,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
         </p>
       </section>
 
-      <section className="space-y-3 rounded-xl border p-4">
+      <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           WhatsApp
         </h2>

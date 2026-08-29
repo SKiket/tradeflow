@@ -6,11 +6,13 @@ export type StripeConnectFlags = {
 };
 
 /**
- * Map the three cached Stripe Connect booleans to seller-facing copy.
+ * Map stripe_charges_enabled / stripe_payouts_enabled / stripe_details_submitted
+ * to seller-facing copy. All eight boolean combinations collapse to three
+ * headlines:
  *
- *   charges + payouts → taking payments and receiving payouts
- *   details submitted, charges off → Stripe still reviewing
- *   no account / details not submitted → onboarding not finished
+ *   charges on                  → Payments: Active
+ *   charges off, details on     → Payments: Pending Stripe review
+ *   charges off, details off    → Payments: Setup incomplete
  */
 export function stripePaymentsStatus(flags: StripeConnectFlags): {
   headline: string;
@@ -18,14 +20,13 @@ export function stripePaymentsStatus(flags: StripeConnectFlags): {
 } {
   const connected = Boolean(flags.connectedAccountId);
 
-  if (flags.chargesEnabled && flags.payoutsEnabled) {
-    return {
-      headline: "Payments: Active",
-      detail: "Charges and payouts are enabled on this Stripe account.",
-    };
-  }
-
-  if (flags.chargesEnabled && !flags.payoutsEnabled) {
+  if (flags.chargesEnabled) {
+    if (flags.payoutsEnabled) {
+      return {
+        headline: "Payments: Active",
+        detail: "Charges and payouts are enabled on this Stripe account.",
+      };
+    }
     return {
       headline: "Payments: Active",
       detail:
@@ -33,7 +34,7 @@ export function stripePaymentsStatus(flags: StripeConnectFlags): {
     };
   }
 
-  if (flags.detailsSubmitted && !flags.chargesEnabled) {
+  if (flags.detailsSubmitted) {
     return {
       headline: "Payments: Pending Stripe review",
       detail:
@@ -41,18 +42,11 @@ export function stripePaymentsStatus(flags: StripeConnectFlags): {
     };
   }
 
-  if (!connected || !flags.detailsSubmitted) {
-    return {
-      headline: "Payments: Setup incomplete",
-      detail: connected
-        ? "Stripe onboarding is not finished, so charges are not enabled yet."
-        : "No Stripe account is connected yet.",
-    };
-  }
-
   return {
-    headline: "Payments: Pending Stripe review",
-    detail: "Stripe has the account but charges are not enabled yet.",
+    headline: "Payments: Setup incomplete",
+    detail: connected
+      ? "Stripe onboarding is not finished, so charges are not enabled yet."
+      : "No Stripe account is connected yet.",
   };
 }
 
@@ -64,12 +58,11 @@ export function whatsappConnectionStatus(phoneE164: string | null): {
   if (phone) {
     return {
       headline: "WhatsApp: Connected",
-      detail: `Inbound number ${phone}. Reconnection is not available here.`,
+      detail: `Inbound number ${phone}.`,
     };
   }
   return {
     headline: "WhatsApp: Not connected",
-    detail:
-      "No WhatsApp number is mapped to this business yet. Connection setup is handled separately.",
+    detail: "No WhatsApp number is mapped to this business yet.",
   };
 }
