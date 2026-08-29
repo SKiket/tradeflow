@@ -2,6 +2,10 @@ import type { JSONSchema7 } from "json-schema";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { run } from "@/lib/ai/gateway";
+import {
+  fetchActiveCatalog,
+  type CatalogProduct,
+} from "@/lib/products/catalog";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -91,20 +95,6 @@ Rules:
 - For nullable fields (variant_query, matched_product_id, matched_variant_id, clarification_message) use null or an empty string when absent.
 - Respond with JSON matching the schema exactly.`;
 
-interface CatalogVariant {
-  id: string;
-  label: string;
-  stock_quantity: number;
-}
-
-interface CatalogProduct {
-  id: string;
-  name: string;
-  description: string | null;
-  price_pence: number;
-  variants: CatalogVariant[];
-}
-
 interface ThreadMessage {
   direction: string;
   normalised_text: string | null;
@@ -144,49 +134,6 @@ export async function parseOrder(params: {
   });
 
   return normaliseParseResult(gatewayResult.data);
-}
-
-async function fetchActiveCatalog(
-  supabase: SupabaseClient,
-  businessId: string,
-): Promise<CatalogProduct[]> {
-  const { data: products, error } = await supabase
-    .from("products")
-    .select(
-      "id, name, description, price_pence, product_variants(id, label, stock_quantity, deleted_at)",
-    )
-    .eq("business_id", businessId)
-    .eq("active", true)
-    .is("deleted_at", null);
-
-  if (error) {
-    throw new Error(`order_parse catalog lookup failed: ${error.message}`);
-  }
-
-  return (products ?? []).map((product) => {
-    const variants = (
-      (product.product_variants as Array<{
-        id: string;
-        label: string;
-        stock_quantity: number;
-        deleted_at: string | null;
-      }> | null) ?? []
-    )
-      .filter((variant) => !variant.deleted_at)
-      .map((variant) => ({
-        id: variant.id,
-        label: variant.label,
-        stock_quantity: variant.stock_quantity,
-      }));
-
-    return {
-      id: product.id as string,
-      name: product.name as string,
-      description: (product.description as string | null) ?? null,
-      price_pence: product.price_pence as number,
-      variants,
-    };
-  });
 }
 
 async function fetchThreadContext(
