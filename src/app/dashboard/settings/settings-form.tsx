@@ -16,6 +16,7 @@ const AI_TONES = ["friendly", "professional", "concise", "warm"] as const;
 
 export type SettingsFormValues = {
   id: string;
+  storefrontUrl: string;
   name: string;
   dispatch_address_line1: string | null;
   dispatch_city: string | null;
@@ -110,6 +111,24 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
 
   return (
     <div className="space-y-8">
+      <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Storefront
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Share this link so buyers can browse your catalog and order on
+          WhatsApp. No login required.
+        </p>
+        <a
+          href={business.storefrontUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block break-all font-mono text-sm text-foreground underline-offset-4 hover:underline"
+        >
+          {business.storefrontUrl}
+        </a>
+      </section>
+
       <form onSubmit={handleSubmit} className="space-y-6">
         <section className="space-y-4 rounded-xl border p-4">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">

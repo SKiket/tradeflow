@@ -1,3 +1,5 @@
+import { storefrontUrl } from "@/lib/storefront/url";
+
 import { SettingsForm, type SettingsFormValues } from "./settings-form";
 import { requireSeller } from "../require-seller";
 
@@ -6,7 +8,7 @@ export default async function SettingsPage() {
   const { data, error } = await supabase
     .from("businesses")
     .select(
-      "id, name, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, whatsapp_phone_e164",
+      "id, slug, name, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, whatsapp_phone_e164",
     )
     .eq("id", businessId)
     .maybeSingle();
@@ -33,6 +35,7 @@ export default async function SettingsPage() {
 
   const business: SettingsFormValues = {
     id: data.id as string,
+    storefrontUrl: storefrontUrl(data.slug as string),
     name: data.name as string,
     dispatch_address_line1:
       (data.dispatch_address_line1 as string | null) ?? null,
