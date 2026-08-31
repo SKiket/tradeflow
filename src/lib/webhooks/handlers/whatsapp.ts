@@ -18,6 +18,7 @@ import {
 } from "@/lib/support/handle-inbound";
 import { notifySellerOfUnmatchedOrder } from "@/lib/support/notify-seller";
 import { parseFormBody } from "@/lib/webhooks/verify/signatures";
+import { AI_PAUSED_PARSE, isAiPaused } from "@/lib/inbox/ai-pause";
 
 export interface WhatsAppHandlerResult {
   status: number;
@@ -186,6 +187,39 @@ export async function handleTwilioWhatsApp(
       let replyOutcome: Record<string, unknown> | null = null;
       let supportOutcome: Record<string, unknown> | null = null;
       let unmatchedNotify: Record<string, unknown> | null = null;
+
+      const { data: pauseRow } = await supabase
+        .from("customers")
+        .select("ai_paused_until")
+        .eq("id", result.message.customerId)
+        .maybeSingle();
+      if (isAiPaused(pauseRow?.ai_paused_until as string | null)) {
+        await supabase
+          .from("messages")
+          .update({ ai_parse_result: AI_PAUSED_PARSE })
+          .eq("id", result.messageId);
+        console.info("[whatsapp] AI paused — skipped order_parse/support_reply", {
+          messageId: result.messageId,
+          customerId: result.message.customerId,
+          aiPausedUntil: pauseRow?.ai_paused_until,
+        });
+
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            handled: true,
+            messageId: result.messageId,
+            businessId: result.message.businessId,
+            customerId: result.message.customerId,
+            threadId: result.message.threadId,
+            customerCreated: result.customerCreated,
+            mediaCount: result.message.mediaUrls.length,
+            parseStored: false,
+            aiPaused: true,
+          },
+        };
+      }
 
       // Intercept yes/no on PENDING_CONFIRMATION, and cancel on
       // AWAITING_PAYMENT, BEFORE order_parse so corrections still parse.

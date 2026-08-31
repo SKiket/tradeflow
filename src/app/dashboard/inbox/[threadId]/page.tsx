@@ -4,8 +4,11 @@ import { ArrowLeft } from "lucide-react";
 
 import { formatDateTime, unwrapRelation } from "@/lib/orders/display";
 import { cn } from "@/lib/utils";
+import { isAiPaused, isAiPausedSkip } from "@/lib/inbox/ai-pause";
+import { isInServiceWindow } from "@/lib/channels/service-window";
 
 import { requireSeller } from "../../require-seller";
+import { ThreadAiPauseBanner, ThreadReplyForm } from "./thread-reply";
 
 interface ThreadPageProps {
   params: Promise<{ threadId: string }>;
@@ -64,7 +67,7 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
   const { data: messages, error } = await supabase
     .from("messages")
     .select(
-      "id, direction, normalised_text, ai_parse_result, created_at, customer_id, customers(phone_e164, name)",
+      "id, direction, normalised_text, ai_parse_result, created_at, customer_id, customers(phone_e164, name, last_customer_message_at, ai_paused_until)",
     )
     .eq("thread_id", threadId)
     .is("deleted_at", null)
@@ -85,10 +88,26 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
 
   const firstCustomer = unwrapRelation(
     messages.find((row) => row.customers)?.customers as
-      | { phone_e164: string; name: string | null }
-      | { phone_e164: string; name: string | null }[]
+      | {
+          phone_e164: string;
+          name: string | null;
+          last_customer_message_at: string | null;
+          ai_paused_until: string | null;
+        }
+      | {
+          phone_e164: string;
+          name: string | null;
+          last_customer_message_at: string | null;
+          ai_paused_until: string | null;
+        }[]
       | null,
   );
+
+  const pausedUntil = firstCustomer?.ai_paused_until ?? null;
+  const paused = isAiPaused(pausedUntil);
+  const inServiceWindow = isInServiceWindow({
+    last_customer_message_at: firstCustomer?.last_customer_message_at ?? null,
+  });
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -109,6 +128,10 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
           </p>
         ) : null}
       </div>
+
+      {paused && pausedUntil ? (
+        <ThreadAiPauseBanner threadId={threadId} pausedUntil={pausedUntil} />
+      ) : null}
 
       <ol className="space-y-3">
         {messages.map((row) => {
@@ -134,7 +157,11 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
                 <p className="whitespace-pre-wrap text-sm">
                   {(row.normalised_text as string | null)?.trim() || "(no text)"}
                 </p>
-                {parse && (parse.intent || parse.confidence) ? (
+                {isAiPausedSkip(row.ai_parse_result) ? (
+                  <p className="text-xs font-medium text-amber-800">
+                    Needs seller reply — AI paused
+                  </p>
+                ) : parse && (parse.intent || parse.confidence) ? (
                   <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs">
                     <p className="font-medium text-foreground">
                       Assistant classification
@@ -170,6 +197,8 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
           );
         })}
       </ol>
+
+      <ThreadReplyForm threadId={threadId} inServiceWindow={inServiceWindow} />
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import { isAiPausedSkip } from "@/lib/inbox/ai-pause";
+
 export type InboxThreadStatus = "needs_reply" | "order_placed" | "general";
 
 export function threadStatusLabel(status: InboxThreadStatus): string {
@@ -30,9 +32,17 @@ export function parseNeedsSellerReply(parse: unknown): boolean {
 
 export function resolveThreadStatus(params: {
   lastInboundParse: unknown;
+  lastDirection: string;
   hasPlacedOrder: boolean;
+  aiPaused: boolean;
 }): InboxThreadStatus {
-  if (parseNeedsSellerReply(params.lastInboundParse)) {
+  if (
+    parseNeedsSellerReply(params.lastInboundParse) ||
+    isAiPausedSkip(params.lastInboundParse)
+  ) {
+    return "needs_reply";
+  }
+  if (params.aiPaused && params.lastDirection === "inbound") {
     return "needs_reply";
   }
   if (params.hasPlacedOrder) return "order_placed";

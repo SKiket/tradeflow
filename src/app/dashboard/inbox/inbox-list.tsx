@@ -18,6 +18,7 @@ export type InboxListRow = {
   lastMessagePreview: string;
   lastMessageAt: string;
   status: InboxThreadStatus;
+  aiPaused: boolean;
 };
 
 function ThreadStatusBadge({ status }: { status: InboxThreadStatus }) {
@@ -64,7 +65,18 @@ export function InboxList({ threads }: { threads: InboxListRow[] }) {
               <span className="truncate text-sm font-semibold">
                 {thread.customerName || thread.customerPhone || "Unknown buyer"}
               </span>
-              <ThreadStatusBadge status={thread.status} />
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                {thread.aiPaused ? (
+                  <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-950 whitespace-nowrap">
+                    You&apos;re handling
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 whitespace-nowrap">
+                    AI covering
+                  </span>
+                )}
+                <ThreadStatusBadge status={thread.status} />
+              </div>
             </div>
             <p className="line-clamp-2 text-sm text-muted-foreground">
               {thread.lastMessagePreview}
@@ -83,6 +95,7 @@ export function InboxList({ threads }: { threads: InboxListRow[] }) {
               <th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Last message</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">AI</th>
               <th className="px-4 py-3">Last activity</th>
             </tr>
           </thead>
@@ -117,6 +130,15 @@ export function InboxList({ threads }: { threads: InboxListRow[] }) {
                 </td>
                 <td className="px-4 py-3">
                   <ThreadStatusBadge status={thread.status} />
+                </td>
+                <td className="px-4 py-3">
+                  {thread.aiPaused ? (
+                    <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-950 whitespace-nowrap">
+                      You&apos;re handling
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">AI covering</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
                   {formatDateTime(thread.lastMessageAt)}
