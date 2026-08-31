@@ -490,8 +490,7 @@ export async function cancelAwaitingPaymentOrder(params: {
     performed &&
     params.notifyBuyer &&
     params.customerPhoneE164 &&
-    params.customerId &&
-    params.threadId
+    params.customerId
   ) {
     try {
       const sent = await sendWhatsAppMessage({

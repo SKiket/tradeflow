@@ -7,6 +7,7 @@ import { storefrontOrderMessage, waMeOrderUrl } from "./whatsapp-order";
 const SLUG_RE = /^[a-z0-9-]+$/;
 
 export type PublicStorefrontVariant = {
+  id: string;
   label: string | null;
   orderUrl: string | null;
 };
@@ -20,6 +21,8 @@ export type PublicStorefrontProduct = {
 };
 
 export type PublicStorefront = {
+  businessId: string;
+  slug: string;
   name: string;
   bio: string | null;
   logoUrl: string | null;
@@ -28,7 +31,15 @@ export type PublicStorefront = {
   products: PublicStorefrontProduct[];
 };
 
+export type CatalogLine = {
+  variantId: string;
+  productName: string;
+  variantLabel: string | null;
+  pricePence: number;
+};
+
 type VariantRow = {
+  id: string;
   label: string | null;
   deleted_at: string | null;
 };
@@ -36,10 +47,9 @@ type VariantRow = {
 /**
  * Public catalog for a storefront slug.
  *
- * Uses the service-role client (RLS is not loosened). Selects only
- * storefront-safe columns — never owner, Stripe, dispatch, or internal ids
- * in the returned payload. `businesses.id` and `whatsapp_phone_e164` are
- * read server-side to join products and build wa.me links, then dropped.
+ * Uses the service-role client (RLS is not loosened). Exposes `businessId`
+ * and variant ids so the cart can check out; never owner, Stripe, dispatch,
+ * WhatsApp credentials, or product-row ids.
  */
 export const fetchPublicStorefront = cache(
   async (slug: string): Promise<PublicStorefront | null> => {
@@ -67,7 +77,7 @@ export const fetchPublicStorefront = cache(
     const { data: productRows, error: productError } = await supabase
       .from("products")
       .select(
-        "name, description, price_pence, photo_url, product_variants(label, deleted_at)",
+        "name, description, price_pence, photo_url, product_variants(id, label, deleted_at)",
       )
       .eq("business_id", business.id)
       .eq("active", true)
@@ -83,14 +93,13 @@ export const fetchPublicStorefront = cache(
     const products: PublicStorefrontProduct[] = [];
     for (const row of productRows ?? []) {
       const name = row.name as string;
-      const variants = (
-        (row.product_variants as VariantRow[] | null) ?? []
-      )
+      const variants = ((row.product_variants as VariantRow[] | null) ?? [])
         .filter((variant) => !variant.deleted_at)
         .map((variant) => {
           const label = variant.label ?? null;
           const message = storefrontOrderMessage(name, label);
           return {
+            id: variant.id,
             label,
             orderUrl: phone ? waMeOrderUrl(phone, message) : null,
           };
@@ -106,6 +115,8 @@ export const fetchPublicStorefront = cache(
     }
 
     return {
+      businessId: business.id as string,
+      slug: trimmed,
       name: business.name as string,
       bio: (business.bio as string | null) ?? null,
       logoUrl: (business.logo_url as string | null) ?? null,
@@ -115,3 +126,20 @@ export const fetchPublicStorefront = cache(
     };
   },
 );
+
+export function catalogLine(
+  storefront: PublicStorefront,
+  variantId: string,
+): CatalogLine | null {
+  for (const product of storefront.products) {
+    const variant = product.variants.find((entry) => entry.id === variantId);
+    if (!variant) continue;
+    return {
+      variantId: variant.id,
+      productName: product.name,
+      variantLabel: variant.label,
+      pricePence: product.pricePence,
+    };
+  }
+  return null;
+}

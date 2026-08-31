@@ -463,7 +463,7 @@ async function insertStatusHistory(
   }
 }
 
-function generateOrderRef(): string {
+export function generateOrderRef(): string {
   return `TF-${randomBytes(4).toString("hex").toUpperCase()}`;
 }
 

@@ -157,6 +157,37 @@ export interface StockCheckResult {
   }>;
 }
 
+export async function checkLinesStockAvailable(
+  supabase: SupabaseClient,
+  lines: Array<{ variantId: string; quantity: number }>,
+): Promise<StockCheckResult> {
+  const shortages: StockCheckResult["shortages"] = [];
+
+  for (const line of lines) {
+    const { data: variant } = await supabase
+      .from("product_variants")
+      .select("id, stock_quantity, reserved_quantity, track_inventory")
+      .eq("id", line.variantId)
+      .maybeSingle();
+
+    if (!variant?.track_inventory) continue;
+
+    const available = Math.max(
+      0,
+      (variant.stock_quantity ?? 0) - (variant.reserved_quantity ?? 0),
+    );
+    if (available < line.quantity) {
+      shortages.push({
+        variantId: variant.id,
+        requested: line.quantity,
+        available,
+      });
+    }
+  }
+
+  return { ok: shortages.length === 0, shortages };
+}
+
 /** Re-check availability accounting for current reservations (race protection). */
 export async function checkOrderStockAvailable(
   supabase: SupabaseClient,
@@ -167,31 +198,35 @@ export async function checkOrderStockAvailable(
     .select("quantity, product_variant_id")
     .eq("order_id", orderId);
 
-  const shortages: StockCheckResult["shortages"] = [];
+  return checkLinesStockAvailable(
+    supabase,
+    (items ?? []).map((item) => ({
+      variantId: item.product_variant_id as string,
+      quantity: item.quantity as number,
+    })),
+  );
+}
 
-  for (const item of items ?? []) {
+export async function incrementReservedQuantities(
+  supabase: SupabaseClient,
+  lines: Array<{ variantId: string; quantity: number }>,
+): Promise<void> {
+  for (const line of lines) {
     const { data: variant } = await supabase
       .from("product_variants")
-      .select("id, stock_quantity, reserved_quantity, track_inventory")
-      .eq("id", item.product_variant_id)
+      .select("id, reserved_quantity, track_inventory")
+      .eq("id", line.variantId)
       .maybeSingle();
 
     if (!variant?.track_inventory) continue;
 
-    const available = Math.max(
-      0,
-      (variant.stock_quantity ?? 0) - (variant.reserved_quantity ?? 0),
-    );
-    if (available < item.quantity) {
-      shortages.push({
-        variantId: variant.id,
-        requested: item.quantity,
-        available,
-      });
-    }
+    await supabase
+      .from("product_variants")
+      .update({
+        reserved_quantity: (variant.reserved_quantity ?? 0) + line.quantity,
+      })
+      .eq("id", variant.id);
   }
-
-  return { ok: shortages.length === 0, shortages };
 }
 
 /** Increment reserved_quantity and set order.reserved_until + AWAITING_PAYMENT. */
@@ -210,22 +245,13 @@ export async function reserveOrderStock(
     .select("quantity, product_variant_id")
     .eq("order_id", orderId);
 
-  for (const item of items ?? []) {
-    const { data: variant } = await supabase
-      .from("product_variants")
-      .select("id, reserved_quantity, track_inventory")
-      .eq("id", item.product_variant_id)
-      .maybeSingle();
-
-    if (!variant?.track_inventory) continue;
-
-    await supabase
-      .from("product_variants")
-      .update({
-        reserved_quantity: (variant.reserved_quantity ?? 0) + item.quantity,
-      })
-      .eq("id", variant.id);
-  }
+  await incrementReservedQuantities(
+    supabase,
+    (items ?? []).map((item) => ({
+      variantId: item.product_variant_id as string,
+      quantity: item.quantity as number,
+    })),
+  );
 
   const { data: order } = await supabase
     .from("orders")

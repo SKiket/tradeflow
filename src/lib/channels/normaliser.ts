@@ -120,11 +120,33 @@ async function resolveCustomer(
   | { status: "ok"; customerId: string; customerCreated: boolean }
   | { status: "error"; reason: string }
 > {
+  const resolved = await findOrCreateCustomer(supabase, {
+    businessId,
+    phoneE164: parsed.senderPhoneE164,
+    name: parsed.senderDisplayName,
+    channel: parsed.channel,
+  });
+  return resolved;
+}
+
+export async function findOrCreateCustomer(
+  supabase: SupabaseClient,
+  params: {
+    businessId: string;
+    phoneE164: string;
+    name?: string | null;
+    channel?: string;
+  },
+): Promise<
+  | { status: "ok"; customerId: string; customerCreated: boolean }
+  | { status: "error"; reason: string }
+> {
+  const phoneE164 = params.phoneE164;
   const { data: existing, error: selectError } = await supabase
     .from("customers")
     .select("id, name")
-    .eq("business_id", businessId)
-    .eq("phone_e164", parsed.senderPhoneE164)
+    .eq("business_id", params.businessId)
+    .eq("phone_e164", phoneE164)
     .is("deleted_at", null)
     .maybeSingle();
 
@@ -133,11 +155,10 @@ async function resolveCustomer(
   }
 
   if (existing) {
-    // Backfill a display name if we didn't have one and now do.
-    if (!existing.name && parsed.senderDisplayName) {
+    if (!existing.name && params.name) {
       await supabase
         .from("customers")
-        .update({ name: parsed.senderDisplayName })
+        .update({ name: params.name })
         .eq("id", existing.id);
     }
     return { status: "ok", customerId: existing.id, customerCreated: false };
@@ -146,10 +167,12 @@ async function resolveCustomer(
   const { data: created, error: insertError } = await supabase
     .from("customers")
     .insert({
-      business_id: businessId,
-      phone_e164: parsed.senderPhoneE164,
-      name: parsed.senderDisplayName,
-      channel_identifiers: { [parsed.channel]: parsed.senderPhoneE164 },
+      business_id: params.businessId,
+      phone_e164: phoneE164,
+      name: params.name ?? null,
+      channel_identifiers: params.channel
+        ? { [params.channel]: phoneE164 }
+        : { storefront: phoneE164 },
     })
     .select("id")
     .single();
@@ -158,13 +181,11 @@ async function resolveCustomer(
     return { status: "ok", customerId: created.id, customerCreated: true };
   }
 
-  // Likely a concurrent insert hit the UNIQUE (business_id, phone_e164)
-  // constraint — re-select the row the other request created.
   const { data: raced } = await supabase
     .from("customers")
     .select("id")
-    .eq("business_id", businessId)
-    .eq("phone_e164", parsed.senderPhoneE164)
+    .eq("business_id", params.businessId)
+    .eq("phone_e164", phoneE164)
     .maybeSingle();
 
   if (raced) {

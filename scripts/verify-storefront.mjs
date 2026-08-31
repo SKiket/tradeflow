@@ -41,7 +41,6 @@ const SENSITIVE_FIELD_NAMES = [
   "whatsapp_waba_id",
   "seller_whatsapp_phone_e164",
   "whatsapp_phone_e164",
-  "business_id",
 ];
 
 function loadEnv() {
@@ -278,13 +277,9 @@ async function main() {
     : `Hi! I'd like to order the ${mug?.name ?? "Classic Blue Mug"}`;
 
   const forbiddenIds = [
-    business.id,
     business.owner_user_id,
     business.stripe_connected_account_id,
     ...(activeProducts.map((p) => p.id)),
-    ...activeProducts.flatMap((p) =>
-      (p.product_variants ?? []).map((v) => v.id),
-    ),
   ].filter(Boolean);
 
   console.log(`BASE ${BASE}`);
