@@ -6,6 +6,7 @@ import {
   type OrderShippingAddress,
 } from "@/lib/orders/shipping-address";
 import { ORDER_STATUS } from "@/lib/orders/status";
+import { orderTrackingUrl } from "@/lib/storefront/url";
 import { capturePaymentIntentForOrder } from "@/lib/stripe/capture-payment-intent";
 
 export type FulfilOrderOutcome =
@@ -134,6 +135,7 @@ export async function fulfilPaidOrder(
       `Payment received! Your order ${row.order_ref} is confirmed.`,
       `Total: ${formatPence(row.total_pence)}.`,
       "",
+      `Track your order: ${orderTrackingUrl(row.order_ref)}`,
       "We'll be in touch about dispatch. Thanks for your order!",
     ].join("\n");
 

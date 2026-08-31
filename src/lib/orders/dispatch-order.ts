@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { ORDER_STATUS } from "@/lib/orders/status";
+import { orderTrackingUrl } from "@/lib/storefront/url";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 interface OrderRow {
@@ -102,8 +103,11 @@ function buildDispatchMessage(
     lines.push("");
     if (carrier) lines.push(`Carrier: ${carrier}`);
     if (trackingNumber) lines.push(`Tracking: ${trackingNumber}`);
+    lines.push(`Track your order: ${orderTrackingUrl(orderRef)}`);
     lines.push("", "It's on its way to you!");
   } else {
+    lines.push("");
+    lines.push(`Track your order: ${orderTrackingUrl(orderRef)}`);
     lines.push("", "It's on its way to you!");
   }
 

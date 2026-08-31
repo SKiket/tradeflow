@@ -9,3 +9,7 @@ export function publicAppOrigin(): string {
 export function storefrontUrl(slug: string): string {
   return `${publicAppOrigin()}/s/${slug}`;
 }
+
+export function orderTrackingUrl(orderRef: string): string {
+  return `${publicAppOrigin()}/t/${encodeURIComponent(orderRef)}`;
+}

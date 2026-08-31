@@ -9,6 +9,7 @@ import {
   statusLabel,
   unwrapRelation,
 } from "@/lib/orders/display";
+import { orderTrackingUrl } from "@/lib/storefront/url";
 import { createClient } from "@/lib/supabase/server";
 
 import { OrderActions } from "./order-actions";
@@ -81,6 +82,8 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
     };
   });
 
+  const trackingUrl = orderTrackingUrl(order.order_ref as string);
+
   return (
     <div className="mx-auto max-w-3xl space-y-8">
       <div>
@@ -100,6 +103,19 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
         <p className="mt-1 text-sm text-muted-foreground">
           Placed {formatDateTime(order.created_at as string)}
           {order.channel ? ` · ${order.channel}` : ""}
+        </p>
+        <p className="mt-3">
+          <a
+            href={trackingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-medium underline-offset-4 hover:underline"
+          >
+            Buyer tracking page
+          </a>
+          <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">
+            {trackingUrl}
+          </span>
         </p>
         {(order.dispatch_carrier || order.dispatch_tracking_number) && (
           <p className="mt-1 text-sm text-muted-foreground">
