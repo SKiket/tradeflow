@@ -87,6 +87,8 @@ Given a customer's latest inbound message, recent thread context, and the busine
 3. Match each item ONLY against the supplied catalog. Never invent a product or variant that is not listed. If nothing matches, leave matched_product_id and matched_variant_id as null (or empty string) and set a low match_confidence.
 4. Set needs_clarification to true (and write a clear clarification_message) when the match is ambiguous, the referenced item is not in the catalog, quantity/variant is unclear, or a follow-up correction cannot be applied confidently.
 5. For non-order messages (questions, greetings, other), set intent accordingly, leave items as [], and set needs_clarification false unless you genuinely need to ask something back.
+   - After-sales status/tracking questions (e.g. "where's my order?", "when will this arrive?") are intent "question", not "order" or "other".
+   - Complaints and problems (damaged, wrong item, missing, unhappy) are also intent "question" so they can be handled by support — not "other".
 
 Rules:
 - match_confidence and confidence are numbers between 0 and 1.

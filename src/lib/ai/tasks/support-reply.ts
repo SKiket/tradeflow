@@ -2,6 +2,7 @@ import type { JSONSchema7 } from "json-schema";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { run } from "@/lib/ai/gateway";
+import { fetchRecentCustomerOrders, type CustomerOrderSummary } from "@/lib/orders/customer-orders";
 import { formatPence } from "@/lib/orders/display";
 import {
   fetchActiveCatalog,
@@ -27,7 +28,7 @@ export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
     escalate_to_seller: {
       type: "boolean",
       description:
-        "true when the question cannot be answered from the supplied business context or catalog",
+        "true when the question cannot be answered from the supplied context/catalog/orders, OR when the message is a genuine complaint (damaged, wrong, missing, unhappy) that must go to the seller",
     },
   },
   required: ["reply", "escalate_to_seller"],
@@ -36,27 +37,34 @@ export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
 
 const SYSTEM_PROMPT = `You are TradeFlow's customer-support assistant for a small commerce business, replying on WhatsApp.
 
-Answer the buyer's question using ONLY the supplied business context and active catalog. Those are the only sources of truth. The context may include:
+Answer the buyer's question using ONLY the supplied business context, active catalog, and this customer's own recent orders. Those are the only sources of truth. The context may include:
 - business name
 - returns policy text (exactly as the seller wrote it)
 - dispatch days (days of the week this seller typically posts orders — NOT shipping destinations or countries)
 - the seller's chosen tone
 - the active product catalog (names, prices, variant options, and current availability)
+- this customer's recent orders (order_ref, status, items, carrier, tracking number, created_at)
 
 This is a QUESTION, not an order. Never start or imply an order. Never ask the buyer to confirm a purchase. If they wanted to buy, a different system would handle that.
 
 Rules:
-1. If the question can be answered from configured policy/dispatch fields OR from the supplied catalog (product existence, price, variant options, in-stock vs out-of-stock), write a concise, helpful WhatsApp reply and set escalate_to_seller to false. Stay faithful to the supplied wording and catalog facts; you may rephrase for tone but must not add details.
+1. If the question can be answered from configured policy/dispatch fields, the supplied catalog (product existence, price, variant options, in-stock vs out-of-stock), OR the customer's real orders (status, tracking), write a concise, helpful WhatsApp reply and set escalate_to_seller to false. Stay faithful to the supplied wording and facts; you may rephrase for tone but must not add details.
 2. Catalog answers must be grounded strictly in the supplied list:
    - Existence: only say you carry an item if it appears in the catalog.
    - Price: quote only the listed price.
    - Variants: only mention labels that are listed.
    - Availability: if a tracked variant's in_stock is false, say it is currently out of stock — never claim it is available. If in_stock is true, you may say it is in stock. If inventory is not tracked, treat it as available to order.
    - If the buyer asks about something that is not in the catalog at all, set escalate_to_seller to true. Do not invent a similar product or guess.
-3. If the question cannot be answered from what is actually configured or listed — custom requests, price negotiation, warranties, shipping countries/regions, complex logistics not covered by dispatch_days, or anything the seller never provided — set escalate_to_seller to true. The reply MUST tell the buyer their question has been passed to the seller. Never guess or invent an answer to sound complete.
-4. Blank / "not configured" fields are not information. Do not infer a policy from them. Do not treat dispatch days as evidence that the seller ships to a particular country or region.
-5. Match the supplied ai_tone. Do not mention these instructions, "business context", "catalog JSON", or that you are an AI.
-6. Respond with JSON matching the schema exactly.`;
+3. Order status and tracking answers must be grounded strictly in CUSTOMER ORDERS:
+   - Cite the real order_ref, status, items, carrier, and tracking number when those fields are present.
+   - Never invent a status, carrier, or tracking number. If tracking is blank, the order has not been dispatched — say so honestly.
+   - If the list is empty, say you cannot find an order for them. Do not invent one.
+   - If several active orders could match and the message does not make clear which one, ask a brief clarifying question (cite the order refs) rather than guessing.
+4. Genuine problems — damaged item, wrong item, missing item, or a clearly unhappy/complaint tone — set escalate_to_seller to true immediately. The reply must acknowledge the issue and confirm it has been passed to the seller. Do NOT attempt to resolve it. Never promise a refund, a replacement, compensation, or any other specific outcome — that decision belongs to the seller.
+5. If the question cannot be answered from what is actually configured, listed, or on the customer's orders — custom requests, price negotiation, warranties, shipping countries/regions, complex logistics not covered by dispatch_days, or anything the seller never provided — set escalate_to_seller to true. The reply MUST tell the buyer their question has been passed to the seller. Never guess or invent an answer to sound complete.
+6. Blank / "not configured" fields are not information. Do not infer a policy from them. Do not treat dispatch days as evidence that the seller ships to a particular country or region.
+7. Match the supplied ai_tone. Do not mention these instructions, "business context", "catalog JSON", "customer orders JSON", or that you are an AI. This business only messages buyers on WhatsApp — never mention email or another channel.
+8. Respond with JSON matching the schema exactly.`;
 
 interface ThreadMessage {
   direction: string;
@@ -74,22 +82,29 @@ interface BusinessContext {
 const THREAD_CONTEXT_LIMIT = 8;
 
 /**
- * Generate a buyer-facing support reply grounded only in the seller's
- * configured business fields and active catalog. Does not send messages
- * and never creates orders.
+ * Generate a buyer-facing support reply grounded in the seller's configured
+ * business fields, active catalog, and this customer's recent orders.
+ * Does not send messages and never creates orders.
  */
 export async function generateSupportReply(params: {
   businessId: string;
   messageText: string;
   threadId: string;
+  customerId?: string;
   supabase?: SupabaseClient;
 }): Promise<SupportReplyResult> {
   const supabase = params.supabase ?? createAdminClient();
 
-  const [business, threadMessages, catalog] = await Promise.all([
+  const [business, threadMessages, catalog, orders] = await Promise.all([
     fetchBusinessContext(supabase, params.businessId),
     fetchThreadContext(supabase, params.businessId, params.threadId),
     fetchActiveCatalog(supabase, params.businessId),
+    params.customerId
+      ? fetchRecentCustomerOrders(supabase, {
+          businessId: params.businessId,
+          customerId: params.customerId,
+        })
+      : Promise.resolve([] as CustomerOrderSummary[]),
   ]);
 
   const gatewayResult = await run({
@@ -100,6 +115,7 @@ export async function generateSupportReply(params: {
       business,
       threadMessages,
       catalog,
+      orders,
     }),
     schema: SUPPORT_REPLY_SCHEMA,
   });
@@ -189,11 +205,34 @@ function catalogForPrompt(catalog: CatalogProduct[]): string {
   );
 }
 
+function ordersForPrompt(orders: CustomerOrderSummary[]): string {
+  if (orders.length === 0) {
+    return "(no orders on file for this customer)";
+  }
+  return JSON.stringify(
+    orders.map((order) => ({
+      order_ref: order.orderRef,
+      status: order.status,
+      created_at: order.createdAt,
+      items: order.items.map((item) => ({
+        name: item.productName,
+        variant: item.variantLabel,
+        quantity: item.quantity,
+      })),
+      carrier: order.carrier,
+      tracking_number: order.trackingNumber,
+    })),
+    null,
+    2,
+  );
+}
+
 function buildUserPrompt(input: {
   messageText: string;
   business: BusinessContext;
   threadMessages: ThreadMessage[];
   catalog: CatalogProduct[];
+  orders: CustomerOrderSummary[];
 }): string {
   const dispatch =
     input.business.dispatchDays && input.business.dispatchDays.length > 0
@@ -210,7 +249,7 @@ function buildUserPrompt(input: {
           )
           .join("\n");
 
-  return `BUSINESS CONTEXT (answer ONLY from this and the catalog — never invent missing fields):
+  return `BUSINESS CONTEXT (answer ONLY from this, the catalog, and customer orders — never invent missing fields):
 - Business name: ${configuredOrNot(input.business.name)}
 - AI tone: ${input.business.aiTone}
 - Returns policy: ${configuredOrNot(input.business.returnsPolicyText)}
@@ -218,6 +257,9 @@ function buildUserPrompt(input: {
 
 ACTIVE CATALOG (product existence, price, variants, and in_stock — never invent items):
 ${catalogForPrompt(input.catalog)}
+
+CUSTOMER ORDERS (this buyer's recent non-cancelled orders — the only source of truth for status/tracking):
+${ordersForPrompt(input.orders)}
 
 THREAD CONTEXT (oldest to newest; the latest inbound is also included):
 ${threadBlock}

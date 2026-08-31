@@ -55,6 +55,7 @@ export async function handleQuestionReply(
       businessId: params.businessId,
       messageText: params.messageText,
       threadId: params.threadId,
+      customerId: params.customerId,
       supabase,
     });
   } catch (error) {
