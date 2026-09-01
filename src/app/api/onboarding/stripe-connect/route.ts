@@ -67,8 +67,8 @@ export async function POST(request: NextRequest) {
     const origin = new URL(request.url).origin;
     const url = await createAccountOnboardingLink({
       connectedAccountId,
-      refreshUrl: `${origin}/onboarding`,
-      returnUrl: `${origin}/dashboard`,
+      refreshUrl: `${origin}/onboarding?step=C`,
+      returnUrl: `${origin}/onboarding?step=D`,
     });
 
     return NextResponse.json({ url, connectedAccountId });

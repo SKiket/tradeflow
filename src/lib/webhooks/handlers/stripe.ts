@@ -6,6 +6,11 @@ import { persistOrderShippingAddress, shippingAddressFromSession } from "@/lib/o
 import { resolveOrderIdFromCheckoutSession } from "@/lib/orders/resolve-order-from-checkout";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { releaseOrderReservation } from "@/lib/orders/reservations";
+import {
+  isSellerSubscriptionStatus,
+  trialEndsAtFromUnix,
+} from "@/lib/stripe/billing";
+import { getStripe } from "@/lib/stripe/client";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface StripeHandlerResult {
@@ -48,6 +53,15 @@ export async function handleStripeEvent(
       );
     case "refund.updated":
       return handleRefundUpdated(event.data.object as Stripe.Refund);
+    case "customer.subscription.created":
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted":
+      return handleSellerSubscription(
+        event.data.object as Stripe.Subscription,
+        event.type,
+      );
+    case "invoice.payment_failed":
+      return handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
     default:
       console.info("[stripe-webhook] Unhandled event type", {
         type: event.type,
@@ -75,6 +89,19 @@ async function resolveOrderIdFromMetadata(
 async function handleCheckoutSessionCompleted(
   session: Stripe.Checkout.Session,
 ): Promise<StripeHandlerResult> {
+  if (session.mode === "subscription") {
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        handled: true,
+        type: "checkout.session.completed",
+        mode: "subscription",
+        reason: "subscription_status_comes_from_subscription_events",
+      },
+    };
+  }
+
   const supabase = createAdminClient();
   const orderId = await resolveOrderIdFromCheckoutSession(supabase, session);
 
@@ -312,6 +339,192 @@ async function handleCheckoutSessionExpired(
       type: "checkout.session.expired",
       orderId,
     },
+  };
+}
+
+async function handleSellerSubscription(
+  subscription: Stripe.Subscription,
+  eventType: string,
+): Promise<StripeHandlerResult> {
+  const customerId =
+    typeof subscription.customer === "string"
+      ? subscription.customer
+      : subscription.customer?.id;
+  if (!customerId) {
+    return {
+      status: 200,
+      body: { ok: true, handled: false, reason: "no_customer" },
+    };
+  }
+
+  const status = eventType === "customer.subscription.deleted"
+    ? "canceled"
+    : subscription.status;
+  const synced = await syncSellerSubscription({
+    customerId,
+    subscriptionId: subscription.id,
+    status,
+    trialEnd: subscription.trial_end,
+  });
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      handled: synced.handled,
+      type: eventType,
+      ...synced,
+    },
+  };
+}
+
+function subscriptionIdFromInvoice(invoice: Stripe.Invoice): string | null {
+  const parent = invoice.parent;
+  if (!parent || parent.type !== "subscription_details") return null;
+  const sub = parent.subscription_details?.subscription;
+  if (typeof sub === "string") return sub;
+  if (sub && typeof sub === "object" && "id" in sub) return sub.id;
+  return null;
+}
+
+async function handleInvoicePaymentFailed(
+  invoice: Stripe.Invoice,
+): Promise<StripeHandlerResult> {
+  const customerId =
+    typeof invoice.customer === "string"
+      ? invoice.customer
+      : invoice.customer?.id;
+  const subscriptionId = subscriptionIdFromInvoice(invoice);
+
+  if (!customerId) {
+    return {
+      status: 200,
+      body: { ok: true, handled: false, reason: "no_customer" },
+    };
+  }
+
+  if (!subscriptionId) {
+    return {
+      status: 200,
+      body: { ok: true, handled: false, reason: "not_a_subscription_invoice" },
+    };
+  }
+
+  let status: string = "past_due";
+  let trialEnd: number | null | undefined = undefined;
+  try {
+    const subscription = await getStripe().subscriptions.retrieve(subscriptionId);
+    status = subscription.status;
+    trialEnd = subscription.trial_end;
+  } catch (error) {
+    console.error("[stripe-webhook] invoice.payment_failed retrieve failed", {
+      subscriptionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const synced = await syncSellerSubscription({
+    customerId,
+    subscriptionId,
+    status,
+    trialEnd,
+  });
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      handled: synced.handled,
+      type: "invoice.payment_failed",
+      ...synced,
+    },
+  };
+}
+
+async function syncSellerSubscription(params: {
+  customerId: string;
+  subscriptionId: string | null;
+  status: string;
+  trialEnd: number | null | undefined;
+}): Promise<{
+  handled: boolean;
+  reason?: string;
+  business?: string;
+  stripe_subscription_status?: string | null;
+  trial_ends_at?: string | null;
+}> {
+  const supabase = createAdminClient();
+  const { data: business, error: lookupError } = await supabase
+    .from("businesses")
+    .select("id, stripe_subscription_status, trial_ends_at")
+    .eq("stripe_customer_id", params.customerId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (lookupError) {
+    console.error("[stripe-webhook] subscription lookup failed", {
+      customer: params.customerId,
+      error: lookupError.message,
+    });
+    return { handled: false, reason: "lookup_error" };
+  }
+
+  if (!business) {
+    console.info("[stripe-webhook] subscription event for unknown customer", {
+      customer: params.customerId,
+    });
+    return { handled: false, reason: "no_matching_business" };
+  }
+
+  const nextStatus = isSellerSubscriptionStatus(params.status)
+    ? params.status
+    : null;
+  if (!nextStatus) {
+    console.warn("[stripe-webhook] unrecognised subscription status", {
+      business: business.id,
+      status: params.status,
+    });
+    return { handled: false, reason: "unrecognised_status", business: business.id };
+  }
+
+  const next: {
+    stripe_subscription_status: string;
+    stripe_subscription_id?: string;
+    trial_ends_at?: string | null;
+  } = {
+    stripe_subscription_status: nextStatus,
+  };
+  if (params.subscriptionId) {
+    next.stripe_subscription_id = params.subscriptionId;
+  }
+  if (params.trialEnd !== undefined) {
+    next.trial_ends_at = trialEndsAtFromUnix(params.trialEnd);
+  }
+
+  const { error: updateError } = await supabase
+    .from("businesses")
+    .update(next)
+    .eq("id", business.id);
+
+  if (updateError) {
+    console.error("[stripe-webhook] subscription write failed", {
+      business: business.id,
+      error: updateError.message,
+    });
+    return { handled: false, reason: "update_error", business: business.id };
+  }
+
+  console.info("[stripe-webhook] seller subscription synced", {
+    business: business.id,
+    from: business.stripe_subscription_status,
+    to: nextStatus,
+  });
+
+  return {
+    handled: true,
+    business: business.id,
+    stripe_subscription_status: nextStatus,
+    trial_ends_at: next.trial_ends_at ?? business.trial_ends_at,
   };
 }
 

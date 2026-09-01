@@ -1,14 +1,20 @@
+import { sellerBillingStatus } from "@/lib/stripe/billing";
 import { storefrontUrl } from "@/lib/storefront/url";
 
 import { SettingsForm, type SettingsFormValues } from "./settings-form";
 import { requireSeller } from "../require-seller";
 
-export default async function SettingsPage() {
+type SettingsPageProps = {
+  searchParams: Promise<{ billing?: string }>;
+};
+
+export default async function SettingsPage({ searchParams }: SettingsPageProps) {
   const { supabase, businessId } = await requireSeller();
+  const { billing } = await searchParams;
   const { data, error } = await supabase
     .from("businesses")
     .select(
-      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, whatsapp_phone_e164, storefront_accent_color",
+      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color",
     )
     .eq("id", businessId)
     .maybeSingle();
@@ -55,6 +61,23 @@ export default async function SettingsPage() {
       (data.storefront_accent_color as string | null) ?? null,
     logo_url: (data.logo_url as string | null) ?? null,
     banner_url: (data.banner_url as string | null) ?? null,
+    stripe_customer_id: (data.stripe_customer_id as string | null) ?? null,
+    stripe_subscription_id:
+      (data.stripe_subscription_id as string | null) ?? null,
+    stripe_subscription_status:
+      (data.stripe_subscription_status as string | null) ?? null,
+    trial_ends_at: (data.trial_ends_at as string | null) ?? null,
+    billingNotice:
+      billing === "success"
+        ? "Trial started — Stripe will confirm your subscription shortly."
+        : billing === "cancelled"
+          ? "Checkout was cancelled. You can start the trial again whenever you’re ready."
+          : null,
+    billingCopy: sellerBillingStatus({
+      customerId: (data.stripe_customer_id as string | null) ?? null,
+      status: (data.stripe_subscription_status as string | null) ?? null,
+      trialEndsAt: (data.trial_ends_at as string | null) ?? null,
+    }),
   };
 
   return (

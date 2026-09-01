@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { slugify } from "@/lib/slug";
 import { createClient } from "@/lib/supabase/client";
 
-type Step = "A" | "B" | "C" | "D";
+export type OnboardingStep = "A" | "B" | "C" | "D";
 
 type FormData = {
   name: string;
@@ -19,16 +19,20 @@ type FormData = {
   dispatch_postcode: string;
 };
 
-const STEPS: Step[] = ["A", "B", "C", "D"];
+const STEPS: OnboardingStep[] = ["A", "B", "C", "D"];
 
-export function OnboardingWizard() {
+export function OnboardingWizard({
+  initialStep = "A",
+}: {
+  initialStep?: OnboardingStep;
+}) {
   const router = useRouter();
-  const [step, setStep] = useState<Step>("A");
+  const [step, setStep] = useState<OnboardingStep>(initialStep);
   const [slugTouched, setSlugTouched] = useState(false);
   const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
   const [slugChecking, setSlugChecking] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [startingTrial, setStartingTrial] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormData>({
     name: "",
@@ -175,18 +179,27 @@ export function OnboardingWizard() {
     window.location.href = result.url;
   }
 
-  async function completeOnboarding() {
-    setSubmitting(true);
+  async function startTrial() {
+    setStartingTrial(true);
     setError(null);
 
     if (!(await ensureBusiness())) {
-      setSubmitting(false);
+      setStartingTrial(false);
       return;
     }
 
-    setSubmitting(false);
-    router.push("/dashboard");
-    router.refresh();
+    const response = await fetch("/api/onboarding/billing-checkout", {
+      method: "POST",
+    });
+    const result = await response.json();
+
+    if (!response.ok || !result.url) {
+      setError(result.error ?? "Could not start your free trial.");
+      setStartingTrial(false);
+      return;
+    }
+
+    window.location.href = result.url;
   }
 
   const stepIndex = STEPS.indexOf(step) + 1;
@@ -291,7 +304,7 @@ export function OnboardingWizard() {
             <p className="text-sm text-muted-foreground">
               Connect your bank securely through Stripe. Stripe collects and
               verifies your details directly — TradeFlow never stores your raw
-              bank information.
+              bank information. This is how buyers pay you.
             </p>
             <Button
               type="button"
@@ -309,12 +322,26 @@ export function OnboardingWizard() {
       )}
 
       {step === "D" && (
-        <div className="rounded-lg border border-dashed border-border p-6 text-center space-y-2">
-          <h2 className="font-medium">Connect WhatsApp</h2>
-          <p className="text-sm text-muted-foreground">Coming soon</p>
-          <p className="text-xs text-muted-foreground">
-            Embedded Signup integration arrives in Phase 0 Step 6.
+        <div className="rounded-lg border border-border p-6 space-y-3">
+          <h2 className="font-medium">Start your free trial</h2>
+          <p className="text-sm text-muted-foreground">
+            30 days free. A card is required now, but you are not charged during
+            the trial — the £10/month plan and the 1% per-order fee are both
+            waived until it ends.
           </p>
+          <p className="text-xs text-muted-foreground">
+            After the trial: £10/month plus 1% of each order, taken from the
+            buyer payment via Stripe Connect. WhatsApp inbox setup comes later
+            from your dashboard.
+          </p>
+          <Button
+            type="button"
+            className="w-full"
+            disabled={startingTrial}
+            onClick={startTrial}
+          >
+            {startingTrial ? "Redirecting to Stripe…" : "Start 30-day free trial"}
+          </Button>
         </div>
       )}
 
@@ -326,7 +353,7 @@ export function OnboardingWizard() {
             Back
           </Button>
         )}
-        {step !== "D" ? (
+        {step !== "D" && (
           <Button
             type="button"
             className="flex-1"
@@ -334,15 +361,6 @@ export function OnboardingWizard() {
             onClick={goNext}
           >
             Continue
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            className="flex-1"
-            disabled={submitting}
-            onClick={completeOnboarding}
-          >
-            {submitting ? "Creating…" : "Complete setup"}
           </Button>
         )}
       </div>

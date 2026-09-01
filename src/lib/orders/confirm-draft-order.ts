@@ -76,7 +76,7 @@ export async function confirmDraftOrder(
 
   const { data: business, error: bizError } = await supabase
     .from("businesses")
-    .select("stripe_connected_account_id, stripe_charges_enabled")
+    .select("stripe_connected_account_id, stripe_charges_enabled, stripe_subscription_status")
     .eq("id", businessId)
     .maybeSingle();
 
@@ -172,6 +172,8 @@ export async function confirmDraftOrder(
       orderRef: order.order_ref,
       lineItems,
       expiresAtUnix: Math.floor(expiresAt.getTime() / 1000),
+      subscriptionStatus:
+        (business.stripe_subscription_status as string | null) ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

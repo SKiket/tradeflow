@@ -120,7 +120,7 @@ export async function placeStorefrontOrder(
 
   const { data: business, error: bizError } = await supabase
     .from("businesses")
-    .select("id, stripe_connected_account_id, stripe_charges_enabled")
+    .select("id, stripe_connected_account_id, stripe_charges_enabled, stripe_subscription_status")
     .eq("id", businessId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -261,6 +261,8 @@ export async function placeStorefrontOrder(
         quantity: line.quantity,
       })),
       expiresAtUnix: Math.floor(expiresAt.getTime() / 1000),
+      subscriptionStatus:
+        (business.stripe_subscription_status as string | null) ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

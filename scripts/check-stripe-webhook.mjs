@@ -43,6 +43,10 @@ async function main() {
     "checkout.session.async_payment_succeeded",
     "checkout.session.async_payment_failed",
     "refund.updated",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+    "invoice.payment_failed",
   ];
   const missing = receivesAll
     ? []

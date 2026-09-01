@@ -40,6 +40,16 @@ export type SettingsFormValues = {
   storefront_accent_color: string | null;
   logo_url: string | null;
   banner_url: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  stripe_subscription_status: string | null;
+  trial_ends_at: string | null;
+  billingNotice: string | null;
+  billingCopy: {
+    headline: string;
+    detail: string;
+    action: "start_trial" | "manage" | "none";
+  };
 };
 
 function parseThreshold(value: string, fallback: number) {
@@ -68,8 +78,11 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
   const [logoUploading, setLogoUploading] = useState(false);
   const [bannerUploading, setBannerUploading] = useState(false);
   const [pending, setPending] = useState(false);
+  const [billingPending, setBillingPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(
+    business.billingNotice,
+  );
 
   const returnsEmpty = returnsPolicy.trim().length === 0;
   const toneOptions = AI_TONES.includes(aiTone as (typeof AI_TONES)[number])
@@ -128,6 +141,27 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setPending(false);
+    }
+  }
+
+  async function openBilling(kind: "trial" | "portal") {
+    setError(null);
+    setSuccess(null);
+    setBillingPending(true);
+    try {
+      const path =
+        kind === "portal"
+          ? "/api/dashboard/billing-portal"
+          : "/api/onboarding/billing-checkout";
+      const response = await fetch(path, { method: "POST" });
+      const result = await response.json();
+      if (!response.ok || !result.url) {
+        throw new Error(result.error ?? "Could not open billing.");
+      }
+      window.location.href = result.url;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setBillingPending(false);
     }
   }
 
@@ -313,9 +347,42 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
         </dl>
         <p className="text-xs text-muted-foreground">
           {business.stripe_connected_account_id
-            ? `Account ${business.stripe_connected_account_id}`
+            ? `Connected account ${business.stripe_connected_account_id}`
             : "No connected account ID"}
         </p>
+        <p className="text-xs text-muted-foreground">
+          This is how buyers pay you. TradeFlow billing (your £10/month
+          subscription) is separate, below.
+        </p>
+      </section>
+
+      <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          TradeFlow billing
+        </h2>
+        <p className="text-sm font-medium">{business.billingCopy.headline}</p>
+        <p className="text-sm text-muted-foreground">
+          {business.billingCopy.detail}
+        </p>
+        {business.billingCopy.action === "manage" && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={billingPending}
+            onClick={() => openBilling("portal")}
+          >
+            {billingPending ? "Opening…" : "Manage billing"}
+          </Button>
+        )}
+        {business.billingCopy.action === "start_trial" && (
+          <Button
+            type="button"
+            disabled={billingPending}
+            onClick={() => openBilling("trial")}
+          >
+            {billingPending ? "Redirecting to Stripe…" : "Start your free trial"}
+          </Button>
+        )}
       </section>
 
       <section className="space-y-3 rounded-xl border bg-muted/20 p-4">

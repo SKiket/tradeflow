@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 
 import { reservationExpiryUnix } from "@/lib/orders/reservations";
+import { platformApplicationFeePence } from "@/lib/stripe/billing";
 import { getStripe } from "@/lib/stripe/client";
 
 function getAppBaseUrl(): string {
@@ -31,9 +32,19 @@ export async function createOrderCheckoutSession(params: {
   orderRef: string;
   lineItems: CheckoutLineItem[];
   expiresAtUnix?: number;
+  /** Synced seller subscription status; only `trialing` waives the 1% fee. */
+  subscriptionStatus?: string | null;
 }): Promise<Stripe.Checkout.Session> {
   const base = getAppBaseUrl();
   const stripe = getStripe();
+  const totalPence = params.lineItems.reduce(
+    (sum, item) => sum + item.unitAmountPence * item.quantity,
+    0,
+  );
+  const applicationFeePence = platformApplicationFeePence(
+    totalPence,
+    params.subscriptionStatus,
+  );
 
   const session = await stripe.checkout.sessions.create({
     mode: "payment",
@@ -52,6 +63,9 @@ export async function createOrderCheckoutSession(params: {
         order_id: params.orderId,
         order_ref: params.orderRef,
       },
+      ...(applicationFeePence !== undefined
+        ? { application_fee_amount: applicationFeePence }
+        : {}),
     },
     metadata: {
       order_id: params.orderId,
