@@ -1,5 +1,7 @@
 /**
- * Verifies /dashboard/customers + lifetime stats on PAID fulfilment.
+ * Verifies /dashboard/customers using live order aggregates (not the unused
+ * customers.order_count / lifetime_value_pence / last_order_at columns).
+ *
  * Requires the Next.js dev server.
  *
  *   node scripts/verify-customers.mjs
@@ -15,7 +17,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
 const WEBHOOK = `${BASE}/api/webhooks/ingress`;
 const EK_EMAIL = "sgkiket@gmail.com";
-const NEW_PHONE = "+447700901011";
+const NEW_PHONE = `+44770${String(Date.now()).slice(-7)}`;
 const REPEAT_PHONE = "+447700901012";
 const BAKER_ST = {
   line1: "221B Baker Street",
@@ -196,6 +198,53 @@ async function placeAndPay(params) {
   return { placed, paid, paidOrder };
 }
 
+const LIFETIME_STATUSES = [
+  "PAID",
+  "DISPATCHED",
+  "DELIVERED",
+  "REFUND_PENDING",
+  "PARTIALLY_REFUNDED",
+  "REFUNDED",
+];
+
+function formatGbp(pence) {
+  return new Intl.NumberFormat("en-GB", {
+    style: "currency",
+    currency: "GBP",
+  }).format(pence / 100);
+}
+
+function isNewSegment(stats, now = Date.now()) {
+  if (stats.order_count !== 1 || !stats.last_order_at) return false;
+  return now - new Date(stats.last_order_at).getTime() <= 30 * 24 * 60 * 60 * 1000;
+}
+
+function isRepeatSegment(stats) {
+  return stats.order_count > 1;
+}
+
+async function liveStats(customerId) {
+  const { data } = await admin
+    .from("orders")
+    .select("status, total_pence, refunded_amount_pence, created_at")
+    .eq("customer_id", customerId);
+  let order_count = 0;
+  let lifetime_value_pence = 0;
+  let last_order_at = null;
+  for (const order of data ?? []) {
+    if (!LIFETIME_STATUSES.includes(order.status)) continue;
+    order_count += 1;
+    lifetime_value_pence += Math.max(
+      0,
+      (order.total_pence ?? 0) - (order.refunded_amount_pence ?? 0),
+    );
+    if (!last_order_at || order.created_at > last_order_at) {
+      last_order_at = order.created_at;
+    }
+  }
+  return { order_count, lifetime_value_pence, last_order_at };
+}
+
 async function customerByPhone(businessId, phone) {
   const { data } = await admin
     .from("customers")
@@ -225,22 +274,60 @@ async function main() {
     .maybeSingle();
   if (error || !business) throw new Error("EK-Pousser_D not found");
 
-  const { data: staleSample } = await admin
+  const { data: allCustomers } = await admin
     .from("customers")
-    .select("id, phone_e164, order_count, lifetime_value_pence, last_order_at")
-    .eq("business_id", business.id)
-    .eq("order_count", 0)
-    .limit(5);
-  const { count: paidOrders } = await admin
+    .select("id, name, phone_e164, order_count, lifetime_value_pence, last_order_at")
+    .eq("business_id", business.id);
+  const { data: allOrders } = await admin
     .from("orders")
-    .select("id", { count: "exact", head: true })
-    .eq("business_id", business.id)
-    .in("status", ["PAID", "DISPATCHED", "DELIVERED"]);
-  record(
-    "1. lifetime fields were unused (historical paid orders exist while customer stats stay at 0)",
-    (staleSample ?? []).length > 0 && (paidOrders ?? 0) > 0,
-    `zero-stat customers sampled=${(staleSample ?? []).length} paid-or-later orders=${paidOrders}`,
-  );
+    .select("id, status")
+    .eq("business_id", business.id);
+  const paidOrderCount = (allOrders ?? []).filter((row) =>
+    LIFETIME_STATUSES.includes(row.status),
+  ).length;
+  let historical = null;
+  for (const customer of allCustomers ?? []) {
+    const stats = await liveStats(customer.id);
+    if (stats.order_count > 0 && (customer.order_count ?? 0) === 0) {
+      historical = { customer, stats };
+      break;
+    }
+  }
+  if (!historical) {
+    for (const customer of allCustomers ?? []) {
+      const stats = await liveStats(customer.id);
+      if (stats.order_count > 0) {
+        historical = { customer, stats };
+        break;
+      }
+    }
+  }
+
+  const cookies = await mintCookies(EK_EMAIL);
+  if (historical) {
+    const histPage = await fetchAuthed(
+      `/dashboard/customers/${historical.customer.id}`,
+      cookies,
+    );
+    const histList = await fetchAuthed("/dashboard/customers", cookies);
+    const liveCount = String(historical.stats.order_count);
+    const liveGbp = formatGbp(historical.stats.lifetime_value_pence);
+    record(
+      "1. Dashboard shows live order stats even when customer columns are stale/unused",
+      histPage.status === 200 &&
+        histPage.html.includes(liveCount) &&
+        histPage.html.includes(liveGbp) &&
+        histList.status === 200 &&
+        paidOrderCount > 0,
+      `customer=${historical.customer.name ?? historical.customer.phone_e164} columnCount=${historical.customer.order_count} live=${JSON.stringify(historical.stats)} detail=${histPage.status} paidOrders=${paidOrderCount}`,
+    );
+  } else {
+    record(
+      "1. Dashboard shows live order stats even when customer columns are stale/unused",
+      false,
+      `no customer with paid orders found; paidOrders=${paidOrderCount}`,
+    );
+  }
 
   const { data: mug } = await admin
     .from("products")
@@ -257,27 +344,43 @@ async function main() {
     .update({ stock_quantity: Math.max(variant.stock_quantity ?? 0, 20), track_inventory: true })
     .eq("id", variant.id);
 
-  const newBefore = await customerByPhone(business.id, NEW_PHONE);
+  const newBefore = await liveStats(
+    (await customerByPhone(business.id, NEW_PHONE))?.id ?? "missing",
+  );
   const first = await placeAndPay({
     businessId: business.id,
     name: "Customer New Verify",
     phone: NEW_PHONE,
     variantId: variant.id,
   });
-  const newAfter = await customerByPhone(business.id, NEW_PHONE);
+  const newAfterRow = await customerByPhone(business.id, NEW_PHONE);
+  const newAfter = await liveStats(newAfterRow.id);
+  const newGbp = formatGbp(newAfter.lifetime_value_pence);
+  const newPage = await fetchAuthed(
+    `/dashboard/customers/${newAfterRow.id}`,
+    cookies,
+  );
+  const listAfterNew = await fetchAuthed("/dashboard/customers", cookies);
   const newOk =
     first.paidOrder?.status === "PAID" &&
-    newAfter?.order_count === (newBefore?.order_count ?? 0) + 1 &&
-    newAfter?.lifetime_value_pence ===
-      (newBefore?.lifetime_value_pence ?? 0) + first.paidOrder.total_pence &&
-    Boolean(newAfter?.last_order_at);
+    newAfter.order_count === newBefore.order_count + 1 &&
+    newAfter.lifetime_value_pence ===
+      newBefore.lifetime_value_pence + first.paidOrder.total_pence &&
+    Boolean(newAfter.last_order_at) &&
+    newPage.status === 200 &&
+    newPage.html.includes(String(newAfter.order_count)) &&
+    newPage.html.includes(newGbp) &&
+    listAfterNew.html.includes("Customer New Verify") &&
+    listAfterNew.html.includes(newGbp);
   record(
-    "2. New paid order increments order_count, lifetime_value_pence, last_order_at",
+    "2. New paid order is counted live on /dashboard/customers immediately",
     newOk,
-    `before=${JSON.stringify(newBefore)} after=${JSON.stringify(newAfter)} total=${first.paidOrder?.total_pence} status=${first.paidOrder?.status} fulfil=${JSON.stringify(first.paid.json.fulfil)}`,
+    `before=${JSON.stringify(newBefore)} after=${JSON.stringify(newAfter)} gbp=${newGbp} status=${first.paidOrder?.status} detail=${newPage.status}`,
   );
 
-  const repeatBefore = await customerByPhone(business.id, REPEAT_PHONE);
+  const repeatBefore = await liveStats(
+    (await customerByPhone(business.id, REPEAT_PHONE))?.id ?? "missing",
+  );
   const r1 = await placeAndPay({
     businessId: business.id,
     name: "Customer Repeat Verify",
@@ -290,48 +393,48 @@ async function main() {
     phone: REPEAT_PHONE,
     variantId: variant.id,
   });
-  const repeatAfter = await customerByPhone(business.id, REPEAT_PHONE);
-  const expectedCount = (repeatBefore?.order_count ?? 0) + 2;
+  const repeatAfterRow = await customerByPhone(business.id, REPEAT_PHONE);
+  const repeatAfter = await liveStats(repeatAfterRow.id);
+  const expectedCount = repeatBefore.order_count + 2;
   const expectedLtv =
-    (repeatBefore?.lifetime_value_pence ?? 0) +
+    repeatBefore.lifetime_value_pence +
     r1.paidOrder.total_pence +
     r2.paidOrder.total_pence;
+  const repeatPage = await fetchAuthed(
+    `/dashboard/customers/${repeatAfterRow.id}`,
+    cookies,
+  );
   const repeatOk =
-    repeatAfter?.order_count === expectedCount &&
-    repeatAfter?.lifetime_value_pence === expectedLtv &&
-    expectedCount > 1;
+    repeatAfter.order_count === expectedCount &&
+    repeatAfter.lifetime_value_pence === expectedLtv &&
+    isRepeatSegment(repeatAfter) &&
+    isNewSegment(newAfter) &&
+    repeatPage.html.includes(String(repeatAfter.order_count)) &&
+    repeatPage.html.includes(formatGbp(repeatAfter.lifetime_value_pence));
   record(
-    "3. Two paid orders on one customer produce Repeat (order_count > 1)",
+    "3. Live stats categorise a genuine New vs Repeat customer",
     repeatOk,
-    `repeat after=${JSON.stringify(repeatAfter)} expectedCount=${expectedCount} expectedLtv=${expectedLtv}`,
+    `new=${JSON.stringify(newAfter)} newSegment=${isNewSegment(newAfter)} repeat=${JSON.stringify(repeatAfter)} expectedCount=${expectedCount} expectedLtv=${expectedLtv}`,
   );
 
-  const cookies = await mintCookies(EK_EMAIL);
   const listPage = await fetchAuthed("/dashboard/customers", cookies);
-  const newPage = newAfter
-    ? await fetchAuthed(`/dashboard/customers/${newAfter.id}`, cookies)
-    : { status: 0, html: "" };
   const listHasNew =
     listPage.status === 200 &&
     listPage.html.includes("Customer New Verify") &&
     listPage.html.includes("Customer Repeat Verify");
-  const detailHasStats =
-    newPage.status === 200 &&
-    newPage.html.includes("Customer New Verify") &&
-    /Lifetime/i.test(newPage.html);
   record(
-    "2b. Customers list and detail show the new buyer immediately",
-    listHasNew && detailHasStats,
-    `list=${listPage.status} detail=${newPage.status} listHasNames=${listHasNew}`,
+    "2b. Customers list shows both New and Repeat buyers after payment",
+    listHasNew,
+    `list=${listPage.status} listHasNames=${listHasNew}`,
   );
 
   const notes = `Verify note ${Date.now()}`;
   const { error: noteError } = await admin
     .from("customers")
     .update({ notes, tags: ["verify-tag", "london"] })
-    .eq("id", newAfter.id);
+    .eq("id", newAfterRow.id);
   const afterEdit = await customerByPhone(business.id, NEW_PHONE);
-  const editedPage = await fetchAuthed(`/dashboard/customers/${newAfter.id}`, cookies);
+  const editedPage = await fetchAuthed(`/dashboard/customers/${newAfterRow.id}`, cookies);
   record(
     "4. Notes and tags persist and render on the profile",
     !noteError &&
@@ -346,7 +449,7 @@ async function main() {
   record(
     "5. Order detail links through to the customer profile",
     orderPage.status === 200 &&
-      orderPage.html.includes(`/dashboard/customers/${newAfter.id}`) &&
+      orderPage.html.includes(`/dashboard/customers/${newAfterRow.id}`) &&
       orderPage.html.includes("View customer profile"),
     `status=${orderPage.status}`,
   );
@@ -368,7 +471,7 @@ async function main() {
   const otherCookies = await mintCookies(OTHER_EMAIL);
   const leakList = await fetchAuthed("/dashboard/customers", otherCookies);
   const leakDetail = await fetchAuthed(
-    `/dashboard/customers/${newAfter.id}`,
+    `/dashboard/customers/${newAfterRow.id}`,
     otherCookies,
   );
   const otherToken = await signIn(OTHER_EMAIL);
@@ -379,11 +482,11 @@ async function main() {
   const { data: leakedRows } = await otherRls
     .from("customers")
     .select("id")
-    .eq("id", newAfter.id);
+    .eq("id", newAfterRow.id);
   const { error: leakEdit } = await otherRls
     .from("customers")
     .update({ notes: "should not write" })
-    .eq("id", newAfter.id);
+    .eq("id", newAfterRow.id);
   const afterLeak = await customerByPhone(business.id, NEW_PHONE);
   const noLeak =
     !(leakList.html ?? "").includes("Customer New Verify") &&

@@ -1,5 +1,10 @@
 import { Users } from "lucide-react";
 
+import {
+  compareCustomersByRecentActivity,
+  EMPTY_CUSTOMER_LIFETIME,
+  lifetimeByCustomerId,
+} from "@/lib/customers/lifetime";
 import { parseCustomerSegment } from "@/lib/customers/segments";
 
 import { requireSeller } from "../require-seller";
@@ -15,34 +20,54 @@ export default async function CustomersPage({
   const initialSegment = parseCustomerSegment(segmentParam);
   const { supabase } = await requireSeller();
 
-  const { data, error } = await supabase
-    .from("customers")
-    .select(
-      "id, name, phone_e164, order_count, lifetime_value_pence, last_order_at, tags",
-    )
-    .order("last_order_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false });
+  const [{ data, error }, { data: orderRows, error: ordersError }] =
+    await Promise.all([
+      supabase
+        .from("customers")
+        .select("id, name, phone_e164, tags, created_at"),
+      supabase
+        .from("orders")
+        .select(
+          "customer_id, status, total_pence, refunded_amount_pence, created_at",
+        ),
+    ]);
 
-  if (error) {
+  if (error || ordersError) {
     return (
       <div className="space-y-2">
         <h1 className="tf-page-heading">Customers</h1>
         <p className="text-sm text-destructive">
-          Couldn&apos;t load customers. {error.message}
+          Couldn&apos;t load customers. {(error ?? ordersError)?.message}
         </p>
       </div>
     );
   }
 
-  const customers: CustomerListRow[] = (data ?? []).map((row) => ({
-    id: row.id as string,
-    name: (row.name as string | null) ?? null,
-    phone_e164: row.phone_e164 as string,
-    order_count: (row.order_count as number) ?? 0,
-    lifetime_value_pence: (row.lifetime_value_pence as number) ?? 0,
-    last_order_at: (row.last_order_at as string | null) ?? null,
-    tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
-  }));
+  const lifetime = lifetimeByCustomerId(
+    (orderRows ?? []).map((row) => ({
+      customer_id: (row.customer_id as string | null) ?? null,
+      status: row.status as string,
+      total_pence: (row.total_pence as number) ?? 0,
+      refunded_amount_pence: (row.refunded_amount_pence as number | null) ?? 0,
+      created_at: row.created_at as string,
+    })),
+  );
+
+  const customers: CustomerListRow[] = (data ?? [])
+    .map((row) => {
+      const stats = lifetime.get(row.id as string) ?? EMPTY_CUSTOMER_LIFETIME;
+      return {
+        id: row.id as string,
+        name: (row.name as string | null) ?? null,
+        phone_e164: row.phone_e164 as string,
+        order_count: stats.order_count,
+        lifetime_value_pence: stats.lifetime_value_pence,
+        last_order_at: stats.last_order_at,
+        tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
+        created_at: (row.created_at as string | null) ?? null,
+      };
+    })
+    .sort(compareCustomersByRecentActivity);
 
   return (
     <div className="space-y-6">

@@ -20,6 +20,7 @@ export type CustomerListRow = {
   lifetime_value_pence: number;
   last_order_at: string | null;
   tags: string[];
+  created_at?: string | null;
 };
 
 const SEGMENT_LABEL: Record<CustomerSegment, string> = {

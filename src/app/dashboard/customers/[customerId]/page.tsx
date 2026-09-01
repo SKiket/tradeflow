@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
+import { summarizeCustomerLifetime } from "@/lib/customers/lifetime";
 import { formatDateTime, formatPence } from "@/lib/orders/display";
 
 import { OrdersTable, type OrderListRow } from "../../orders/orders-table";
@@ -20,9 +21,7 @@ export default async function CustomerDetailPage({
 
   const { data: customer } = await supabase
     .from("customers")
-    .select(
-      "id, name, phone_e164, notes, tags, broadcast_opt_in, order_count, lifetime_value_pence, last_order_at",
-    )
+    .select("id, name, phone_e164, notes, tags, broadcast_opt_in")
     .eq("id", customerId)
     .maybeSingle();
 
@@ -30,9 +29,20 @@ export default async function CustomerDetailPage({
 
   const { data: orderRows, error: ordersError } = await supabase
     .from("orders")
-    .select("id, order_ref, status, total_pence, created_at")
+    .select(
+      "id, order_ref, status, total_pence, refunded_amount_pence, created_at",
+    )
     .eq("customer_id", customerId)
     .order("created_at", { ascending: false });
+
+  const lifetime = summarizeCustomerLifetime(
+    (orderRows ?? []).map((row) => ({
+      status: row.status as string,
+      total_pence: (row.total_pence as number) ?? 0,
+      refunded_amount_pence: (row.refunded_amount_pence as number | null) ?? 0,
+      created_at: row.created_at as string,
+    })),
+  );
 
   const orders: OrderListRow[] = (orderRows ?? []).map((row) => ({
     id: row.id as string,
@@ -68,7 +78,7 @@ export default async function CustomerDetailPage({
               Orders
             </dt>
             <dd className="mt-1 text-lg font-semibold tabular-nums">
-              {(customer.order_count as number) ?? 0}
+              {lifetime.order_count}
             </dd>
           </div>
           <div className="rounded-xl border px-4 py-3">
@@ -76,7 +86,7 @@ export default async function CustomerDetailPage({
               Lifetime
             </dt>
             <dd className="mt-1 text-lg font-semibold tabular-nums">
-              {formatPence((customer.lifetime_value_pence as number) ?? 0)}
+              {formatPence(lifetime.lifetime_value_pence)}
             </dd>
           </div>
           <div className="rounded-xl border px-4 py-3">
@@ -84,8 +94,8 @@ export default async function CustomerDetailPage({
               Last order
             </dt>
             <dd className="mt-1 text-lg font-semibold">
-              {customer.last_order_at
-                ? formatDateTime(customer.last_order_at as string)
+              {lifetime.last_order_at
+                ? formatDateTime(lifetime.last_order_at)
                 : "—"}
             </dd>
           </div>
