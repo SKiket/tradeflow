@@ -39,7 +39,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customers(phone_e164, name)",
+      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customer_id, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
     .maybeSingle();
@@ -63,10 +63,13 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
 
   const customer = unwrapRelation(
     order.customers as
-      | { phone_e164: string; name: string | null }
-      | { phone_e164: string; name: string | null }[]
+      | { id: string; phone_e164: string; name: string | null }
+      | { id: string; phone_e164: string; name: string | null }[]
       | null,
   );
+  const customerId =
+    customer?.id ??
+    ((order.customer_id as string | null) ?? null);
 
   const shipping = shippingLines(order.shipping_address);
 
@@ -155,12 +158,44 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
         <dl className="rounded-xl border divide-y">
           <div className="flex justify-between gap-4 px-4 py-3 text-sm">
             <dt className="text-muted-foreground">Phone</dt>
-            <dd className="font-medium">{customer?.phone_e164 ?? "—"}</dd>
+            <dd className="font-medium">
+              {customerId && customer?.phone_e164 ? (
+                <Link
+                  href={`/dashboard/customers/${customerId}`}
+                  className="underline-offset-4 hover:underline"
+                >
+                  {customer.phone_e164}
+                </Link>
+              ) : (
+                (customer?.phone_e164 ?? "—")
+              )}
+            </dd>
           </div>
           <div className="flex justify-between gap-4 px-4 py-3 text-sm">
             <dt className="text-muted-foreground">Name</dt>
-            <dd className="font-medium">{customer?.name ?? "—"}</dd>
+            <dd className="font-medium">
+              {customerId && customer?.name ? (
+                <Link
+                  href={`/dashboard/customers/${customerId}`}
+                  className="underline-offset-4 hover:underline"
+                >
+                  {customer.name}
+                </Link>
+              ) : (
+                (customer?.name ?? "—")
+              )}
+            </dd>
           </div>
+          {customerId ? (
+            <div className="px-4 py-3 text-sm">
+              <Link
+                href={`/dashboard/customers/${customerId}`}
+                className="font-medium underline-offset-4 hover:underline"
+              >
+                View customer profile
+              </Link>
+            </div>
+          ) : null}
         </dl>
       </section>
 

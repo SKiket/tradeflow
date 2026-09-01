@@ -109,6 +109,10 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
     last_customer_message_at: firstCustomer?.last_customer_message_at ?? null,
   });
 
+  const customerId =
+    (messages.find((row) => row.customer_id)?.customer_id as string | null) ??
+    null;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
@@ -125,6 +129,16 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
         {firstCustomer?.name && firstCustomer.phone_e164 ? (
           <p className="mt-1 text-sm text-muted-foreground">
             {firstCustomer.phone_e164}
+          </p>
+        ) : null}
+        {customerId ? (
+          <p className="mt-2">
+            <Link
+              href={`/dashboard/customers/${customerId}`}
+              className="text-sm font-medium underline-offset-4 hover:underline"
+            >
+              View customer profile
+            </Link>
           </p>
         ) : null}
       </div>

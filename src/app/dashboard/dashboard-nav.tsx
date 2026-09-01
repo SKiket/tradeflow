@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, ClipboardList, Inbox, Package, Settings } from "lucide-react";
+import { BarChart3, ClipboardList, Inbox, Package, Settings, Users } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -17,6 +17,12 @@ const NAV = [
     href: "/dashboard/orders",
     label: "Orders",
     icon: ClipboardList,
+    live: true,
+  },
+  {
+    href: "/dashboard/customers",
+    label: "Customers",
+    icon: Users,
     live: true,
   },
   {

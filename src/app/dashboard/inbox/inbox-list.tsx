@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Inbox } from "lucide-react";
 
 import { formatDateTime } from "@/lib/orders/display";
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 
 export type InboxListRow = {
   threadId: string;
+  customerId: string | null;
   customerName: string | null;
   customerPhone: string | null;
   lastMessagePreview: string;
@@ -55,36 +57,48 @@ export function InboxList({ threads }: { threads: InboxListRow[] }) {
     <div className="space-y-2">
       <div className="space-y-2 md:hidden">
         {threads.map((thread) => (
-          <button
+          <div
             key={thread.threadId}
-            type="button"
-            onClick={() => router.push(`/dashboard/inbox/${thread.threadId}`)}
-            className="flex w-full flex-col gap-2 rounded-xl border bg-card p-4 text-left shadow-xs transition-colors hover:bg-muted/40"
+            className="rounded-xl border bg-card p-4 shadow-xs"
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm font-semibold">
-                {thread.customerName || thread.customerPhone || "Unknown buyer"}
-              </span>
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-                {thread.aiPaused ? (
-                  <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-950 whitespace-nowrap">
-                    You&apos;re handling
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 whitespace-nowrap">
-                    AI covering
-                  </span>
-                )}
-                <ThreadStatusBadge status={thread.status} />
+            <button
+              type="button"
+              onClick={() => router.push(`/dashboard/inbox/${thread.threadId}`)}
+              className="flex w-full flex-col gap-2 text-left"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm font-semibold">
+                  {thread.customerName || thread.customerPhone || "Unknown buyer"}
+                </span>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                  {thread.aiPaused ? (
+                    <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-950 whitespace-nowrap">
+                      You&apos;re handling
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 whitespace-nowrap">
+                      AI covering
+                    </span>
+                  )}
+                  <ThreadStatusBadge status={thread.status} />
+                </div>
               </div>
-            </div>
-            <p className="line-clamp-2 text-sm text-muted-foreground">
-              {thread.lastMessagePreview}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {formatDateTime(thread.lastMessageAt)}
-            </p>
-          </button>
+              <p className="line-clamp-2 text-sm text-muted-foreground">
+                {thread.lastMessagePreview}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {formatDateTime(thread.lastMessageAt)}
+              </p>
+            </button>
+            {thread.customerId ? (
+              <Link
+                href={`/dashboard/customers/${thread.customerId}`}
+                className="mt-2 inline-block text-xs font-medium underline-offset-4 hover:underline"
+              >
+                View customer profile
+              </Link>
+            ) : null}
+          </div>
         ))}
       </div>
 
@@ -123,6 +137,15 @@ export function InboxList({ threads }: { threads: InboxListRow[] }) {
                     <p className="text-xs text-muted-foreground">
                       {thread.customerPhone}
                     </p>
+                  ) : null}
+                  {thread.customerId ? (
+                    <Link
+                      href={`/dashboard/customers/${thread.customerId}`}
+                      className="mt-1 inline-block text-xs font-medium underline-offset-4 hover:underline"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      View profile
+                    </Link>
                   ) : null}
                 </td>
                 <td className="max-w-md px-4 py-3 text-muted-foreground">

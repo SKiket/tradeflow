@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { recordPaidCustomerLifetime } from "@/lib/orders/customer-lifetime";
 import {
   persistOrderShippingAddress,
   type OrderShippingAddress,
@@ -102,6 +103,19 @@ export async function fulfilPaidOrder(
 
   if (outcome !== "fulfilled") {
     return { action: "skipped", orderId, reason: outcome };
+  }
+
+  try {
+    await recordPaidCustomerLifetime(supabase, {
+      customerId: row.customer_id,
+      totalPence: row.total_pence,
+    });
+  } catch (err) {
+    console.error("[orders] Failed to update customer lifetime stats", {
+      orderId,
+      customerId: row.customer_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   try {
