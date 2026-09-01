@@ -6,7 +6,9 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ImageUpload } from "@/components/upload/image-upload";
 import { poundsToPence, penceToPoundsInput } from "@/lib/orders/display";
+import { PRODUCT_IMAGES_BUCKET } from "@/lib/storage/upload";
 import { createClient } from "@/lib/supabase/client";
 
 export type ProductFormVariant = {
@@ -79,7 +81,10 @@ export function ProductForm({
   const [price, setPrice] = useState(
     product ? penceToPoundsInput(product.price_pence) : "",
   );
-  const [photoUrl, setPhotoUrl] = useState(product?.photo_url ?? "");
+  const [photoUrl, setPhotoUrl] = useState<string | null>(
+    product?.photo_url ?? null,
+  );
+  const [photoUploading, setPhotoUploading] = useState(false);
   const [active, setActive] = useState(product?.active ?? true);
   const [variants, setVariants] = useState<VariantDraft[]>(() => {
     if (product?.variants.length) {
@@ -142,7 +147,7 @@ export function ProductForm({
 
     setPending(true);
     const supabase = createClient();
-    const photo = photoUrl.trim();
+    const photo = photoUrl?.trim() || null;
     const desc = description.trim();
 
     try {
@@ -155,7 +160,7 @@ export function ProductForm({
             name: trimmedName,
             description: desc || null,
             price_pence: pricePence,
-            photo_url: photo || null,
+            photo_url: photo,
             active,
           })
           .eq("id", productId);
@@ -168,7 +173,7 @@ export function ProductForm({
             name: trimmedName,
             description: desc || null,
             price_pence: pricePence,
-            photo_url: photo || null,
+            photo_url: photo,
             active,
           })
           .select("id")
@@ -253,33 +258,32 @@ export function ProductForm({
             className="flex w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
           />
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1">
-            <Label htmlFor="product-price">Price (£)</Label>
-            <Input
-              id="product-price"
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.01"
-              value={price}
-              onChange={(event) => setPrice(event.target.value)}
-              required
-              disabled={pending}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="product-photo">Photo URL</Label>
-            <Input
-              id="product-photo"
-              type="text"
-              value={photoUrl}
-              onChange={(event) => setPhotoUrl(event.target.value)}
-              placeholder="https://"
-              disabled={pending}
-            />
-          </div>
+        <div className="space-y-1">
+          <Label htmlFor="product-price">Price (£)</Label>
+          <Input
+            id="product-price"
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="0.01"
+            value={price}
+            onChange={(event) => setPrice(event.target.value)}
+            required
+            disabled={pending}
+            className="max-w-xs"
+          />
         </div>
+        <ImageUpload
+          label="Photo"
+          hint="JPEG, PNG, WebP, or GIF. Maximum 5 MB."
+          value={photoUrl}
+          onChange={setPhotoUrl}
+          businessId={businessId}
+          bucket={PRODUCT_IMAGES_BUCKET}
+          prefix="product"
+          disabled={pending}
+          onUploadingChange={setPhotoUploading}
+        />
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -446,13 +450,13 @@ export function ProductForm({
       )}
 
       <div className="flex gap-2">
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending || photoUploading}>
           {pending ? "Saving…" : isEdit ? "Save product" : "Add product"}
         </Button>
         <Button
           type="button"
           variant="outline"
-          disabled={pending}
+          disabled={pending || photoUploading}
           onClick={() => router.push("/dashboard/products")}
         >
           Cancel

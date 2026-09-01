@@ -10,6 +10,8 @@ import {
   statusLabel,
 } from "@/lib/orders/display";
 import { ORDER_STATUS } from "@/lib/orders/status";
+import { resolveOgImageUrl, shareMetadata } from "@/lib/seo/open-graph";
+import { orderTrackingUrl } from "@/lib/storefront/url";
 import {
   fetchPublicTrackingOrder,
   type PublicTrackingOrder,
@@ -58,10 +60,13 @@ export async function generateMetadata({
   if (!order) {
     return { title: "Order not found" };
   }
-  return {
-    title: `Track ${order.orderRef}`,
-    description: `Status: ${statusLabel(order.status)}`,
-  };
+  return shareMetadata({
+    title: order.orderRef,
+    description: "Track your order",
+    url: orderTrackingUrl(order.orderRef),
+    imageUrl: resolveOgImageUrl(order.bannerUrl, order.logoUrl),
+    imageAlt: "TradeFlow",
+  });
 }
 
 export default async function TrackingPage({ params }: TrackingPageProps) {

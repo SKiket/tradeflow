@@ -12,6 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ImageUpload } from "@/components/upload/image-upload";
+import { BUSINESS_BRANDING_BUCKET } from "@/lib/storage/upload";
 import { createClient } from "@/lib/supabase/client";
 import {
   stripePaymentsStatus,
@@ -36,6 +38,8 @@ export type SettingsFormValues = {
   stripe_details_submitted: boolean;
   whatsapp_phone_e164: string | null;
   storefront_accent_color: string | null;
+  logo_url: string | null;
+  banner_url: string | null;
 };
 
 function parseThreshold(value: string, fallback: number) {
@@ -59,6 +63,10 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
   const [accent, setAccent] = useState<string>(
     parseAccentHex(business.storefront_accent_color) ?? "",
   );
+  const [logoUrl, setLogoUrl] = useState<string | null>(business.logo_url);
+  const [bannerUrl, setBannerUrl] = useState<string | null>(business.banner_url);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [bannerUploading, setBannerUploading] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -75,6 +83,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
     detailsSubmitted: business.stripe_details_submitted,
   });
   const whatsapp = whatsappConnectionStatus(business.whatsapp_phone_e164);
+  const brandingUploading = logoUploading || bannerUploading;
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -104,6 +113,8 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             business.default_low_stock_threshold ?? 5,
           ),
           storefront_accent_color: parseAccentHex(accent),
+          logo_url: logoUrl?.trim() || null,
+          banner_url: bannerUrl?.trim() || null,
         })
         .eq("id", business.id)
         .select("id")
@@ -140,6 +151,30 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             {business.storefrontUrl}
           </a>
           <AccentPicker value={accent} onChange={setAccent} disabled={pending} />
+          <ImageUpload
+            label="Logo"
+            hint="Shown in the storefront header. JPEG, PNG, WebP, or GIF. Maximum 5 MB."
+            value={logoUrl}
+            onChange={setLogoUrl}
+            businessId={business.id}
+            bucket={BUSINESS_BRANDING_BUCKET}
+            prefix="logo"
+            previewClassName="size-28"
+            disabled={pending}
+            onUploadingChange={setLogoUploading}
+          />
+          <ImageUpload
+            label="Banner"
+            hint="Shown at the top of your storefront. JPEG, PNG, WebP, or GIF. Maximum 5 MB."
+            value={bannerUrl}
+            onChange={setBannerUrl}
+            businessId={business.id}
+            bucket={BUSINESS_BRANDING_BUCKET}
+            prefix="banner"
+            previewClassName="aspect-[3/1] w-full max-w-lg"
+            disabled={pending}
+            onUploadingChange={setBannerUploading}
+          />
         </section>
 
         <section className="space-y-4 rounded-xl border p-4">
@@ -251,7 +286,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
           </p>
         )}
 
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending || brandingUploading}>
           {pending ? "Saving…" : "Save settings"}
         </Button>
       </form>

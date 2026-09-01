@@ -3,6 +3,8 @@ import { connection } from "next/server";
 import { notFound } from "next/navigation";
 
 import { fetchPublicStorefront } from "@/lib/storefront/catalog";
+import { storefrontUrl } from "@/lib/storefront/url";
+import { resolveOgImageUrl, shareMetadata } from "@/lib/seo/open-graph";
 
 import { StorefrontView } from "./storefront-view";
 
@@ -20,10 +22,16 @@ export async function generateMetadata({
   if (!storefront) {
     return { title: "Store not found" };
   }
-  return {
+  const url = storefrontUrl(storefront.slug);
+  const description =
+    storefront.bio?.trim() || `Shop ${storefront.name} on TradeFlow`;
+  return shareMetadata({
     title: storefront.name,
-    description: storefront.bio ?? `${storefront.name} catalog`,
-  };
+    description,
+    url,
+    imageUrl: resolveOgImageUrl(storefront.bannerUrl, storefront.logoUrl),
+    imageAlt: storefront.name,
+  });
 }
 
 export default async function StorefrontPage({ params }: StorefrontPageProps) {

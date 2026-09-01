@@ -34,6 +34,7 @@ export type PublicTrackingOrder = {
   refundedAmountPence: number;
   businessName: string;
   logoUrl: string | null;
+  bannerUrl: string | null;
   accentColor: string | null;
   items: PublicTrackingItem[];
   shipment: PublicTrackingShipment | null;
@@ -61,7 +62,7 @@ export const fetchPublicTrackingOrder = cache(
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .select(
-        "id, order_ref, status, created_at, total_pence, refunded_amount_pence, dispatch_carrier, dispatch_tracking_number, dispatch_label_url, businesses(name, logo_url, storefront_accent_color)",
+        "id, order_ref, status, created_at, total_pence, refunded_amount_pence, dispatch_carrier, dispatch_tracking_number, dispatch_label_url, businesses(name, logo_url, banner_url, storefront_accent_color)",
       )
       .eq("order_ref", trimmed)
       .is("deleted_at", null)
@@ -131,11 +132,13 @@ export const fetchPublicTrackingOrder = cache(
         | {
             name: string;
             logo_url: string | null;
+            banner_url: string | null;
             storefront_accent_color: string | null;
           }
         | {
             name: string;
             logo_url: string | null;
+            banner_url: string | null;
             storefront_accent_color: string | null;
           }[]
         | null,
@@ -149,6 +152,7 @@ export const fetchPublicTrackingOrder = cache(
       refundedAmountPence: (order.refunded_amount_pence as number) ?? 0,
       businessName: business?.name ?? "Shop",
       logoUrl: business?.logo_url ?? null,
+      bannerUrl: business?.banner_url ?? null,
       accentColor: parseAccentHex(business?.storefront_accent_color),
       items,
       shipment,

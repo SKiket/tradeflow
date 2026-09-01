@@ -143,6 +143,29 @@ function StorefrontHero({ storefront }: { storefront: PublicStorefront }) {
   );
 }
 
+function ProductPhoto({ src }: { src: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const showPhoto = Boolean(src) && !failed;
+
+  return (
+    <div className="tf-product-slot relative aspect-[4/3] overflow-hidden">
+      {showPhoto ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src ?? ""}
+          alt=""
+          className="h-full w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center">
+          <NodesRingMotif />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProductCard({
   product,
 }: {
@@ -150,37 +173,15 @@ function ProductCard({
 }) {
   const cart = useCart();
   const [selectedId, setSelectedId] = useState(product.variants[0]?.id ?? "");
-  const [photoLoaded, setPhotoLoaded] = useState(false);
   const selected =
     product.variants.find((variant) => variant.id === selectedId) ??
     product.variants[0];
   const hasVariants = product.variants.length > 1;
-  const showPhoto = Boolean(product.photoUrl) && photoLoaded;
   const stockStatus = selected?.stockStatus ?? null;
 
   return (
     <article className="scroll-mb-28 overflow-hidden rounded-[16px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] shadow-sm">
-      <div className="tf-product-slot relative aspect-[4/3] overflow-hidden">
-        {product.photoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={product.photoUrl}
-            alt=""
-            className={
-              showPhoto
-                ? "h-full w-full object-cover"
-                : "pointer-events-none absolute size-0 opacity-0"
-            }
-            onLoad={() => setPhotoLoaded(true)}
-            onError={() => setPhotoLoaded(false)}
-          />
-        ) : null}
-        {showPhoto ? null : (
-          <div className="flex h-full w-full items-center justify-center">
-            <NodesRingMotif />
-          </div>
-        )}
-      </div>
+      <ProductPhoto src={product.photoUrl} />
       <div className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 space-y-1.5">

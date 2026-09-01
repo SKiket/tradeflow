@@ -8,7 +8,7 @@ export default async function SettingsPage() {
   const { data, error } = await supabase
     .from("businesses")
     .select(
-      "id, slug, name, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, whatsapp_phone_e164, storefront_accent_color",
+      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, whatsapp_phone_e164, storefront_accent_color",
     )
     .eq("id", businessId)
     .maybeSingle();
@@ -53,6 +53,8 @@ export default async function SettingsPage() {
     whatsapp_phone_e164: (data.whatsapp_phone_e164 as string | null) ?? null,
     storefront_accent_color:
       (data.storefront_accent_color as string | null) ?? null,
+    logo_url: (data.logo_url as string | null) ?? null,
+    banner_url: (data.banner_url as string | null) ?? null,
   };
 
   return (

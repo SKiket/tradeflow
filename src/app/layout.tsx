@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Sans, Syne } from "next/font/google";
+
+import { publicAppOrigin } from "@/lib/storefront/url";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -26,6 +28,7 @@ const syne = Syne({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(publicAppOrigin()),
   title: "TradeFlow",
   description: "Mobile-first multi-tenant commerce platform",
 };
