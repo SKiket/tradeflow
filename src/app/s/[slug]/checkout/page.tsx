@@ -3,6 +3,8 @@ import { connection } from "next/server";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { StorefrontLegalFooter } from "@/components/brand/legal-links";
+import { PoweredByTradeFlow } from "@/components/brand/powered-by";
 import { fetchPublicStorefront } from "@/lib/storefront/catalog";
 import {
   SHOP_UNAVAILABLE_STOREFRONT_DETAIL,
@@ -54,6 +56,10 @@ export default async function StorefrontCheckoutPage({
             {SHOP_UNAVAILABLE_STOREFRONT_DETAIL}
           </p>
         </div>
+        <footer className="mt-10">
+          <PoweredByTradeFlow />
+          <StorefrontLegalFooter />
+        </footer>
       </div>
     );
   }
@@ -71,6 +77,10 @@ export default async function StorefrontCheckoutPage({
       <div className="mt-6">
         <CheckoutForm storefront={storefront} />
       </div>
+      <footer className="mt-10">
+        <PoweredByTradeFlow />
+        <StorefrontLegalFooter />
+      </footer>
     </div>
   );
 }

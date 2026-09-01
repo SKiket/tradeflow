@@ -1,15 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { notFoundInProduction } from "@/lib/api/internal-only";
 import { createDestinationPaymentIntent } from "@/lib/stripe/payments";
 
 /**
- * Internal verification route — remove or auth-gate before Phase 1 ships.
+ * Internal verification route. Hidden with 404 in production.
  *
  * Proves the destination-charge PaymentIntent stub works end to end. Pass the
  * seller's connected account id as `?account=acct_...` (and optionally
- * `?amount=<pence>`). There is no buyer-facing checkout UI yet.
+ * `?amount=<pence>`).
  */
 export async function GET(request: NextRequest) {
+  const blocked = notFoundInProduction();
+  if (blocked) return blocked;
+
   const params = new URL(request.url).searchParams;
   const connectedAccountId = params.get("account");
   const amountPence = Number(params.get("amount") ?? "1000");

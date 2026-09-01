@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Package, RotateCcw, ShieldCheck } from "lucide-react";
 
+import { StorefrontLegalFooter } from "@/components/brand/legal-links";
 import { PoweredByTradeFlow } from "@/components/brand/powered-by";
 import { formatPence } from "@/lib/orders/display";
 import {
@@ -60,6 +61,7 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
             {storefront.name}
           </p>
           <PoweredByTradeFlow />
+          <StorefrontLegalFooter />
         </footer>
       </div>
     );
@@ -99,6 +101,7 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
           {storefront.name}
         </p>
         <PoweredByTradeFlow />
+        <StorefrontLegalFooter />
       </footer>
 
       {cart.hydrated && cart.itemCount > 0 ? (

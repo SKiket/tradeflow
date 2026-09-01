@@ -1,10 +1,11 @@
 import type { JSONSchema7 } from "json-schema";
 import { NextResponse } from "next/server";
 
+import { notFoundInProduction } from "@/lib/api/internal-only";
 import { run } from "@/lib/ai/gateway";
 
 /**
- * Internal verification route — remove or auth-gate before Phase 1 ships.
+ * Internal verification route. Hidden with 404 in production.
  * Note: Next.js treats `_`-prefixed app folders as private (non-routable),
  * so this lives at /api/internal/test-ai-gateway instead of /api/_internal/...
  */
@@ -18,6 +19,9 @@ const PING_SCHEMA: JSONSchema7 = {
 };
 
 export async function GET() {
+  const blocked = notFoundInProduction();
+  if (blocked) return blocked;
+
   try {
     const result = await run({
       taskKey: "test_ping",

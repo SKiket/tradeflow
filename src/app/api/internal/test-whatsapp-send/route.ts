@@ -1,11 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { notFoundInProduction } from "@/lib/api/internal-only";
 import { WhatsAppNotConfiguredError } from "@/lib/channels/send/errors";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
- * Internal verification route — remove or auth-gate before Phase 1 ships
+ * Internal verification route. Hidden with 404 in production
  * (same as /api/internal/test-ai-gateway and /api/internal/test-payment-intent).
  * Note: Next.js treats `_`-prefixed app folders as private (non-routable),
  * so this lives at /api/internal/test-whatsapp-send instead of /api/_internal/...
@@ -19,6 +20,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 const SANDBOX_NUMBER = "+14155238886";
 
 export async function GET(request: NextRequest) {
+  const blocked = notFoundInProduction();
+  if (blocked) return blocked;
+
   const params = new URL(request.url).searchParams;
   return handleSend({
     toPhoneE164: params.get("to") ?? params.get("toPhoneE164"),
@@ -28,6 +32,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = notFoundInProduction();
+  if (blocked) return blocked;
+
   const body = (await request.json().catch(() => ({}))) as Record<
     string,
     unknown

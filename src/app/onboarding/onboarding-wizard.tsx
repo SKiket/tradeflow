@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { COPALLA_PRIVACY_URL, COPALLA_TERMS_URL } from "@/lib/legal";
 import { slugify } from "@/lib/slug";
 import { createClient } from "@/lib/supabase/client";
 
@@ -342,6 +343,26 @@ export function OnboardingWizard({
           >
             {startingTrial ? "Redirecting to Stripe…" : "Start 30-day free trial"}
           </Button>
+          <p className="text-xs text-muted-foreground">
+            By starting a trial you agree to our{" "}
+            <a
+              href={COPALLA_TERMS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2"
+            >
+              Terms
+            </a>{" "}
+            and{" "}
+            <a
+              href={COPALLA_PRIVACY_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2"
+            >
+              Privacy Policy
+            </a>.
+          </p>
         </div>
       )}
 

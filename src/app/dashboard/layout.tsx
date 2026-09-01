@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { LegalLinks } from "@/components/brand/legal-links";
+import { canAcceptOrders, ordersPausedBanner } from "@/lib/stripe/billing-gate";
 import { createClient } from "@/lib/supabase/server";
 
 import { BillingPausedBanner } from "./billing-paused-banner";
 import { DashboardNav } from "./dashboard-nav";
 import { SignOutButton } from "./sign-out-button";
-import { canAcceptOrders, ordersPausedBanner } from "@/lib/stripe/billing-gate";
 
 export default async function DashboardLayout({
   children,
@@ -62,6 +63,10 @@ export default async function DashboardLayout({
         <div className="flex-1 p-3">
           <DashboardNav orientation="side" />
         </div>
+        <LegalLinks
+          className="border-t border-sidebar-border px-4 py-3 text-[11px] text-sidebar-foreground/50"
+          linkClassName="underline-offset-2 hover:underline"
+        />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -85,6 +90,10 @@ export default async function DashboardLayout({
           />
         ) : null}
         <main className="flex-1 p-4 md:p-6">{children}</main>
+        <LegalLinks
+          className="border-t px-4 py-3 text-center text-[11px] text-muted-foreground md:hidden"
+          linkClassName="underline-offset-2 hover:underline"
+        />
       </div>
     </div>
   );
