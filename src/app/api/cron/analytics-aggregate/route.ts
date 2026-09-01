@@ -9,6 +9,8 @@ export const runtime = "nodejs";
 /**
  * Hourly analytics_cache recompute for the last 3 UTC days.
  * Authenticated by CRON_SHARED_SECRET.
+ *
+ * Dashboard analytics does not read this cache.
  */
 export async function POST(request: NextRequest) {
   if (!(await authorizeCronRequest(request))) {

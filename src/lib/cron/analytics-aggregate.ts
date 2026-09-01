@@ -1,7 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /** Trailing UTC days the hourly job rewrites (today + previous 2) so late
- *  refund.updated webhooks correct recent days. Dashboard reads 14 days. */
+ *  refund.updated webhooks correct recent days.
+ *
+ *  The seller dashboard no longer reads analytics_cache — it computes live
+ *  from order_status_history PAID transitions. This job is leftover and
+ *  incomplete (it never backfills to a shop's first paid order). */
 export const ANALYTICS_RECOMPUTE_DAYS = 3;
 export const ANALYTICS_DASHBOARD_DAYS = 14;
 

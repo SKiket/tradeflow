@@ -450,28 +450,21 @@ async function main() {
     const navHasAnalytics =
       analyticsHtml.html.includes(">Analytics<") || analyticsHtml.html.includes("Analytics");
     const navSoonOnAnalytics = /Analytics[\s\S]{0,80}Soon/.test(analyticsHtml.html);
-    const totalsMatch = periods.some((period) => {
-      const row = cacheByPeriod.get(period);
-      if (!row || !row.order_count) return true;
-      return (
-        analyticsHtml.html.includes(period) &&
-        analyticsHtml.html.includes(String(row.order_count))
-      );
-    });
-    const revenueShown = (cacheRows ?? []).some((row) => {
-      if (!row.revenue_pence) return false;
-      const pounds = (row.revenue_pence / 100).toFixed(2);
-      return analyticsHtml.html.includes(pounds);
-    });
+    const compacted = analyticsHtml.html.replace(/\s+/g, " ");
+    const liveAnalytics =
+      analyticsHtml.html.includes("Average order value") &&
+      compacted.includes(">Day<") &&
+      compacted.includes(">Week<") &&
+      compacted.includes(">Month<") &&
+      compacted.includes(">Year<");
 
     record(
-      "5a. /dashboard/analytics shows cached numbers and live Analytics nav",
+      "5a. /dashboard/analytics is live (Day/Week/Month/Year + AOV) with Analytics nav",
       analyticsHtml.status === 200 &&
         navHasAnalytics &&
         !navSoonOnAnalytics &&
-        totalsMatch &&
-        (revenueShown || (cacheRows ?? []).every((row) => !row.revenue_pence)),
-      `status=${analyticsHtml.status} nav=${navHasAnalytics} soon=${navSoonOnAnalytics} totalsMatch=${totalsMatch} revenueShown=${revenueShown}`,
+        liveAnalytics,
+      `status=${analyticsHtml.status} nav=${navHasAnalytics} soon=${navSoonOnAnalytics} live=${liveAnalytics}`,
     );
 
     const tenantAuth = await mintCookies(TENANT_A.email, TENANT_A.password);

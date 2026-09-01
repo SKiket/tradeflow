@@ -4,7 +4,7 @@ export type CustomerSegment = (typeof CUSTOMER_SEGMENTS)[number];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NEW_WITHIN_DAYS = 30;
-const LAPSED_AFTER_DAYS = 60;
+export const LAPSED_AFTER_DAYS = 60;
 
 export type CustomerSegmentFields = {
   order_count: number;
