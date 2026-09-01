@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 
 import type { User } from "@supabase/supabase-js";
 
+import { forceImplicitFlow, IMPLICIT_AUTH } from "@/lib/supabase/auth-options";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -17,22 +18,25 @@ export async function createAuthedClient(
   if (bearer?.toLowerCase().startsWith("bearer ")) {
     const token = bearer.slice(7).trim();
     const cookieStore = await cookies();
-    return createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
+    return forceImplicitFlow(
+      createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          auth: IMPLICIT_AUTH,
+          cookies: {
+            getAll() {
+              return cookieStore.getAll();
+            },
+            setAll() {
+              // Bearer auth — no cookie writes from route handlers.
+            },
           },
-          setAll() {
-            // Bearer auth — no cookie writes from route handlers.
+          global: {
+            headers: { Authorization: `Bearer ${token}` },
           },
         },
-        global: {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      },
+      ),
     );
   }
   return createClient();
