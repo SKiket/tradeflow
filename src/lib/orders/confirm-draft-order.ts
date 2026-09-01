@@ -14,6 +14,7 @@ import {
   createOrderCheckoutSession,
   expireCheckoutSessionIfOpen,
 } from "@/lib/stripe/checkout";
+import { canAcceptOrders } from "@/lib/stripe/billing-gate";
 
 export type ConfirmDraftOutcome =
   | {
@@ -90,6 +91,17 @@ export async function confirmDraftOrder(
     return {
       action: "error",
       error: "Seller Stripe account cannot accept charges yet",
+    };
+  }
+  if (
+    !canAcceptOrders({
+      stripe_subscription_status:
+        (business.stripe_subscription_status as string | null) ?? null,
+    })
+  ) {
+    return {
+      action: "error",
+      error: "This shop isn't currently taking new orders",
     };
   }
 

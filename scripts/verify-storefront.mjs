@@ -28,6 +28,10 @@ const BUYER = "+447700900092";
 const EK_EMAIL = "sgkiket@gmail.com";
 const SENSITIVE_FIELD_NAMES = [
   "stripe_connected_account_id",
+  "stripe_customer_id",
+  "stripe_subscription_id",
+  "stripe_subscription_status",
+  "trial_ends_at",
   "stripe_charges_enabled",
   "stripe_payouts_enabled",
   "stripe_details_submitted",

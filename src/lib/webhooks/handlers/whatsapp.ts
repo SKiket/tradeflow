@@ -19,6 +19,8 @@ import {
 import { notifySellerOfUnmatchedOrder } from "@/lib/support/notify-seller";
 import { parseFormBody } from "@/lib/webhooks/verify/signatures";
 import { AI_PAUSED_PARSE, isAiPaused } from "@/lib/inbox/ai-pause";
+import { canAcceptOrders, SHOP_UNAVAILABLE_BUYER_MESSAGE } from "@/lib/stripe/billing-gate";
+import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 
 export interface WhatsAppHandlerResult {
   status: number;
@@ -187,6 +189,55 @@ export async function handleTwilioWhatsApp(
       let replyOutcome: Record<string, unknown> | null = null;
       let supportOutcome: Record<string, unknown> | null = null;
       let unmatchedNotify: Record<string, unknown> | null = null;
+
+      const { data: billingRow } = await supabase
+        .from("businesses")
+        .select("stripe_subscription_status")
+        .eq("id", result.message.businessId)
+        .maybeSingle();
+      if (
+        !canAcceptOrders({
+          stripe_subscription_status:
+            (billingRow?.stripe_subscription_status as string | null) ?? null,
+        })
+      ) {
+        try {
+          await sendWhatsAppMessage({
+            businessId: result.message.businessId,
+            toPhoneE164: result.message.customerPhone,
+            text: SHOP_UNAVAILABLE_BUYER_MESSAGE,
+            threadId: result.message.threadId,
+            customerId: result.message.customerId,
+            supabase,
+          });
+        } catch (sendError) {
+          console.error("[whatsapp] shop-unavailable send failed", {
+            messageId: result.messageId,
+            error:
+              sendError instanceof Error ? sendError.message : String(sendError),
+          });
+        }
+        console.info("[whatsapp] billing gate — skipped order_parse", {
+          messageId: result.messageId,
+          businessId: result.message.businessId,
+          status: billingRow?.stripe_subscription_status ?? null,
+        });
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            handled: true,
+            messageId: result.messageId,
+            businessId: result.message.businessId,
+            customerId: result.message.customerId,
+            threadId: result.message.threadId,
+            customerCreated: result.customerCreated,
+            mediaCount: result.message.mediaUrls.length,
+            parseStored: false,
+            shopUnavailable: true,
+          },
+        };
+      }
 
       const { data: pauseRow } = await supabase
         .from("customers")

@@ -356,10 +356,10 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
         </p>
       </section>
 
-      <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          TradeFlow billing
-        </h2>
+      <section
+        id="billing"
+        className="space-y-3 rounded-xl border bg-muted/20 p-4"
+      >
         <p className="text-sm font-medium">{business.billingCopy.headline}</p>
         <p className="text-sm text-muted-foreground">
           {business.billingCopy.detail}

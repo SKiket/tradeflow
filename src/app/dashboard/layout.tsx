@@ -3,8 +3,10 @@ import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
 
+import { BillingPausedBanner } from "./billing-paused-banner";
 import { DashboardNav } from "./dashboard-nav";
 import { SignOutButton } from "./sign-out-button";
+import { canAcceptOrders, ordersPausedBanner } from "@/lib/stripe/billing-gate";
 
 export default async function DashboardLayout({
   children,
@@ -20,12 +22,23 @@ export default async function DashboardLayout({
 
   const { data: business } = await supabase
     .from("businesses")
-    .select("name")
+    .select("name, stripe_subscription_status, stripe_customer_id, trial_ends_at")
     .eq("owner_user_id", user.id)
     .is("deleted_at", null)
     .maybeSingle();
 
   if (!business) redirect("/onboarding");
+
+  const takingOrders = canAcceptOrders({
+    stripe_subscription_status:
+      (business.stripe_subscription_status as string | null) ?? null,
+  });
+  const paused = takingOrders
+    ? null
+    : ordersPausedBanner({
+        status: (business.stripe_subscription_status as string | null) ?? null,
+        trialEndsAt: (business.trial_ends_at as string | null) ?? null,
+      });
 
   return (
     <div
@@ -64,6 +77,13 @@ export default async function DashboardLayout({
         <div className="border-b border-sidebar-border bg-sidebar px-2 py-2 text-sidebar-foreground md:hidden">
           <DashboardNav orientation="top" />
         </div>
+        {paused ? (
+          <BillingPausedBanner
+            title={paused.title}
+            body={paused.body}
+            hasCustomer={Boolean(business.stripe_customer_id)}
+          />
+        ) : null}
         <main className="flex-1 p-4 md:p-6">{children}</main>
       </div>
     </div>

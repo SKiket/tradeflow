@@ -12,6 +12,7 @@ import {
 } from "@/lib/orders/reservations";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { createOrderCheckoutSession } from "@/lib/stripe/checkout";
+import { canAcceptOrders } from "@/lib/stripe/billing-gate";
 import { parseBuyerPhone } from "@/lib/storefront/phone";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -134,6 +135,18 @@ export async function placeStorefrontOrder(
   }
   if (!business) {
     throw new PlaceStorefrontOrderError("Store not found.", 404, "NOT_FOUND");
+  }
+  if (
+    !canAcceptOrders({
+      stripe_subscription_status:
+        (business.stripe_subscription_status as string | null) ?? null,
+    })
+  ) {
+    throw new PlaceStorefrontOrderError(
+      "This shop isn't currently taking orders.",
+      403,
+      "BILLING_INACTIVE",
+    );
   }
   if (!business.stripe_connected_account_id) {
     throw new PlaceStorefrontOrderError(

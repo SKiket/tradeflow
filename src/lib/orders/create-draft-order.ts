@@ -9,6 +9,7 @@ import {
   findAwaitingPaymentForThread,
 } from "@/lib/orders/confirm-draft-order";
 import { ORDER_STATUS } from "@/lib/orders/status";
+import { canAcceptOrders } from "@/lib/stripe/billing-gate";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -21,7 +22,7 @@ export const CONFIRM_THRESHOLD = 0.7;
 export type DraftOrderOutcome =
   | {
       action: "ignored";
-      reason: "not_order_intent" | "empty_items";
+      reason: "not_order_intent" | "empty_items" | "shop_unavailable";
     }
   | {
       action: "clarification_sent";
@@ -85,6 +86,21 @@ export async function createDraftOrderFromParse(
 ): Promise<DraftOrderOutcome> {
   const supabase = params.supabase ?? createAdminClient();
   const parse = params.parseResult;
+
+  const { data: billing } = await supabase
+    .from("businesses")
+    .select("stripe_subscription_status")
+    .eq("id", params.businessId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (
+    !canAcceptOrders({
+      stripe_subscription_status:
+        (billing?.stripe_subscription_status as string | null) ?? null,
+    })
+  ) {
+    return { action: "ignored", reason: "shop_unavailable" };
+  }
 
   if (parse.intent === "question" || parse.intent === "other") {
     return { action: "ignored", reason: "not_order_intent" };

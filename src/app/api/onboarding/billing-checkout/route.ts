@@ -5,6 +5,7 @@ import {
   createSellerSubscriptionCheckout,
   getOrCreateSellerCustomer,
 } from "@/lib/stripe/billing";
+import { canAcceptOrders } from "@/lib/stripe/billing-gate";
 
 /**
  * Creates a Stripe Customer (platform account) for the seller's business,
@@ -35,8 +36,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const status = business.stripe_subscription_status as string | null;
-  if (status === "trialing" || status === "active") {
+  if (
+    canAcceptOrders({
+      stripe_subscription_status:
+        (business.stripe_subscription_status as string | null) ?? null,
+    })
+  ) {
     return NextResponse.json(
       { error: "A TradeFlow subscription is already in place. Use Manage billing to update it." },
       { status: 400 },

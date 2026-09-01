@@ -3,28 +3,23 @@ import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe/client";
 
 export const SELLER_SUBSCRIPTION_TRIAL_DAYS = 30;
-export const PLATFORM_FEE_RATE = 0.01;
 
-export const SUBSCRIPTION_STATUSES = [
-  "trialing",
-  "active",
-  "past_due",
-  "canceled",
-  "unpaid",
-  "incomplete",
-  "incomplete_expired",
-] as const;
-
-export type SellerSubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
-
-export function isSellerSubscriptionStatus(
-  value: unknown,
-): value is SellerSubscriptionStatus {
-  return (
-    typeof value === "string" &&
-    (SUBSCRIPTION_STATUSES as readonly string[]).includes(value)
-  );
-}
+export {
+  PLATFORM_FEE_RATE,
+  SHOP_UNAVAILABLE_BUYER_MESSAGE,
+  SHOP_UNAVAILABLE_STOREFRONT_DETAIL,
+  SHOP_UNAVAILABLE_STOREFRONT_HEADLINE,
+  SUBSCRIPTION_STATUSES,
+  canAcceptOrders,
+  isSellerSubscriptionStatus,
+  ordersPausedBanner,
+  platformApplicationFeePence,
+  trialEndsAtFromUnix,
+} from "@/lib/stripe/billing-gate";
+export type {
+  OrdersPausedBanner,
+  SellerSubscriptionStatus,
+} from "@/lib/stripe/billing-gate";
 
 function subscriptionPriceId(): string {
   const id = process.env.STRIPE_SUBSCRIPTION_PRICE_ID?.trim();
@@ -42,26 +37,6 @@ function appBaseUrl(): string {
     return `https://${process.env.VERCEL_URL}`;
   }
   return "http://localhost:3000";
-}
-
-/**
- * 1% of order total, omitted entirely during an active trial (and when
- * the computed fee would be 0). Existing businesses with no subscription
- * are not trialing, so they take the fee.
- */
-export function platformApplicationFeePence(
-  totalPence: number,
-  subscriptionStatus: string | null | undefined,
-): number | undefined {
-  if (subscriptionStatus === "trialing") return undefined;
-  if (!Number.isFinite(totalPence) || totalPence <= 0) return undefined;
-  const fee = Math.round(totalPence * PLATFORM_FEE_RATE);
-  return fee > 0 ? fee : undefined;
-}
-
-export function trialEndsAtFromUnix(trialEnd: number | null | undefined): string | null {
-  if (!trialEnd || trialEnd <= 0) return null;
-  return new Date(trialEnd * 1000).toISOString();
 }
 
 export async function getOrCreateSellerCustomer(params: {

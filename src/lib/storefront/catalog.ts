@@ -2,6 +2,7 @@ import { cache } from "react";
 
 import { parseAccentHex } from "@/lib/brand/accent";
 import { availableQuantity, isVariantLowStock } from "@/lib/products/stock";
+import { canAcceptOrders } from "@/lib/stripe/billing-gate";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import { storefrontOrderMessage, waMeOrderUrl } from "./whatsapp-order";
@@ -36,6 +37,8 @@ export type PublicStorefront = {
   /** Raw DB value; null means the TradeFlow amber default. */
   accentColor: string | null;
   acceptingOrders: boolean;
+  /** False when TradeFlow billing is not trialing/active — shop exists, catalog hidden. */
+  takingOrders: boolean;
   /** True when the seller has written a returns policy — never the policy text itself. */
   hasReturnsPolicy: boolean;
   products: PublicStorefrontProduct[];
@@ -85,7 +88,7 @@ export const fetchPublicStorefront = cache(
     const { data: business, error: businessError } = await supabase
       .from("businesses")
       .select(
-        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text",
+        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text, stripe_subscription_status",
       )
       .eq("slug", trimmed)
       .is("deleted_at", null)
@@ -151,6 +154,10 @@ export const fetchPublicStorefront = cache(
       bannerUrl: (business.banner_url as string | null) ?? null,
       accentColor: parseAccentHex(business.storefront_accent_color),
       acceptingOrders: Boolean(phone),
+      takingOrders: canAcceptOrders({
+        stripe_subscription_status:
+          (business.stripe_subscription_status as string | null) ?? null,
+      }),
       hasReturnsPolicy: Boolean(
         (business.returns_policy_text as string | null)?.trim(),
       ),

@@ -11,6 +11,10 @@ import {
   type PublicStorefront,
   type StockStatus,
 } from "@/lib/storefront/catalog";
+import {
+  SHOP_UNAVAILABLE_STOREFRONT_DETAIL,
+  SHOP_UNAVAILABLE_STOREFRONT_HEADLINE,
+} from "@/lib/stripe/billing-gate";
 
 import { NodesRingMotif } from "./nodes-ring";
 import { useCart } from "./cart-provider";
@@ -35,6 +39,31 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
       return found ? sum + found.pricePence * line.quantity : sum;
     }, 0);
   }, [cart.lines, storefront]);
+
+  if (!storefront.takingOrders) {
+    return (
+      <div className="mx-auto min-h-full max-w-lg">
+        <StorefrontHeader storefront={storefront} />
+        <StorefrontHero storefront={storefront} hideBrowse />
+        <main className="px-4 pb-8 pt-6">
+          <div className="rounded-[16px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-4 py-12 text-center">
+            <p className="text-base font-semibold">
+              {SHOP_UNAVAILABLE_STOREFRONT_HEADLINE}
+            </p>
+            <p className="mt-2 text-sm text-[var(--tf-text-secondary)]">
+              {SHOP_UNAVAILABLE_STOREFRONT_DETAIL}
+            </p>
+          </div>
+        </main>
+        <footer className="border-t border-[var(--tf-border)] px-4 pb-10 pt-8">
+          <p className="text-center font-[family-name:var(--font-heading)] text-lg font-semibold tracking-[-0.3px]">
+            {storefront.name}
+          </p>
+          <PoweredByTradeFlow />
+        </footer>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto min-h-full max-w-lg">
@@ -131,7 +160,13 @@ function StorefrontHeader({ storefront }: { storefront: PublicStorefront }) {
   );
 }
 
-function StorefrontHero({ storefront }: { storefront: PublicStorefront }) {
+function StorefrontHero({
+  storefront,
+  hideBrowse = false,
+}: {
+  storefront: PublicStorefront;
+  hideBrowse?: boolean;
+}) {
   const [bannerFailed, setBannerFailed] = useState(false);
   const showBanner = Boolean(storefront.bannerUrl) && !bannerFailed;
   const subheading = shopSubheading(storefront);
@@ -174,12 +209,14 @@ function StorefrontHero({ storefront }: { storefront: PublicStorefront }) {
         >
           {subheading}
         </p>
-        <a
-          href="#catalog"
-          className="tf-storefront-cta mt-6 inline-flex min-h-11 w-fit items-center justify-center rounded-[12px] px-4 text-sm font-semibold"
-        >
-          Browse products
-        </a>
+        {!hideBrowse ? (
+          <a
+            href="#catalog"
+            className="tf-storefront-cta mt-6 inline-flex min-h-11 w-fit items-center justify-center rounded-[12px] px-4 text-sm font-semibold"
+          >
+            Browse products
+          </a>
+        ) : null}
         {!storefront.acceptingOrders ? (
           <p
             className={`mt-4 rounded-[12px] border px-3 py-2.5 text-sm ${

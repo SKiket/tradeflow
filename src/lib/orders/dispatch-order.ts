@@ -353,7 +353,35 @@ export async function deliverOrder(
     "Enjoy — thanks for shopping with us!",
   ].join("\n");
 
-  const outboundMessageId = await sendBuyerUpdate({ order: row, text: message });
+  let outboundMessageId = "";
+  try {
+    outboundMessageId = await sendBuyerUpdate({ order: row, text: message });
+  } catch (error) {
+    const sendError = error instanceof Error ? error.message : String(error);
+    console.error("[deliver] buyer WhatsApp failed after DELIVERED", {
+      orderId,
+      message: sendError,
+    });
+    const admin = createAdminClient();
+    const { data: inserted } = await admin
+      .from("messages")
+      .insert({
+        business_id: row.business_id,
+        customer_id: row.customer_id,
+        channel: "whatsapp",
+        direction: "outbound",
+        normalised_text: message,
+        thread_id: row.thread_id,
+        raw_payload: {
+          provider: "twilio",
+          send_failed: true,
+          error: sendError,
+        },
+      })
+      .select("id")
+      .maybeSingle();
+    outboundMessageId = inserted?.id ?? "";
+  }
 
   return {
     action: "delivered",
