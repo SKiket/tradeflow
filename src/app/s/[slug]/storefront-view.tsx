@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { Package, RotateCcw, ShieldCheck } from "lucide-react";
 
 import { PoweredByTradeFlow } from "@/components/brand/powered-by";
 import { formatPence } from "@/lib/orders/display";
@@ -20,6 +21,12 @@ const STOCK_LABEL: Record<StockStatus, string> = {
   out_of_stock: "Out of stock",
 };
 
+function shopSubheading(storefront: PublicStorefront) {
+  const bio = storefront.bio?.trim();
+  if (bio) return bio;
+  return `Shop ${storefront.name}'s products`;
+}
+
 export function StorefrontView({ storefront }: { storefront: PublicStorefront }) {
   const cart = useCart();
   const totalPence = useMemo(() => {
@@ -31,19 +38,24 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
 
   return (
     <div className="mx-auto min-h-full max-w-lg">
+      <StorefrontHeader storefront={storefront} />
       <StorefrontHero storefront={storefront} />
+      <TrustStrip hasReturnsPolicy={storefront.hasReturnsPolicy} />
 
-      <main className="px-4 pb-36 pt-5">
+      <main id="catalog" className="px-4 pb-8 pt-6">
+        <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--tf-text-muted)]">
+          Products
+        </h2>
         {storefront.products.length === 0 ? (
           <div className="rounded-[16px] border border-dashed border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-4 py-12 text-center">
-            <h2 className="text-base font-semibold">No products available</h2>
+            <p className="text-base font-semibold">No products available</p>
             <p className="mt-1 text-sm text-[var(--tf-text-secondary)]">
               {storefront.name} hasn&apos;t listed any items yet. Check back
               soon.
             </p>
           </div>
         ) : (
-          <ul className="space-y-4">
+          <ul className="space-y-5">
             {storefront.products.map((product) => (
               <li key={`${product.name}-${product.variants[0]?.id ?? product.pricePence}`}>
                 <ProductCard product={product} />
@@ -51,8 +63,14 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
             ))}
           </ul>
         )}
-        <PoweredByTradeFlow />
       </main>
+
+      <footer className="border-t border-[var(--tf-border)] px-4 pb-28 pt-8">
+        <p className="text-center font-[family-name:var(--font-heading)] text-lg font-semibold tracking-[-0.3px]">
+          {storefront.name}
+        </p>
+        <PoweredByTradeFlow />
+      </footer>
 
       {cart.hydrated && cart.itemCount > 0 ? (
         <div className="fixed inset-x-0 bottom-0 z-10 border-t border-[var(--tf-border)] tf-cart-bar px-4 py-3 backdrop-blur">
@@ -78,68 +96,137 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
   );
 }
 
-function StorefrontHero({ storefront }: { storefront: PublicStorefront }) {
-  const [bannerFailed, setBannerFailed] = useState(false);
+function StorefrontHeader({ storefront }: { storefront: PublicStorefront }) {
   const [logoFailed, setLogoFailed] = useState(false);
-  const showBanner = Boolean(storefront.bannerUrl) && !bannerFailed;
   const showLogo = Boolean(storefront.logoUrl) && !logoFailed;
 
   return (
-    <header className="tf-storefront-hero overflow-hidden">
-      {showBanner ? (
-        <div className="aspect-[3/1] w-full overflow-hidden">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={storefront.bannerUrl ?? ""}
-            alt=""
-            className="h-full w-full object-cover"
-            onError={() => setBannerFailed(true)}
-          />
+    <header className="flex items-center gap-3 border-b border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-4 py-3">
+      {showLogo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={storefront.logoUrl ?? ""}
+          alt=""
+          className="size-10 shrink-0 rounded-[12px] object-cover ring-1 ring-[var(--tf-border)]"
+          onError={() => setLogoFailed(true)}
+        />
+      ) : (
+        <div
+          aria-hidden
+          className="flex size-10 shrink-0 items-center justify-center rounded-[12px] text-sm font-semibold"
+          style={{
+            backgroundColor:
+              "color-mix(in srgb, var(--tenant-accent) 28%, white)",
+            color: "var(--tenant-accent-text)",
+            fontFamily: "var(--font-heading)",
+          }}
+        >
+          {storefront.name.slice(0, 1).toUpperCase()}
         </div>
-      ) : null}
+      )}
+      <p className="min-w-0 truncate font-[family-name:var(--font-heading)] text-base font-semibold tracking-[-0.2px]">
+        {storefront.name}
+      </p>
+    </header>
+  );
+}
 
-      <div className="px-5 pb-6 pt-7">
-        <div className="flex items-start gap-3">
-          {showLogo ? (
-            // eslint-disable-next-line @next/next/no-img-element
+function StorefrontHero({ storefront }: { storefront: PublicStorefront }) {
+  const [bannerFailed, setBannerFailed] = useState(false);
+  const showBanner = Boolean(storefront.bannerUrl) && !bannerFailed;
+  const subheading = shopSubheading(storefront);
+
+  return (
+    <section className="relative overflow-hidden">
+      {showBanner ? (
+        <>
+          <div className="absolute inset-0">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={storefront.logoUrl ?? ""}
+              src={storefront.bannerUrl ?? ""}
               alt=""
-              className="size-14 shrink-0 rounded-[16px] object-cover ring-1 ring-[var(--tf-border)]"
-              onError={() => setLogoFailed(true)}
+              className="h-full w-full object-cover"
+              onError={() => setBannerFailed(true)}
             />
-          ) : (
-            <div
-              aria-hidden
-              className="flex size-14 shrink-0 items-center justify-center rounded-[16px] text-lg font-semibold"
-              style={{
-                backgroundColor:
-                  "color-mix(in srgb, var(--tenant-accent) 28%, white)",
-                color: "var(--tenant-accent-text)",
-                fontFamily: "var(--font-heading)",
-              }}
-            >
-              {storefront.name.slice(0, 1).toUpperCase()}
-            </div>
-          )}
-          <div className="min-w-0 pt-0.5">
-            <h1 className="tf-shop-name">{storefront.name}</h1>
-            {storefront.bio ? (
-              <p className="mt-1 text-sm leading-6 text-[var(--tf-text-secondary)]">
-                {storefront.bio}
-              </p>
-            ) : null}
+          </div>
+          <div className="tf-hero-scrim absolute inset-0" />
+        </>
+      ) : (
+        <div className="tf-storefront-hero absolute inset-0">
+          <div className="pointer-events-none absolute -right-8 top-2 h-48 w-48">
+            <NodesRingMotif className="h-full w-full" />
           </div>
         </div>
+      )}
 
+      <div
+        className={`relative flex min-h-[20rem] flex-col justify-end px-5 pb-8 pt-14 ${
+          showBanner ? "text-[var(--tf-text-on-navy)]" : ""
+        }`}
+      >
+        <h1 className="tf-hero-name">{storefront.name}</h1>
+        <p
+          className={`mt-3 max-w-[22rem] text-[15px] leading-7 ${
+            showBanner
+              ? "text-white/90"
+              : "text-[var(--tf-text-secondary)]"
+          }`}
+        >
+          {subheading}
+        </p>
+        <a
+          href="#catalog"
+          className="tf-storefront-cta mt-6 inline-flex min-h-11 w-fit items-center justify-center rounded-[12px] px-4 text-sm font-semibold"
+        >
+          Browse products
+        </a>
         {!storefront.acceptingOrders ? (
-          <p className="mt-4 rounded-[12px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-3 py-2.5 text-sm text-[var(--tf-text-secondary)]">
+          <p
+            className={`mt-4 rounded-[12px] border px-3 py-2.5 text-sm ${
+              showBanner
+                ? "border-white/25 bg-black/25 text-white/90"
+                : "border-[var(--tf-border)] bg-[var(--tf-bg-surface)] text-[var(--tf-text-secondary)]"
+            }`}
+          >
             WhatsApp ordering isn&apos;t available yet. You can still add items
             to your cart and check out on the web.
           </p>
         ) : null}
       </div>
-    </header>
+    </section>
+  );
+}
+
+function TrustStrip({ hasReturnsPolicy }: { hasReturnsPolicy: boolean }) {
+  return (
+    <section
+      data-tf-trust-strip=""
+      className="tf-trust-strip flex flex-wrap gap-x-5 gap-y-2.5 border-b px-4 py-3.5"
+    >
+      <TrustItem icon={<ShieldCheck className="size-4 shrink-0" strokeWidth={1.75} />} label="Secure checkout" />
+      <TrustItem icon={<Package className="size-4 shrink-0" strokeWidth={1.75} />} label="Tracked delivery" />
+      {hasReturnsPolicy ? (
+        <TrustItem
+          icon={<RotateCcw className="size-4 shrink-0" strokeWidth={1.75} />}
+          label="Easy returns"
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function TrustItem({
+  icon,
+  label,
+}: {
+  icon: ReactNode;
+  label: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 text-[13px] font-medium text-[var(--tf-text-secondary)]">
+      <span className="text-[var(--tenant-accent)]">{icon}</span>
+      <span>{label}</span>
+    </div>
   );
 }
 
@@ -185,14 +272,14 @@ function ProductCard({
       <div className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 space-y-1.5">
-            <h2 className="tf-product-name">{product.name}</h2>
+            <h3 className="tf-product-name">{product.name}</h3>
             {stockStatus ? (
               <span className="tf-stock-pill" data-status={stockStatus}>
                 {STOCK_LABEL[stockStatus]}
               </span>
             ) : null}
           </div>
-          <p className="shrink-0 pt-0.5 text-lg font-semibold tabular-nums">
+          <p className="shrink-0 pt-0.5 text-2xl font-semibold tabular-nums leading-none">
             {formatPence(product.pricePence)}
           </p>
         </div>

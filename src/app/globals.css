@@ -161,6 +161,14 @@
   line-height: 1.2;
 }
 
+@utility tf-hero-name {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 2.25rem;
+  line-height: 1.1;
+  letter-spacing: -0.5px;
+}
+
 @utility tf-storefront-cta {
   background-color: var(--tenant-accent);
   color: var(--tenant-accent-text);
@@ -175,6 +183,20 @@
     var(--tenant-accent) 18%,
     var(--tf-bg-page)
   );
+}
+
+.tf-hero-scrim {
+  background: linear-gradient(
+    to top,
+    rgb(18 40 64 / 0.82) 0%,
+    rgb(18 40 64 / 0.42) 48%,
+    rgb(18 40 64 / 0.18) 100%
+  );
+}
+
+.tf-trust-strip {
+  border-color: var(--tf-border);
+  background-color: var(--tf-bg-surface);
 }
 
 .tf-product-slot {

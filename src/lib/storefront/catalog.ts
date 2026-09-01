@@ -36,6 +36,8 @@ export type PublicStorefront = {
   /** Raw DB value; null means the TradeFlow amber default. */
   accentColor: string | null;
   acceptingOrders: boolean;
+  /** True when the seller has written a returns policy — never the policy text itself. */
+  hasReturnsPolicy: boolean;
   products: PublicStorefrontProduct[];
 };
 
@@ -72,7 +74,7 @@ function variantStockStatus(variant: VariantRow): StockStatus | null {
  *
  * Uses the service-role client (RLS is not loosened). Exposes `businessId`
  * and variant ids so the cart can check out; never owner, Stripe, dispatch,
- * WhatsApp credentials, or product-row ids.
+ * WhatsApp credentials, product-row ids, or the returns policy body.
  */
 export const fetchPublicStorefront = cache(
   async (slug: string): Promise<PublicStorefront | null> => {
@@ -83,7 +85,7 @@ export const fetchPublicStorefront = cache(
     const { data: business, error: businessError } = await supabase
       .from("businesses")
       .select(
-        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164",
+        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text",
       )
       .eq("slug", trimmed)
       .is("deleted_at", null)
@@ -149,6 +151,9 @@ export const fetchPublicStorefront = cache(
       bannerUrl: (business.banner_url as string | null) ?? null,
       accentColor: parseAccentHex(business.storefront_accent_color),
       acceptingOrders: Boolean(phone),
+      hasReturnsPolicy: Boolean(
+        (business.returns_policy_text as string | null)?.trim(),
+      ),
       products,
     };
   },
