@@ -1,16 +1,21 @@
 import { cache } from "react";
 
 import { parseAccentHex } from "@/lib/brand/accent";
+import { availableQuantity, isVariantLowStock } from "@/lib/products/stock";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import { storefrontOrderMessage, waMeOrderUrl } from "./whatsapp-order";
 
 const SLUG_RE = /^[a-z0-9-]+$/;
 
+export type StockStatus = "in_stock" | "low_stock" | "out_of_stock";
+
 export type PublicStorefrontVariant = {
   id: string;
   label: string | null;
   orderUrl: string | null;
+  /** Null when inventory is not tracked — no badge in that case. */
+  stockStatus: StockStatus | null;
 };
 
 export type PublicStorefrontProduct = {
@@ -45,7 +50,22 @@ type VariantRow = {
   id: string;
   label: string | null;
   deleted_at: string | null;
+  track_inventory: boolean | null;
+  stock_quantity: number | null;
+  reserved_quantity: number | null;
+  low_stock_threshold: number | null;
 };
+
+function variantStockStatus(variant: VariantRow): StockStatus | null {
+  if (!variant.track_inventory) return null;
+  const available = availableQuantity(
+    variant.stock_quantity,
+    variant.reserved_quantity,
+  );
+  if (available <= 0) return "out_of_stock";
+  if (isVariantLowStock(variant)) return "low_stock";
+  return "in_stock";
+}
 
 /**
  * Public catalog for a storefront slug.
@@ -82,7 +102,7 @@ export const fetchPublicStorefront = cache(
     const { data: productRows, error: productError } = await supabase
       .from("products")
       .select(
-        "name, description, price_pence, photo_url, product_variants(id, label, deleted_at)",
+        "name, description, price_pence, photo_url, product_variants(id, label, deleted_at, track_inventory, stock_quantity, reserved_quantity, low_stock_threshold)",
       )
       .eq("business_id", business.id)
       .eq("active", true)
@@ -107,6 +127,7 @@ export const fetchPublicStorefront = cache(
             id: variant.id,
             label,
             orderUrl: phone ? waMeOrderUrl(phone, message) : null,
+            stockStatus: variantStockStatus(variant),
           };
         });
       if (variants.length === 0) continue;

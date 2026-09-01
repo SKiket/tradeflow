@@ -169,6 +169,64 @@
   }
 }
 
+.tf-storefront-hero {
+  background-color: color-mix(
+    in srgb,
+    var(--tenant-accent) 18%,
+    var(--tf-bg-page)
+  );
+}
+
+.tf-product-slot {
+  background-color: color-mix(
+    in srgb,
+    var(--tenant-accent) 8%,
+    var(--tf-bg-page)
+  );
+}
+
+.tf-cart-bar {
+  background-color: color-mix(
+    in srgb,
+    var(--tf-bg-surface) 92%,
+    transparent
+  );
+}
+
+.tf-nodes-ring {
+  color: var(--tenant-accent);
+  circle {
+    stroke: currentColor;
+    opacity: 0.32;
+  }
+}
+
+.tf-stock-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.2rem 0.625rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tf-stock-pill[data-status="in_stock"] {
+  background-color: color-mix(in srgb, var(--tf-accent-mint) 22%, white);
+  color: var(--copalla-navy);
+}
+
+.tf-stock-pill[data-status="low_stock"] {
+  background-color: var(--tf-highlight-bg);
+  color: var(--tf-text-primary);
+}
+
+.tf-stock-pill[data-status="out_of_stock"] {
+  background-color: color-mix(in srgb, var(--tf-text-muted) 16%, white);
+  color: var(--tf-text-secondary);
+}
+
 /* Public catalog / tracking — TradeFlow palette, tenant accent on CTAs only. */
 [data-tf-surface="storefront"],
 [data-tf-surface="checkout"] {

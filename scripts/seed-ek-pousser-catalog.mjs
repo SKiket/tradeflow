@@ -41,13 +41,58 @@ async function main() {
   if (error) throw new Error(error.message);
   if (!business) throw new Error(`Business "${BUSINESS_NAME}" not found`);
 
+  const catalog = [
+    {
+      name: "Classic Blue Mug",
+      description: "Ceramic mug, 350ml. Dishwasher-safe glaze.",
+      price_pence: 1200,
+      variants: [{ label: "Standard", stock_quantity: 25 }],
+    },
+    {
+      name: "Weekend Sneakers",
+      description: "Casual sneakers. Order by UK size.",
+      price_pence: 4500,
+      variants: [
+        { label: "Size 9", stock_quantity: 4 },
+        { label: "Size 10", stock_quantity: 6 },
+        { label: "Size 11", stock_quantity: 3 },
+      ],
+    },
+    {
+      name: "Linen Tote Bag",
+      description: "Reusable linen tote for daily errands.",
+      price_pence: 1800,
+      variants: [
+        { label: "Natural", stock_quantity: 12 },
+        { label: "Navy", stock_quantity: 8 },
+      ],
+    },
+    {
+      name: "Honey Soap Bar",
+      description: "Hand-poured honey soap, 100g bar.",
+      price_pence: 600,
+      variants: [{ label: "100g", stock_quantity: 40 }],
+    },
+  ];
+
   // Soft-delete prior seed products (and their variants) for a clean re-seed.
-  const { data: prior } = await admin
+  const { data: tagged } = await admin
     .from("products")
     .select("id")
     .eq("business_id", business.id)
     .ilike("description", `%${SEED_TAG}%`);
-  const priorIds = (prior ?? []).map((p) => p.id);
+  const { data: named } = await admin
+    .from("products")
+    .select("id")
+    .eq("business_id", business.id)
+    .in(
+      "name",
+      catalog.map((item) => item.name),
+    )
+    .is("deleted_at", null);
+  const priorIds = [
+    ...new Set([...(tagged ?? []), ...(named ?? [])].map((p) => p.id)),
+  ];
   if (priorIds.length) {
     await admin
       .from("product_variants")
@@ -58,40 +103,6 @@ async function main() {
       .update({ deleted_at: new Date().toISOString(), active: false })
       .in("id", priorIds);
   }
-
-  const catalog = [
-    {
-      name: "Classic Blue Mug",
-      description: `${SEED_TAG} Ceramic mug, 350ml.`,
-      price_pence: 1200,
-      variants: [{ label: "Standard", stock_quantity: 25 }],
-    },
-    {
-      name: "Weekend Sneakers",
-      description: `${SEED_TAG} Casual sneakers. Order by UK size.`,
-      price_pence: 4500,
-      variants: [
-        { label: "Size 9", stock_quantity: 4 },
-        { label: "Size 10", stock_quantity: 6 },
-        { label: "Size 11", stock_quantity: 3 },
-      ],
-    },
-    {
-      name: "Linen Tote Bag",
-      description: `${SEED_TAG} Reusable tote.`,
-      price_pence: 1800,
-      variants: [
-        { label: "Natural", stock_quantity: 12 },
-        { label: "Navy", stock_quantity: 8 },
-      ],
-    },
-    {
-      name: "Honey Soap Bar",
-      description: `${SEED_TAG} Hand-poured soap.`,
-      price_pence: 600,
-      variants: [{ label: "100g", stock_quantity: 40 }],
-    },
-  ];
 
   const summary = [];
 

@@ -32,14 +32,14 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
 
   if (cart.hydrated && cart.lines.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-12 text-center">
+      <div className="rounded-[16px] border border-dashed border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-4 py-12 text-center">
         <h2 className="text-base font-semibold">Your cart is empty</h2>
-        <p className="mt-1 text-sm text-zinc-600">
+        <p className="mt-1 text-sm text-[var(--tf-text-secondary)]">
           Add something from the catalog to check out.
         </p>
         <Link
           href={`/s/${storefront.slug}`}
-          className="tf-storefront-cta mt-4 inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-sm font-semibold"
+          className="mt-4 inline-flex min-h-11 items-center justify-center rounded-[12px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-4 text-sm font-semibold"
         >
           Back to catalog
         </Link>
@@ -86,69 +86,71 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
 
   return (
     <div className="space-y-6">
-      <ul className="space-y-3">
-        {resolved.map((line) => (
-          <li
-            key={line.variantId}
-            className="rounded-2xl border border-zinc-200 bg-white p-4"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="font-medium">{line.productName}</p>
-                {line.variantLabel ? (
-                  <p className="text-sm text-zinc-600">{line.variantLabel}</p>
-                ) : null}
+      <div className="overflow-hidden rounded-[16px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)]">
+        <ul className="divide-y divide-[var(--tf-border)]">
+          {resolved.map((line) => (
+            <li key={line.variantId} className="px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium">{line.productName}</p>
+                  {line.variantLabel ? (
+                    <p className="mt-0.5 text-sm text-[var(--tf-text-secondary)]">
+                      {line.variantLabel}
+                    </p>
+                  ) : null}
+                </div>
+                <p className="shrink-0 text-sm font-semibold tabular-nums">
+                  {formatPence(line.pricePence * line.quantity)}
+                </p>
               </div>
-              <p className="shrink-0 text-sm font-medium">
-                {formatPence(line.pricePence * line.quantity)}
-              </p>
-            </div>
-            <div className="mt-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="mt-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    aria-label="Decrease quantity"
+                    onClick={() =>
+                      cart.setQuantity(line.variantId, line.quantity - 1)
+                    }
+                    className="flex size-9 items-center justify-center rounded-[12px] border border-[var(--tf-border)] text-lg leading-none hover:bg-[var(--tf-bg-page)]"
+                  >
+                    −
+                  </button>
+                  <span className="w-8 text-center text-sm tabular-nums">
+                    {line.quantity}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Increase quantity"
+                    onClick={() =>
+                      cart.setQuantity(line.variantId, line.quantity + 1)
+                    }
+                    className="flex size-9 items-center justify-center rounded-[12px] border border-[var(--tf-border)] text-lg leading-none hover:bg-[var(--tf-bg-page)]"
+                  >
+                    +
+                  </button>
+                </div>
                 <button
                   type="button"
-                  aria-label="Decrease quantity"
-                  onClick={() =>
-                    cart.setQuantity(line.variantId, line.quantity - 1)
-                  }
-                  className="flex size-9 items-center justify-center rounded-lg border border-zinc-300 text-lg leading-none hover:bg-zinc-50"
+                  onClick={() => cart.remove(line.variantId)}
+                  className="text-sm text-[var(--tf-text-secondary)] underline-offset-4 hover:underline"
                 >
-                  −
-                </button>
-                <span className="w-8 text-center text-sm tabular-nums">
-                  {line.quantity}
-                </span>
-                <button
-                  type="button"
-                  aria-label="Increase quantity"
-                  onClick={() =>
-                    cart.setQuantity(line.variantId, line.quantity + 1)
-                  }
-                  className="flex size-9 items-center justify-center rounded-lg border border-zinc-300 text-lg leading-none hover:bg-zinc-50"
-                >
-                  +
+                  Remove
                 </button>
               </div>
-              <button
-                type="button"
-                onClick={() => cart.remove(line.variantId)}
-                className="text-sm text-zinc-600 underline-offset-4 hover:underline"
-              >
-                Remove
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      <p className="flex items-baseline justify-between px-1 text-base font-semibold">
-        <span>Total</span>
-        <span>{formatPence(totalPence)}</span>
-      </p>
+            </li>
+          ))}
+        </ul>
+        <div className="flex items-baseline justify-between border-t border-[var(--tf-border)] bg-[var(--tf-bg-page)] px-4 py-3">
+          <span className="text-sm text-[var(--tf-text-secondary)]">Total</span>
+          <span className="text-lg font-semibold tabular-nums">
+            {formatPence(totalPence)}
+          </span>
+        </div>
+      </div>
 
       <form
         onSubmit={handleSubmit}
-        className="space-y-4 rounded-2xl border border-zinc-200 bg-white p-4"
+        className="space-y-4 rounded-[16px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] p-4"
       >
         <div className="space-y-1.5">
           <label htmlFor="checkout-name" className="text-sm font-medium">
@@ -162,7 +164,7 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
             maxLength={80}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className="h-11 w-full rounded-xl border border-zinc-300 bg-white px-3 text-sm"
+            className="h-11 w-full rounded-[12px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-3 text-sm"
           />
         </div>
         <div className="space-y-1.5">
@@ -179,15 +181,15 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
             placeholder="+44 7700 900000"
             value={phone}
             onChange={(event) => setPhone(event.target.value)}
-            className="h-11 w-full rounded-xl border border-zinc-300 bg-white px-3 text-sm"
+            className="h-11 w-full rounded-[12px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-3 text-sm"
           />
-          <p className="text-sm leading-5 text-zinc-600">
+          <p className="text-sm leading-5 text-[var(--tf-text-secondary)]">
             We&apos;ll send order updates to this WhatsApp number.
           </p>
         </div>
 
         {error ? (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-950">
+          <p className="rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-950">
             {error}
           </p>
         ) : null}
@@ -195,7 +197,7 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
         <button
           type="submit"
           disabled={submitting || !cart.hydrated || resolved.length === 0}
-          className="tf-storefront-cta flex min-h-11 w-full items-center justify-center rounded-xl px-3 text-sm font-semibold disabled:opacity-50"
+          className="tf-storefront-cta flex min-h-11 w-full items-center justify-center rounded-[12px] px-3 text-sm font-semibold disabled:opacity-50"
         >
           {submitting ? "Placing order…" : "Place order"}
         </button>
