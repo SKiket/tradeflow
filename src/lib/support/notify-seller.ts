@@ -67,6 +67,32 @@ export async function notifySellerOfUnmatchedOrder(params: {
   });
 }
 
+/**
+ * WhatsApp the seller when a buyer requests a return.
+ */
+export async function notifySellerOfReturnRequest(params: {
+  businessId: string;
+  orderRef: string;
+  reasonLabel: string;
+  detail?: string | null;
+  supabase: SupabaseClient;
+}): Promise<SellerNotifyResult> {
+  const lines = [
+    `Return requested for ${params.orderRef}`,
+    `Reason: ${params.reasonLabel}`,
+  ];
+  if (params.detail?.trim()) {
+    lines.push(`Details: ${params.detail.trim()}`);
+  }
+  lines.push("", "Review it in your dashboard to approve or decline.");
+  return notifySeller({
+    businessId: params.businessId,
+    text: lines.join("\n"),
+    supabase: params.supabase,
+    label: "seller return request",
+  });
+}
+
 async function notifySeller(params: {
   businessId: string;
   text: string;

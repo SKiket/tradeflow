@@ -114,6 +114,18 @@ function buildDispatchMessage(
   return lines.join("\n");
 }
 
+export function buildDeliverMessage(orderRef: string, itemLines: string[]): string {
+  return [
+    `Your order ${orderRef} has been delivered!`,
+    "",
+    ...itemLines,
+    "",
+    "Enjoy — thanks for shopping with us!",
+    "",
+    `Track or manage your order: ${orderTrackingUrl(orderRef)}`,
+  ].join("\n");
+}
+
 /**
  * Mark a PAID order DISPATCHED and notify the buyer.
  * Idempotent — safe to call more than once.
@@ -345,13 +357,7 @@ export async function deliverOrder(
   });
 
   const itemLines = await formatItemLines(supabase, orderId);
-  const message = [
-    `Your order ${row.order_ref} has been delivered!`,
-    "",
-    ...itemLines,
-    "",
-    "Enjoy — thanks for shopping with us!",
-  ].join("\n");
+  const message = buildDeliverMessage(row.order_ref, itemLines);
 
   let outboundMessageId = "";
   try {

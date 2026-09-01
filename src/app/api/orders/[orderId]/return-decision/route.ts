@@ -1,0 +1,82 @@
+import { NextResponse, type NextRequest } from "next/server";
+
+import { requireUser } from "@/lib/api/auth";
+import { decideReturn } from "@/lib/orders/request-return";
+
+interface RouteContext {
+  params: Promise<{ orderId: string }>;
+}
+
+/**
+ * Seller approve/decline a RETURN_REQUESTED order. Dashboard only.
+ * Authenticated — seller must own the order (enforced by RLS).
+ */
+export async function POST(request: NextRequest, context: RouteContext) {
+  const auth = await requireUser(request);
+  if (!auth.ok) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { orderId } = await context.params;
+
+  let body: { decision?: string; notes?: string } = {};
+  try {
+    const text = await request.text();
+    if (text.trim()) {
+      body = JSON.parse(text) as typeof body;
+    }
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const decision = body.decision === "approve" || body.decision === "decline"
+    ? body.decision
+    : null;
+  if (!decision) {
+    return NextResponse.json(
+      { ok: false, error: "Decision must be approve or decline" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const { data: current } = await auth.supabase
+      .from("orders")
+      .select("id")
+      .eq("id", orderId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!current) {
+      return NextResponse.json({ error: "Order not found" }, { status: 404 });
+    }
+
+    const outcome = await decideReturn(
+      auth.supabase,
+      orderId,
+      decision,
+      body.notes,
+    );
+
+    switch (outcome.action) {
+      case "approved":
+      case "declined":
+        return NextResponse.json({ ok: true, ...outcome });
+      case "invalid_status":
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Cannot decide a return in status ${outcome.status}`,
+            orderId: outcome.orderId,
+            status: outcome.status,
+          },
+          { status: 400 },
+        );
+      case "not_found":
+        return NextResponse.json({ error: "Order not found" }, { status: 404 });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[orders/return-decision] failed", { orderId, message });
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

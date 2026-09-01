@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 import { carrierTrackingUrl } from "./carrier";
 
-const ORDER_REF_RE = /^TF-[A-Za-z0-9-]{4,48}$/;
+export const PUBLIC_ORDER_REF_RE = /^TF-[A-Za-z0-9-]{4,48}$/;
 
 export type PublicTrackingItem = {
   productName: string;
@@ -56,7 +56,7 @@ type VariantJoin = {
 export const fetchPublicTrackingOrder = cache(
   async (orderRef: string): Promise<PublicTrackingOrder | null> => {
     const trimmed = decodeURIComponent(orderRef).trim();
-    if (!ORDER_REF_RE.test(trimmed)) return null;
+    if (!PUBLIC_ORDER_REF_RE.test(trimmed)) return null;
 
     const supabase = createAdminClient();
     const { data: order, error: orderError } = await supabase
@@ -160,3 +160,86 @@ export const fetchPublicTrackingOrder = cache(
     };
   },
 );
+
+export type PublicReturnSlip = {
+  orderRef: string;
+  status: string;
+  businessName: string;
+  returnAddress: {
+    line1: string | null;
+    city: string | null;
+    postcode: string | null;
+  };
+  items: PublicTrackingItem[];
+};
+
+export async function fetchPublicReturnSlip(
+  orderRef: string,
+): Promise<PublicReturnSlip | null> {
+  const trimmed = decodeURIComponent(orderRef).trim();
+  if (!PUBLIC_ORDER_REF_RE.test(trimmed)) return null;
+
+  const supabase = createAdminClient();
+  const { data: order, error } = await supabase
+    .from("orders")
+    .select(
+      "id, order_ref, status, businesses(name, dispatch_address_line1, dispatch_city, dispatch_postcode)",
+    )
+    .eq("order_ref", trimmed)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`return slip lookup failed: ${error.message}`);
+  }
+  if (!order) return null;
+
+  const { data: itemRows, error: itemError } = await supabase
+    .from("order_items")
+    .select("quantity, product_variants(label, products(name))")
+    .eq("order_id", order.id as string)
+    .order("created_at", { ascending: true });
+
+  if (itemError) {
+    throw new Error(`return slip items lookup failed: ${itemError.message}`);
+  }
+
+  const items: PublicTrackingItem[] = (itemRows ?? []).map((row) => {
+    const variant = unwrapRelation(row.product_variants as VariantJoin | VariantJoin[]);
+    const product = unwrapRelation(variant?.products);
+    return {
+      productName: product?.name ?? "Item",
+      variantLabel: variant?.label ?? null,
+      quantity: row.quantity as number,
+    };
+  });
+
+  const business = unwrapRelation(
+    order.businesses as
+      | {
+          name: string;
+          dispatch_address_line1: string | null;
+          dispatch_city: string | null;
+          dispatch_postcode: string | null;
+        }
+      | {
+          name: string;
+          dispatch_address_line1: string | null;
+          dispatch_city: string | null;
+          dispatch_postcode: string | null;
+        }[]
+      | null,
+  );
+
+  return {
+    orderRef: order.order_ref as string,
+    status: order.status as string,
+    businessName: business?.name ?? "Shop",
+    returnAddress: {
+      line1: business?.dispatch_address_line1?.trim() || null,
+      city: business?.dispatch_city?.trim() || null,
+      postcode: business?.dispatch_postcode?.trim() || null,
+    },
+    items,
+  };
+}

@@ -17,11 +17,46 @@ import {
   type PublicTrackingOrder,
 } from "@/lib/tracking/public-order";
 
+import { RequestReturnForm } from "./request-return-form";
+
 export const dynamic = "force-dynamic";
 
 interface TrackingPageProps {
   params: Promise<{ orderRef: string }>;
 }
+
+const AFTER_PAID = new Set([
+  ORDER_STATUS.PAID,
+  ORDER_STATUS.DISPATCHED,
+  ORDER_STATUS.DELIVERED,
+  ORDER_STATUS.RETURN_REQUESTED,
+  ORDER_STATUS.RETURN_APPROVED,
+  ORDER_STATUS.RETURN_DECLINED,
+  ORDER_STATUS.RETURNED,
+  ORDER_STATUS.REFUND_PENDING,
+  ORDER_STATUS.PARTIALLY_REFUNDED,
+  ORDER_STATUS.REFUNDED,
+]);
+
+const AFTER_DISPATCHED = new Set([
+  ORDER_STATUS.DISPATCHED,
+  ORDER_STATUS.DELIVERED,
+  ORDER_STATUS.RETURN_REQUESTED,
+  ORDER_STATUS.RETURN_APPROVED,
+  ORDER_STATUS.RETURN_DECLINED,
+  ORDER_STATUS.RETURNED,
+  ORDER_STATUS.REFUND_PENDING,
+  ORDER_STATUS.PARTIALLY_REFUNDED,
+  ORDER_STATUS.REFUNDED,
+]);
+
+const AFTER_DELIVERED = new Set([
+  ORDER_STATUS.DELIVERED,
+  ORDER_STATUS.RETURN_REQUESTED,
+  ORDER_STATUS.RETURN_APPROVED,
+  ORDER_STATUS.RETURN_DECLINED,
+  ORDER_STATUS.RETURNED,
+]);
 
 const MILESTONES: Array<{ label: string; reached: ReadonlySet<string> }> = [
   {
@@ -29,26 +64,20 @@ const MILESTONES: Array<{ label: string; reached: ReadonlySet<string> }> = [
     reached: new Set([
       ORDER_STATUS.PENDING_CONFIRMATION,
       ORDER_STATUS.AWAITING_PAYMENT,
-      ORDER_STATUS.PAID,
-      ORDER_STATUS.DISPATCHED,
-      ORDER_STATUS.DELIVERED,
+      ...AFTER_PAID,
     ]),
   },
   {
     label: "Paid",
-    reached: new Set([
-      ORDER_STATUS.PAID,
-      ORDER_STATUS.DISPATCHED,
-      ORDER_STATUS.DELIVERED,
-    ]),
+    reached: AFTER_PAID,
   },
   {
     label: "Dispatched",
-    reached: new Set([ORDER_STATUS.DISPATCHED, ORDER_STATUS.DELIVERED]),
+    reached: AFTER_DISPATCHED,
   },
   {
     label: "Delivered",
-    reached: new Set([ORDER_STATUS.DELIVERED]),
+    reached: AFTER_DELIVERED,
   },
 ];
 
@@ -78,9 +107,18 @@ export default async function TrackingPage({ params }: TrackingPageProps) {
   return <TrackingView order={order} />;
 }
 
+const RETURN_OPEN_STATUSES = new Set<string>([
+  ORDER_STATUS.RETURN_REQUESTED,
+  ORDER_STATUS.RETURN_APPROVED,
+  ORDER_STATUS.RETURN_DECLINED,
+  ORDER_STATUS.RETURNED,
+]);
+
 function TrackingView({ order }: { order: PublicTrackingOrder }) {
   const refunded = order.refundedAmountPence > 0;
-  const delivered = order.status === ORDER_STATUS.DELIVERED;
+  const delivered = AFTER_DELIVERED.has(order.status);
+  const canRequestReturn = order.status === ORDER_STATUS.DELIVERED;
+  const returnInProgress = RETURN_OPEN_STATUSES.has(order.status);
 
   return (
     <div
@@ -201,6 +239,37 @@ function TrackingView({ order }: { order: PublicTrackingOrder }) {
           </p>
         ) : null}
       </section>
+
+      {canRequestReturn ? (
+        <section className="mt-8 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+            Request a return
+          </h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            You arrange and pay return postage. The seller will review your
+            request first.
+          </p>
+          <RequestReturnForm orderRef={order.orderRef} />
+        </section>
+      ) : null}
+
+      {returnInProgress ? (
+        <section className="mt-8 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+            Return
+          </h2>
+          <p className="mt-2 text-sm text-zinc-700">{statusLabel(order.status)}</p>
+          {order.status === ORDER_STATUS.RETURN_APPROVED ||
+          order.status === ORDER_STATUS.RETURNED ? (
+            <a
+              href={`/t/${encodeURIComponent(order.orderRef)}/return-slip`}
+              className="tf-storefront-cta mt-3 inline-flex min-h-11 items-center rounded-xl px-3 text-sm font-semibold"
+            >
+              Print return slip
+            </a>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="mt-8">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">

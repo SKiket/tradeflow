@@ -39,7 +39,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customer_id, customers(id, phone_e164, name)",
+      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
     .maybeSingle();
@@ -145,10 +145,14 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
 
       <OrderActions
         orderId={order.id as string}
+        orderRef={order.order_ref as string}
         status={order.status as string}
         totalPence={order.total_pence as number}
         refundedAmountPence={(order.refunded_amount_pence as number) ?? 0}
         hasPaymentIntent={Boolean(order.stripe_payment_intent_id)}
+        returnReason={(order.return_reason as string | null) ?? null}
+        returnReasonDetail={(order.return_reason_detail as string | null) ?? null}
+        returnNotes={(order.return_notes as string | null) ?? null}
       />
 
       <section className="space-y-3">

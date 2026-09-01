@@ -489,6 +489,10 @@ export async function cancelAwaitingPaymentOrder(params: {
     current?.status === ORDER_STATUS.PAID ||
     current?.status === ORDER_STATUS.DISPATCHED ||
     current?.status === ORDER_STATUS.DELIVERED ||
+    current?.status === ORDER_STATUS.RETURN_REQUESTED ||
+    current?.status === ORDER_STATUS.RETURN_APPROVED ||
+    current?.status === ORDER_STATUS.RETURN_DECLINED ||
+    current?.status === ORDER_STATUS.RETURNED ||
     current?.status === ORDER_STATUS.REFUND_PENDING ||
     current?.status === ORDER_STATUS.REFUNDED ||
     current?.status === ORDER_STATUS.PARTIALLY_REFUNDED

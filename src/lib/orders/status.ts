@@ -12,6 +12,14 @@ export const ORDER_STATUS = {
   DISPATCHED: "DISPATCHED",
   /** Seller marked the order delivered to the buyer. */
   DELIVERED: "DELIVERED",
+  /** Buyer requested a return; awaiting seller decision. */
+  RETURN_REQUESTED: "RETURN_REQUESTED",
+  /** Seller approved the return; buyer should post the parcel. */
+  RETURN_APPROVED: "RETURN_APPROVED",
+  /** Seller declined the return request. */
+  RETURN_DECLINED: "RETURN_DECLINED",
+  /** Seller marked the returned parcel as received. */
+  RETURNED: "RETURNED",
   /** Refund initiated; awaiting Stripe refund.updated confirmation. */
   REFUND_PENDING: "REFUND_PENDING",
   /** Fully refunded (cumulative refunded_amount_pence === total_pence). */
@@ -33,5 +41,6 @@ export const REFUNDABLE_STATUSES = [
   ORDER_STATUS.PAID,
   ORDER_STATUS.DISPATCHED,
   ORDER_STATUS.DELIVERED,
+  ORDER_STATUS.RETURNED,
   ORDER_STATUS.PARTIALLY_REFUNDED,
 ] as const;

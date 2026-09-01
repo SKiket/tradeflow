@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatPence, poundsToPence, penceToPoundsInput } from "@/lib/orders/display";
+import { RETURN_REASON_LABEL, parseReturnReason } from "@/lib/orders/return-reasons";
 import { ORDER_STATUS, REFUNDABLE_STATUSES } from "@/lib/orders/status";
 
 type QuotedRate = {
@@ -20,10 +21,14 @@ type QuotedRate = {
 
 export type OrderActionsProps = {
   orderId: string;
+  orderRef: string;
   status: string;
   totalPence: number;
   refundedAmountPence: number;
   hasPaymentIntent: boolean;
+  returnReason: string | null;
+  returnReasonDetail: string | null;
+  returnNotes: string | null;
 };
 
 function apiErrorMessage(json: unknown, status: number): string {
@@ -74,10 +79,14 @@ function formatEta(days: number | null) {
 
 export function OrderActions({
   orderId,
+  orderRef,
   status,
   totalPence,
   refundedAmountPence,
   hasPaymentIntent,
+  returnReason,
+  returnReasonDetail,
+  returnNotes,
 }: OrderActionsProps) {
   const router = useRouter();
   const remainingPence = Math.max(0, totalPence - (refundedAmountPence ?? 0));
@@ -85,10 +94,17 @@ export function OrderActions({
 
   const canDispatch = status === ORDER_STATUS.PAID;
   const canDeliver = status === ORDER_STATUS.DISPATCHED;
+  const canDecideReturn = status === ORDER_STATUS.RETURN_REQUESTED;
+  const canMarkReturned = status === ORDER_STATUS.RETURN_APPROVED;
   const canRefund =
     hasPaymentIntent &&
     remainingPence > 0 &&
     (REFUNDABLE_STATUSES as readonly string[]).includes(status);
+
+  const parsedReason = parseReturnReason(returnReason);
+  const reasonLabel = parsedReason
+    ? RETURN_REASON_LABEL[parsedReason]
+    : returnReason;
 
   const [rates, setRates] = useState<QuotedRate[]>([]);
   const [shipmentId, setShipmentId] = useState<string | null>(null);
@@ -98,8 +114,9 @@ export function OrderActions({
   const [ratesError, setRatesError] = useState<string | null>(null);
   const [refundAmount, setRefundAmount] = useState(remainingPounds);
   const [refundReason, setRefundReason] = useState("");
+  const [decisionNotes, setDecisionNotes] = useState("");
   const [pending, setPending] = useState<
-    "dispatch" | "deliver" | "refund" | null
+    "dispatch" | "deliver" | "refund" | "approve" | "decline" | "returned" | null
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -141,12 +158,20 @@ export function OrderActions({
     typedRefundPence !== null && typedRefundPence > remainingPence;
   const selectedRate = rates.find((rate) => rate.objectId === selectedRateId);
 
-  if (!canDispatch && !canDeliver && !canRefund && !error && !success) {
+  if (
+    !canDispatch &&
+    !canDeliver &&
+    !canRefund &&
+    !canDecideReturn &&
+    !canMarkReturned &&
+    !error &&
+    !success
+  ) {
     return null;
   }
 
   async function run(
-    kind: "dispatch" | "deliver" | "refund",
+    kind: "dispatch" | "deliver" | "refund" | "approve" | "decline" | "returned",
     work: () => Promise<void>,
   ) {
     setPending(kind);
@@ -272,6 +297,93 @@ export function OrderActions({
           >
             <Button type="submit" disabled={pending !== null}>
               {pending === "deliver" ? "Updating…" : "Mark as Delivered"}
+            </Button>
+          </form>
+        )}
+
+        {canDecideReturn && (
+          <div className="space-y-3">
+            <p className="text-sm font-medium">Return request</p>
+            <dl className="space-y-1 text-sm">
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Reason</dt>
+                <dd className="font-medium">{reasonLabel ?? "—"}</dd>
+              </div>
+              {returnReasonDetail?.trim() ? (
+                <div>
+                  <dt className="text-muted-foreground">Details</dt>
+                  <dd className="mt-1 whitespace-pre-wrap">{returnReasonDetail}</dd>
+                </div>
+              ) : null}
+              {returnNotes?.trim() ? (
+                <div>
+                  <dt className="text-muted-foreground">Notes</dt>
+                  <dd className="mt-1 whitespace-pre-wrap">{returnNotes}</dd>
+                </div>
+              ) : null}
+            </dl>
+            <div className="space-y-1">
+              <Label htmlFor="return-notes">Notes (optional)</Label>
+              <Input
+                id="return-notes"
+                value={decisionNotes}
+                onChange={(event) => setDecisionNotes(event.target.value)}
+                placeholder="Shown internally"
+                disabled={pending !== null}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                disabled={pending !== null}
+                onClick={() => {
+                  void run("approve", async () => {
+                    await postAction(`/api/orders/${orderId}/return-decision`, {
+                      decision: "approve",
+                      notes: decisionNotes.trim() || undefined,
+                    });
+                    setSuccess("Return approved. Buyer has been sent the return slip.");
+                  });
+                }}
+              >
+                {pending === "approve" ? "Approving…" : "Approve return"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending !== null}
+                onClick={() => {
+                  void run("decline", async () => {
+                    await postAction(`/api/orders/${orderId}/return-decision`, {
+                      decision: "decline",
+                      notes: decisionNotes.trim() || undefined,
+                    });
+                    setSuccess("Return declined. Buyer has been notified.");
+                  });
+                }}
+              >
+                {pending === "decline" ? "Declining…" : "Decline return"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {canMarkReturned && (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run("returned", async () => {
+                await postAction(`/api/orders/${orderId}/mark-returned`);
+                setSuccess("Order marked as returned.");
+              });
+            }}
+          >
+            <p className="text-sm font-medium">Returned parcel</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Buyer tracking slip: /t/{orderRef}/return-slip
+            </p>
+            <Button type="submit" className="mt-3" disabled={pending !== null}>
+              {pending === "returned" ? "Updating…" : "Mark as Returned"}
             </Button>
           </form>
         )}

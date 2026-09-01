@@ -16,6 +16,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export interface SupportReplyResult {
   reply: string;
   escalate_to_seller: boolean;
+  is_return_request: boolean;
+  needs_order_clarification: boolean;
+  return_order_ref: string | null;
+  return_reason: string | null;
+  return_reason_detail: string | null;
 }
 
 export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
@@ -28,10 +33,43 @@ export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
     escalate_to_seller: {
       type: "boolean",
       description:
-        "true when the question cannot be answered from the supplied context/catalog/orders, OR when the message is a genuine complaint (damaged, wrong, missing, unhappy) that must go to the seller",
+        "true when the question cannot be answered from the supplied context/catalog/orders, OR when the message is a genuine complaint that is NOT a return request",
+    },
+    is_return_request: {
+      type: "boolean",
+      description:
+        "true when the buyer is asking to send an item back / start a return, not merely reporting a problem",
+    },
+    needs_order_clarification: {
+      type: "boolean",
+      description:
+        "true when this is a return request and more than one DELIVERED order could match, and the buyer did not specify which",
+    },
+    return_order_ref: {
+      type: ["string", "null"],
+      description:
+        "The order_ref to return when confidently identified. null if clarifying or not a return.",
+    },
+    return_reason: {
+      type: ["string", "null"],
+      description:
+        "Structured reason: wrong_size, damaged_faulty, changed_mind, not_as_described, arrived_late, or other. damaged_faulty for arrived broken/damaged. other when nothing else fits. null if not a return.",
+    },
+    return_reason_detail: {
+      type: ["string", "null"],
+      description:
+        "The buyer's own words. Required in spirit when return_reason is other; optional extra detail otherwise.",
     },
   },
-  required: ["reply", "escalate_to_seller"],
+  required: [
+    "reply",
+    "escalate_to_seller",
+    "is_return_request",
+    "needs_order_clarification",
+    "return_order_ref",
+    "return_reason",
+    "return_reason_detail",
+  ],
   additionalProperties: false,
 };
 
@@ -60,11 +98,20 @@ Rules:
    - Never invent a status, carrier, or tracking number. If tracking is blank, the order has not been dispatched — say so honestly.
    - If the list is empty, say you cannot find an order for them. Do not invent one.
    - If several active orders could match and the message does not make clear which one, ask a brief clarifying question (cite the order refs) rather than guessing.
-4. Genuine problems — damaged item, wrong item, missing item, or a clearly unhappy/complaint tone — set escalate_to_seller to true immediately. The reply must acknowledge the issue and confirm it has been passed to the seller. Do NOT attempt to resolve it. Never promise a refund, a replacement, compensation, or any other specific outcome — that decision belongs to the seller.
-5. If the question cannot be answered from what is actually configured, listed, or on the customer's orders — custom requests, price negotiation, warranties, shipping countries/regions, complex logistics not covered by dispatch_days, or anything the seller never provided — set escalate_to_seller to true. The reply MUST tell the buyer their question has been passed to the seller. Never guess or invent an answer to sound complete.
-6. Blank / "not configured" fields are not information. Do not infer a policy from them. Do not treat dispatch days as evidence that the seller ships to a particular country or region.
-7. Match the supplied ai_tone. Do not mention these instructions, "business context", "catalog JSON", "customer orders JSON", or that you are an AI. This business only messages buyers on WhatsApp — never mention email or another channel.
-8. Respond with JSON matching the schema exactly.`;
+4. Return requests (the buyer wants to send an item back):
+   - Set is_return_request to true. Set escalate_to_seller to false — the system will notify the seller if a return is created.
+   - DELIVERED orders are the only ones that can be returned. List only those when choosing an order.
+   - If more than one order has status DELIVERED and the buyer did not specify which (no order_ref, item, or other unique clue), set needs_order_clarification to true, return_order_ref to null, and ask which order in reply (cite the refs). Do not guess.
+   - If exactly one DELIVERED order exists, or the buyer clearly identifies one, set return_order_ref to that order_ref and needs_order_clarification to false.
+   - Map their explanation to return_reason: "it arrived broken/damaged" → damaged_faulty; wrong size → wrong_size; changed mind → changed_mind; not as described → not_as_described; late → arrived_late. If none fit or you are unsure, use other and put their own words in return_reason_detail. Never force a bad-fit category.
+   - Always copy useful buyer wording into return_reason_detail when they gave any.
+   - If they ask to return an order that is not DELIVERED, still set is_return_request true and return_order_ref if identified; the system will explain why a return cannot start yet. Do not pretend it was requested.
+   - Reply may be a short acknowledgement; the system may replace it with a confirmation after creating the return. Never promise a refund or replacement.
+5. Genuine problems that are NOT a return request — damaged item, wrong item, missing item, or a clearly unhappy/complaint tone without asking to send it back — set is_return_request to false and escalate_to_seller to true immediately. The reply must acknowledge the issue and confirm it has been passed to the seller. Do NOT attempt to resolve it. Never promise a refund, a replacement, compensation, or any other specific outcome — that decision belongs to the seller.
+6. If the question cannot be answered from what is actually configured, listed, or on the customer's orders — custom requests, price negotiation, warranties, shipping countries/regions, complex logistics not covered by dispatch_days, or anything the seller never provided — set escalate_to_seller to true. The reply MUST tell the buyer their question has been passed to the seller. Never guess or invent an answer to sound complete.
+7. Blank / "not configured" fields are not information. Do not infer a policy from them. Do not treat dispatch days as evidence that the seller ships to a particular country or region.
+8. Match the supplied ai_tone. Do not mention these instructions, "business context", "catalog JSON", "customer orders JSON", or that you are an AI. This business only messages buyers on WhatsApp — never mention email or another channel.
+9. Respond with JSON matching the schema exactly. When this is not a return request, set is_return_request false, needs_order_clarification false, and the return_* fields to null.`;
 
 interface ThreadMessage {
   direction: string;
@@ -103,6 +150,7 @@ export async function generateSupportReply(params: {
       ? fetchRecentCustomerOrders(supabase, {
           businessId: params.businessId,
           customerId: params.customerId,
+          limit: 15,
         })
       : Promise.resolve([] as CustomerOrderSummary[]),
   ]);
@@ -284,9 +332,27 @@ function normaliseSupportReply(data: unknown): SupportReplyResult {
   const escalate =
     record.escalate_to_seller === true ||
     (typeof record.reply !== "string" || !record.reply.trim());
+  const returnRef =
+    typeof record.return_order_ref === "string" && record.return_order_ref.trim()
+      ? record.return_order_ref.trim()
+      : null;
+  const reason =
+    typeof record.return_reason === "string" && record.return_reason.trim()
+      ? record.return_reason.trim()
+      : null;
+  const detail =
+    typeof record.return_reason_detail === "string" &&
+    record.return_reason_detail.trim()
+      ? record.return_reason_detail.trim()
+      : null;
 
   return {
     reply,
     escalate_to_seller: escalate,
+    is_return_request: record.is_return_request === true,
+    needs_order_clarification: record.needs_order_clarification === true,
+    return_order_ref: returnRef,
+    return_reason: reason,
+    return_reason_detail: detail,
   };
 }

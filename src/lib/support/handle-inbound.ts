@@ -2,6 +2,17 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { generateSupportReply } from "@/lib/ai/tasks/support-reply";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import {
+  buyerReturnAlreadyMessage,
+  buyerReturnNotDeliveredMessage,
+  buyerReturnRequestedMessage,
+  buyerReturnWhichOrderMessage,
+  findCustomerOrderByRef,
+  listCustomerDeliveredOrders,
+  requestReturn,
+  type RequestReturnOutcome,
+} from "@/lib/orders/request-return";
+import { parseReturnReason } from "@/lib/orders/return-reasons";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { notifySellerOfQuestion } from "@/lib/support/notify-seller";
 
@@ -28,6 +39,7 @@ export interface SupportInboundOutcome {
     error?: string;
     text?: string;
   };
+  returnOutcome?: RequestReturnOutcome | { action: "needs_clarification" };
   error?: string;
 }
 
@@ -42,7 +54,8 @@ export interface HandleSupportParams {
 
 /**
  * intent: "question" — generate a context-grounded reply and send it.
- * Escalations also WhatsApp the seller with the buyer's original question.
+ * Return requests call requestReturn() and send a deterministic confirmation.
+ * Other escalations also WhatsApp the seller with the buyer's original question.
  */
 export async function handleQuestionReply(
   params: HandleSupportParams,
@@ -76,10 +89,29 @@ export async function handleQuestionReply(
     };
   }
 
+  let reply = generated.reply;
+  let escalateToSeller = generated.escalate_to_seller;
+  let returnOutcome: SupportInboundOutcome["returnOutcome"];
+
+  if (generated.is_return_request) {
+    escalateToSeller = false;
+    const applied = await applyReturnRequest({
+      supabase,
+      businessId: params.businessId,
+      customerId: params.customerId,
+      messageText: params.messageText,
+      returnOrderRef: generated.return_order_ref,
+      returnReason: generated.return_reason,
+      returnReasonDetail: generated.return_reason_detail,
+    });
+    reply = applied.reply;
+    returnOutcome = applied.returnOutcome;
+  }
+
   const buyerSend = await trySend({
     businessId: params.businessId,
     toPhoneE164: params.customerPhoneE164,
-    text: generated.reply,
+    text: reply,
     threadId: params.threadId,
     customerId: params.customerId,
     supabase,
@@ -87,7 +119,7 @@ export async function handleQuestionReply(
   });
 
   let sellerNotify: SupportInboundOutcome["sellerNotify"];
-  if (generated.escalate_to_seller) {
+  if (escalateToSeller) {
     sellerNotify = await notifySellerOfQuestion({
       businessId: params.businessId,
       customerPhoneE164: params.customerPhoneE164,
@@ -97,13 +129,113 @@ export async function handleQuestionReply(
   }
 
   return {
-    action: generated.escalate_to_seller ? "escalated" : "answered",
+    action: escalateToSeller ? "escalated" : "answered",
     intent: "question",
-    reply: generated.reply,
-    escalateToSeller: generated.escalate_to_seller,
+    reply,
+    escalateToSeller,
     aiCalled: true,
     buyerSend,
     ...(sellerNotify ? { sellerNotify } : {}),
+    ...(returnOutcome ? { returnOutcome } : {}),
+  };
+}
+
+async function applyReturnRequest(params: {
+  supabase: SupabaseClient;
+  businessId: string;
+  customerId: string;
+  messageText: string;
+  returnOrderRef: string | null;
+  returnReason: string | null;
+  returnReasonDetail: string | null;
+}): Promise<{
+  reply: string;
+  returnOutcome: SupportInboundOutcome["returnOutcome"];
+}> {
+  const delivered = await listCustomerDeliveredOrders(params.supabase, {
+    businessId: params.businessId,
+    customerId: params.customerId,
+  });
+
+  const messageUpper = params.messageText.toUpperCase();
+  const mentioned = delivered.filter((order) =>
+    messageUpper.includes(order.orderRef.toUpperCase()),
+  );
+
+  if (delivered.length > 1 && mentioned.length !== 1) {
+    return {
+      reply: buyerReturnWhichOrderMessage(delivered.map((order) => order.orderRef)),
+      returnOutcome: { action: "needs_clarification" },
+    };
+  }
+
+  let target: { id: string; orderRef: string; status: string } | null = null;
+  if (mentioned.length === 1) {
+    target = mentioned[0];
+  } else if (params.returnOrderRef) {
+    target = await findCustomerOrderByRef(params.supabase, {
+      businessId: params.businessId,
+      customerId: params.customerId,
+      orderRef: params.returnOrderRef,
+    });
+  } else if (delivered.length === 1) {
+    target = delivered[0];
+  }
+
+  if (!target) {
+    return {
+      reply: buyerReturnNotDeliveredMessage({}),
+      returnOutcome: { action: "not_found" },
+    };
+  }
+
+  const reason = parseReturnReason(params.returnReason) ?? "other";
+  const detail =
+    params.returnReasonDetail?.trim() ||
+    (reason === "other" ? params.messageText.trim() : null);
+
+  const outcome = await requestReturn(
+    params.supabase,
+    target.id,
+    reason,
+    detail,
+  );
+
+  if (outcome.action === "requested") {
+    return {
+      reply: buyerReturnRequestedMessage({
+        orderRef: outcome.orderRef,
+        reason: outcome.reason,
+        detail: outcome.detail,
+      }),
+      returnOutcome: outcome,
+    };
+  }
+  if (outcome.action === "not_delivered") {
+    return {
+      reply: buyerReturnNotDeliveredMessage({
+        orderRef: outcome.orderRef,
+        status: outcome.status,
+      }),
+      returnOutcome: outcome,
+    };
+  }
+  if (outcome.action === "already_requested") {
+    return {
+      reply: buyerReturnAlreadyMessage({
+        orderRef: outcome.orderRef,
+        status: outcome.status,
+      }),
+      returnOutcome: outcome,
+    };
+  }
+
+  return {
+    reply: buyerReturnNotDeliveredMessage({
+      orderRef: target.orderRef,
+      status: target.status,
+    }),
+    returnOutcome: outcome,
   };
 }
 
