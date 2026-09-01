@@ -1,5 +1,6 @@
 import { cache } from "react";
 
+import { parseAccentHex } from "@/lib/brand/accent";
 import { unwrapRelation } from "@/lib/orders/display";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -31,6 +32,9 @@ export type PublicTrackingOrder = {
   createdAt: string;
   totalPence: number;
   refundedAmountPence: number;
+  businessName: string;
+  logoUrl: string | null;
+  accentColor: string | null;
   items: PublicTrackingItem[];
   shipment: PublicTrackingShipment | null;
   history: PublicTrackingEvent[];
@@ -57,7 +61,7 @@ export const fetchPublicTrackingOrder = cache(
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .select(
-        "id, order_ref, status, created_at, total_pence, refunded_amount_pence, dispatch_carrier, dispatch_tracking_number, dispatch_label_url",
+        "id, order_ref, status, created_at, total_pence, refunded_amount_pence, dispatch_carrier, dispatch_tracking_number, dispatch_label_url, businesses(name, logo_url, storefront_accent_color)",
       )
       .eq("order_ref", trimmed)
       .is("deleted_at", null)
@@ -122,12 +126,30 @@ export const fetchPublicTrackingOrder = cache(
           }
         : null;
 
+    const business = unwrapRelation(
+      order.businesses as
+        | {
+            name: string;
+            logo_url: string | null;
+            storefront_accent_color: string | null;
+          }
+        | {
+            name: string;
+            logo_url: string | null;
+            storefront_accent_color: string | null;
+          }[]
+        | null,
+    );
+
     return {
       orderRef: order.order_ref as string,
       status: order.status as string,
       createdAt: order.created_at as string,
       totalPence: order.total_pence as number,
       refundedAmountPence: (order.refunded_amount_pence as number) ?? 0,
+      businessName: business?.name ?? "Shop",
+      logoUrl: business?.logo_url ?? null,
+      accentColor: parseAccentHex(business?.storefront_accent_color),
       items,
       shipment,
       history,

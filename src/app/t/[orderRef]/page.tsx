@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 
+import { PoweredByTradeFlow } from "@/components/brand/powered-by";
+import { tenantAccentStyle } from "@/lib/brand/accent";
 import {
   formatDateTime,
   formatPence,
@@ -73,29 +75,45 @@ export default async function TrackingPage({ params }: TrackingPageProps) {
 
 function TrackingView({ order }: { order: PublicTrackingOrder }) {
   const refunded = order.refundedAmountPence > 0;
+  const delivered = order.status === ORDER_STATUS.DELIVERED;
 
   return (
-    <div className="mx-auto min-h-full max-w-lg px-4 py-8">
-      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-        TradeFlow
-      </p>
-      <header className="mt-2 space-y-1">
-        <h1 className="font-mono text-2xl font-semibold tracking-tight">
-          {order.orderRef}
-        </h1>
-        <p className="text-sm text-zinc-600">
-          {statusLabel(order.status)} · placed {formatDateTime(order.createdAt)}
-        </p>
+    <div
+      data-tf-surface="storefront"
+      className="mx-auto min-h-full max-w-lg px-4 py-8"
+      style={tenantAccentStyle(order.accentColor)}
+    >
+      <header className="flex items-start gap-3">
+        {order.logoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={order.logoUrl}
+            alt=""
+            className="size-12 shrink-0 rounded-2xl object-cover ring-1 ring-zinc-200"
+          />
+        ) : null}
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-zinc-700">{order.businessName}</p>
+          <h1 className="tf-page-heading mt-1">{order.orderRef}</h1>
+          <p className="mt-1 text-sm text-zinc-600">
+            {statusLabel(order.status)} · placed {formatDateTime(order.createdAt)}
+          </p>
+        </div>
       </header>
 
       <ol className="mt-6 grid grid-cols-4 gap-2">
         {MILESTONES.map((step) => {
           const done = step.reached.has(order.status);
+          const isDeliveredStep = step.label === "Delivered";
           return (
             <li key={step.label} className="text-center">
               <span
                 className={`mx-auto block size-3 rounded-full ${
-                  done ? "bg-zinc-900" : "bg-zinc-300"
+                  done && isDeliveredStep && delivered
+                    ? "bg-[var(--tf-accent-mint)]"
+                    : done
+                      ? "bg-zinc-900"
+                      : "bg-zinc-300"
                 }`}
               />
               <p
@@ -123,12 +141,12 @@ function TrackingView({ order }: { order: PublicTrackingOrder }) {
               href={order.shipment.trackingUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-2 block break-all font-mono text-base font-semibold text-zinc-900 underline-offset-4 hover:underline"
+              className="mt-2 block break-all text-base font-semibold text-zinc-900 underline-offset-4 hover:underline"
             >
               {order.shipment.trackingNumber}
             </a>
           ) : (
-            <p className="mt-2 break-all font-mono text-base font-semibold">
+            <p className="mt-2 break-all text-base font-semibold">
               {order.shipment.trackingNumber}
             </p>
           )}
@@ -137,7 +155,7 @@ function TrackingView({ order }: { order: PublicTrackingOrder }) {
               href={order.shipment.trackingUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-3 inline-flex min-h-11 items-center rounded-xl bg-zinc-900 px-3 text-sm font-semibold text-white hover:bg-zinc-800"
+              className="tf-storefront-cta mt-3 inline-flex min-h-11 items-center rounded-xl px-3 text-sm font-semibold"
             >
               Track with {order.shipment.carrier ?? "carrier"}
             </a>
@@ -179,7 +197,7 @@ function TrackingView({ order }: { order: PublicTrackingOrder }) {
         ) : null}
       </section>
 
-      <section className="mt-8 pb-12">
+      <section className="mt-8">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           Status timeline
         </h2>
@@ -201,6 +219,8 @@ function TrackingView({ order }: { order: PublicTrackingOrder }) {
           </ol>
         )}
       </section>
+
+      <PoweredByTradeFlow />
     </div>
   );
 }

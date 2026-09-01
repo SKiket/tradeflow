@@ -1,5 +1,6 @@
 import { cache } from "react";
 
+import { parseAccentHex } from "@/lib/brand/accent";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import { storefrontOrderMessage, waMeOrderUrl } from "./whatsapp-order";
@@ -27,6 +28,8 @@ export type PublicStorefront = {
   bio: string | null;
   logoUrl: string | null;
   bannerUrl: string | null;
+  /** Raw DB value; null means the TradeFlow amber default. */
+  accentColor: string | null;
   acceptingOrders: boolean;
   products: PublicStorefrontProduct[];
 };
@@ -59,7 +62,9 @@ export const fetchPublicStorefront = cache(
     const supabase = createAdminClient();
     const { data: business, error: businessError } = await supabase
       .from("businesses")
-      .select("id, name, bio, logo_url, banner_url, whatsapp_phone_e164")
+      .select(
+        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164",
+      )
       .eq("slug", trimmed)
       .is("deleted_at", null)
       .maybeSingle();
@@ -121,6 +126,7 @@ export const fetchPublicStorefront = cache(
       bio: (business.bio as string | null) ?? null,
       logoUrl: (business.logo_url as string | null) ?? null,
       bannerUrl: (business.banner_url as string | null) ?? null,
+      accentColor: parseAccentHex(business.storefront_accent_color),
       acceptingOrders: Boolean(phone),
       products,
     };

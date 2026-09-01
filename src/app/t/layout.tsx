@@ -4,7 +4,7 @@ export default function TrackingLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-full bg-zinc-50 text-zinc-900 antialiased">
+    <div className="min-h-full bg-[var(--tf-bg-page)] text-[var(--tf-text-primary)] antialiased">
       {children}
     </div>
   );

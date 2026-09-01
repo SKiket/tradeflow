@@ -3,6 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  parseAccentHex,
+  resolveStorefrontAccent,
+  STOREFRONT_ACCENT_PRESETS,
+  accentForeground,
+} from "@/lib/brand/accent";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,6 +35,7 @@ export type SettingsFormValues = {
   stripe_payouts_enabled: boolean;
   stripe_details_submitted: boolean;
   whatsapp_phone_e164: string | null;
+  storefront_accent_color: string | null;
 };
 
 function parseThreshold(value: string, fallback: number) {
@@ -48,6 +55,9 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
   const [aiTone, setAiTone] = useState(business.ai_tone || "friendly");
   const [lowStock, setLowStock] = useState(
     String(business.default_low_stock_threshold ?? 5),
+  );
+  const [accent, setAccent] = useState<string>(
+    parseAccentHex(business.storefront_accent_color) ?? "",
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +103,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             lowStock,
             business.default_low_stock_threshold ?? 5,
           ),
+          storefront_accent_color: parseAccentHex(accent),
         })
         .eq("id", business.id)
         .select("id")
@@ -111,25 +122,26 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
 
   return (
     <div className="space-y-8">
-      <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Storefront
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Share this link so buyers can browse your catalog and order on
-          WhatsApp. No login required.
-        </p>
-        <a
-          href={business.storefrontUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block break-all text-sm text-foreground underline-offset-4 hover:underline"
-        >
-          {business.storefrontUrl}
-        </a>
-      </section>
-
       <form onSubmit={handleSubmit} className="space-y-6">
+        <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Storefront
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Share this link so buyers can browse your catalog and order on
+            WhatsApp. No login required.
+          </p>
+          <a
+            href={business.storefrontUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block break-all text-sm text-foreground underline-offset-4 hover:underline"
+          >
+            {business.storefrontUrl}
+          </a>
+          <AccentPicker value={accent} onChange={setAccent} disabled={pending} />
+        </section>
+
         <section className="space-y-4 rounded-xl border p-4">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             Business
@@ -278,6 +290,71 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
         <p className="text-sm font-medium">{whatsapp.headline}</p>
         <p className="text-sm text-muted-foreground">{whatsapp.detail}</p>
       </section>
+    </div>
+  );
+}
+
+function AccentPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  disabled: boolean;
+}) {
+  const parsed = parseAccentHex(value);
+  const preview = resolveStorefrontAccent(parsed);
+  const previewText = accentForeground(preview);
+  const isDefault = parsed === null;
+
+  return (
+    <div className="space-y-2 pt-2">
+      <Label>Shop accent colour</Label>
+      <p className="text-xs text-muted-foreground">
+        Used on your public storefront&apos;s buttons. Leave as TradeFlow amber
+        unless you want a colour of your own. Save settings to apply.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {STOREFRONT_ACCENT_PRESETS.map((preset) => {
+          const selected =
+            preset.value === null ? isDefault : parsed === preset.value;
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              disabled={disabled}
+              aria-pressed={selected}
+              aria-label={preset.label}
+              title={preset.label}
+              onClick={() => onChange(preset.value ?? "")}
+              className={`size-8 rounded-full border-2 ${
+                selected ? "border-foreground" : "border-transparent"
+              } disabled:opacity-50`}
+              style={{
+                backgroundColor: preset.value ?? "#F5C518",
+              }}
+            />
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Input
+          id="storefront-accent"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="#F5C518"
+          disabled={disabled}
+          className="max-w-[10rem]"
+          aria-label="Custom accent hex"
+        />
+        <span
+          className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold"
+          style={{ backgroundColor: preview, color: previewText }}
+        >
+          Add to cart
+        </span>
+      </div>
     </div>
   );
 }

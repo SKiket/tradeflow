@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 
+import { PoweredByTradeFlow } from "@/components/brand/powered-by";
 import { formatPence } from "@/lib/orders/display";
 import { catalogLine, type PublicStorefront } from "@/lib/storefront/catalog";
 
@@ -48,9 +49,7 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
             </div>
           )}
           <div className="min-w-0 pt-0.5">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {storefront.name}
-            </h1>
+            <h1 className="tf-shop-name">{storefront.name}</h1>
             {storefront.bio ? (
               <p className="mt-1 text-sm leading-6 text-zinc-600">
                 {storefront.bio}
@@ -85,6 +84,7 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
             ))}
           </ul>
         )}
+        <PoweredByTradeFlow />
       </main>
 
       {cart.hydrated && cart.itemCount > 0 ? (
@@ -98,7 +98,7 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
             </div>
             <Link
               href={`/s/${storefront.slug}/checkout`}
-              className="flex min-h-11 items-center justify-center rounded-xl bg-zinc-900 px-4 text-sm font-semibold text-white hover:bg-zinc-800"
+              className="tf-storefront-cta flex min-h-11 items-center justify-center rounded-xl px-4 text-sm font-semibold"
             >
               Checkout
             </Link>
@@ -135,7 +135,7 @@ function ProductCard({
       ) : null}
       <div className="space-y-3 p-4">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-lg font-semibold tracking-tight">{product.name}</h2>
+          <h2 className="tf-product-name">{product.name}</h2>
           <p className="shrink-0 text-base font-medium">
             {formatPence(product.pricePence)}
           </p>
@@ -166,7 +166,7 @@ function ProductCard({
             <button
               type="button"
               onClick={() => cart.add(selected.id)}
-              className="flex min-h-11 items-center justify-center rounded-xl bg-zinc-900 px-3 text-sm font-semibold text-white hover:bg-zinc-800"
+              className="tf-storefront-cta flex min-h-11 items-center justify-center rounded-xl px-3 text-sm font-semibold"
             >
               Add to cart
               {hasVariants && selected.label ? ` · ${selected.label}` : ""}
@@ -176,7 +176,7 @@ function ProductCard({
                 href={selected.orderUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex min-h-11 items-center justify-center rounded-xl bg-[#25D366] px-3 text-sm font-semibold text-white hover:bg-[#1ebe5d]"
+                className="tf-storefront-cta flex min-h-11 items-center justify-center rounded-xl px-3 text-sm font-semibold"
               >
                 {hasVariants && selected.label
                   ? `Order ${selected.label} via WhatsApp`

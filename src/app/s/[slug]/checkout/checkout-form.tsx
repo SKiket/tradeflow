@@ -39,7 +39,7 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
         </p>
         <Link
           href={`/s/${storefront.slug}`}
-          className="mt-4 inline-flex min-h-11 items-center justify-center rounded-xl bg-zinc-900 px-4 text-sm font-semibold text-white hover:bg-zinc-800"
+          className="tf-storefront-cta mt-4 inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-sm font-semibold"
         >
           Back to catalog
         </Link>
@@ -75,6 +75,7 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
         return;
       }
       cart.clear();
+      // Stripe hosted Checkout is Stripe's own UI — TradeFlow does not theme it.
       window.location.assign(json.checkoutUrl);
     } catch {
       setError("Could not place that order. Check your connection and try again.");
@@ -194,7 +195,7 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
         <button
           type="submit"
           disabled={submitting || !cart.hydrated || resolved.length === 0}
-          className="flex min-h-11 w-full items-center justify-center rounded-xl bg-zinc-900 px-3 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+          className="tf-storefront-cta flex min-h-11 w-full items-center justify-center rounded-xl px-3 text-sm font-semibold disabled:opacity-50"
         >
           {submitting ? "Placing order…" : "Place order"}
         </button>

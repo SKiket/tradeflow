@@ -146,6 +146,36 @@
   letter-spacing: -0.3px;
 }
 
+@utility tf-shop-name {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 1.75rem;
+  line-height: 1.15;
+  letter-spacing: -0.3px;
+}
+
+@utility tf-product-name {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 1.375rem;
+  line-height: 1.2;
+}
+
+@utility tf-storefront-cta {
+  background-color: var(--tenant-accent);
+  color: var(--tenant-accent-text);
+  &:hover {
+    background-color: color-mix(in srgb, var(--tenant-accent) 86%, black);
+  }
+}
+
+/* Public catalog / tracking — TradeFlow palette, tenant accent on CTAs only. */
+[data-tf-surface="storefront"],
+[data-tf-surface="checkout"] {
+  background-color: var(--tf-bg-page);
+  color: var(--tf-text-primary);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
