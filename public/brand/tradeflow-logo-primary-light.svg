@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 90" role="img" aria-label="TradeFlow logo">
+  <title>TradeFlow</title>
+  <g>
+    <circle cx="32" cy="45" r="26" fill="none" stroke="#3DD6C8" stroke-width="6"/>
+    <circle cx="58" cy="45" r="26" fill="none" stroke="#F5C518" stroke-width="6"/>
+    <circle cx="45" cy="45" r="6" fill="#FFFFFF" stroke="#1E3B5D" stroke-width="3"/>
+  </g>
+  <text x="98" y="52" font-family="'Syne','Arial Black',Arial,sans-serif" font-weight="800" font-size="34" letter-spacing="-1" fill="#1E3B5D">tradeflow</text>
+  <text x="99" y="70" font-family="'DM Sans',-apple-system,'Segoe UI',Arial,sans-serif" font-weight="600" font-size="11" letter-spacing="3" fill="#F5A623">COMMERCE FOR WHATSAPP</text>
+</svg>

@@ -43,7 +43,7 @@ export default async function AnalyticsPage() {
   if (error) {
     return (
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
+        <h1 className="tf-page-heading">Analytics</h1>
         <p className="text-sm text-destructive">
           Couldn&apos;t load analytics. {error.message}
         </p>
@@ -77,7 +77,7 @@ export default async function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
+        <h1 className="tf-page-heading">Analytics</h1>
         <p className="text-sm text-muted-foreground">
           Last {ANALYTICS_DASHBOARD_DAYS} days (UTC), net of refunds.
         </p>

@@ -1,0 +1,92 @@
+/**
+ * TradeFlow Brand — Colour Tokens
+ * Version: 1.0 | August 2026
+ * Derived from Copalla Brand Pack v1.0 — same hex values throughout.
+ * TradeFlow is Copalla's product; this file adds TradeFlow-specific
+ * semantic roles on top of the parent tokens. It does not introduce
+ * any new hex values beyond Copalla's own palette.
+ */
+
+:root {
+
+  /* ── Inherited directly from Copalla (do not change these values —
+         see Copalla_Brand_Pack_v1/colours/copalla-colours.css) ── */
+  --copalla-teal:        #177EA1;
+  --copalla-teal-deep:   #0E5F7A;
+  --copalla-teal-pale:   #E8F5FB;
+  --copalla-mint:        #3DD6C8;
+  --copalla-amber:       #F5C518;
+  --copalla-orange:      #F5A623;
+  --copalla-navy:        #1E3B5D;
+  --copalla-navy-mid:    #2D5480;
+  --copalla-navy-deep:   #122840;
+  --copalla-off-white:   #F7FBFD;
+  --copalla-slate:       #8FA4AD;
+  --copalla-border:      #D0E4EA;
+  --copalla-white:       #FFFFFF;
+  --copalla-text-primary:   #1A2E38;
+  --copalla-text-secondary: #4A6572;
+  --copalla-text-muted:     #8FA4AD;
+
+  /* ── TradeFlow semantic roles (Direction 3 — Amber warmth) ──
+         These are what TradeFlow's own code should reference,
+         not the --copalla-* variables directly, so the underlying
+         hex can be re-pointed in one place if the direction changes. */
+
+  --tf-bg-page:          var(--copalla-off-white);
+  --tf-bg-surface:       var(--copalla-white);
+  --tf-bg-hero:          var(--copalla-navy);
+  --tf-border:           var(--copalla-border);
+
+  --tf-text-primary:     var(--copalla-text-primary);
+  --tf-text-secondary:   var(--copalla-text-secondary);
+  --tf-text-muted:       var(--copalla-text-muted);
+  --tf-text-on-navy:     var(--copalla-white);
+  --tf-text-on-amber:    var(--copalla-navy);
+
+  --tf-cta-bg:           var(--copalla-amber);
+  --tf-cta-text:         var(--copalla-navy);
+  --tf-cta-hover:        var(--copalla-orange);
+
+  --tf-secondary-bg:     var(--copalla-teal);
+  --tf-secondary-text:   var(--copalla-white);
+  --tf-secondary-hover:  var(--copalla-teal-deep);
+
+  --tf-accent-mint:      var(--copalla-mint);
+  --tf-highlight-bg:     #FDF3D3;   /* pale amber wash, derived from
+                                       --copalla-amber for card highlights */
+
+  /* ── Dashboard chrome (operator surface — always Copalla identity,
+         never tenant-customised, per the two-tier branding model) ── */
+  --tf-dashboard-chrome-bg:    var(--copalla-navy-deep);
+  --tf-dashboard-chrome-text:  var(--copalla-white);
+  --tf-dashboard-accent:       var(--copalla-mint);
+
+  /* ── Tenant storefront theming ──
+         Each business can set its own accent colour (stored on
+         businesses.storefront_accent_color). Storefront components
+         should reference --tenant-accent, which defaults to Copalla
+         Amber for any seller who hasn't customised it. Do NOT let a
+         tenant override --tf-dashboard-* — the seller's own working
+         tool stays consistently TradeFlow-branded regardless of how
+         their public storefront looks. */
+  --tenant-accent:        var(--copalla-amber);
+  --tenant-accent-text:   var(--copalla-navy);
+}
+
+/*
+ * COLOUR USAGE GUIDE — TradeFlow
+ * ─────────────────────────────────────────────────────────
+ * Storefront / checkout primary CTA   → --tf-cta-bg / --tf-cta-text
+ *   (or --tenant-accent once per-seller theming is implemented)
+ * Secondary action                    → --tf-secondary-bg, white text
+ * Page background                     → --tf-bg-page
+ * Card / surface background           → --tf-bg-surface with --tf-border
+ * Hero / banner sections               → --tf-bg-hero (navy)
+ * Dashboard chrome (seller's own tool) → --tf-dashboard-chrome-*
+ *   (always Copalla-branded, never tenant-themed)
+ * Highlight / promo card fill          → --tf-highlight-bg
+ * Body text                            → --tf-text-primary
+ * Muted / secondary text               → --tf-text-secondary
+ * ─────────────────────────────────────────────────────────
+ */

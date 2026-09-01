@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="TradeFlow app icon">
+  <title>TradeFlow app icon</title>
+  <rect width="512" height="512" rx="112" fill="#1E3B5D"/>
+  <circle cx="205" cy="256" r="104" fill="none" stroke="#3DD6C8" stroke-width="26"/>
+  <circle cx="307" cy="256" r="104" fill="none" stroke="#F5C518" stroke-width="26"/>
+  <circle cx="256" cy="256" r="24" fill="#1E3B5D" stroke="#FFFFFF" stroke-width="12"/>
+</svg>

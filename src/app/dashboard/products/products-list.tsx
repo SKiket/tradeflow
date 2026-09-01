@@ -40,7 +40,7 @@ export function ProductsList({ products }: { products: ProductListRow[] }) {
         </p>
         <Link
           href="/dashboard/products/new"
-          className="mt-4 inline-flex h-8 items-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/80"
+          className="mt-4 inline-flex h-8 items-center rounded-lg bg-tradeflow-cta px-3 text-sm font-medium text-tradeflow-cta-text hover:bg-tradeflow-cta-hover"
         >
           Add product
         </Link>

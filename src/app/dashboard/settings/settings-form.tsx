@@ -123,7 +123,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
           href={business.storefrontUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="block break-all font-mono text-sm text-foreground underline-offset-4 hover:underline"
+          className="block break-all text-sm text-foreground underline-offset-4 hover:underline"
         >
           {business.storefrontUrl}
         </a>
@@ -264,7 +264,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             <dd>{business.stripe_details_submitted ? "Yes" : "No"}</dd>
           </div>
         </dl>
-        <p className="font-mono text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {business.stripe_connected_account_id
             ? `Account ${business.stripe_connected_account_id}`
             : "No connected account ID"}

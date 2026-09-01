@@ -14,7 +14,7 @@ export default function InboxPreviewPage() {
           <ArrowLeft className="size-4" />
           Back to inbox
         </Link>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight">
+        <h1 className="tf-page-heading mt-3">
           Preview AI replies
         </h1>
         <p className="mt-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
@@ -27,11 +28,21 @@ export default async function DashboardLayout({
   if (!business) redirect("/onboarding");
 
   return (
-    <div className="flex min-h-full flex-1 bg-background">
-      <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+    <div
+      data-tf-surface="dashboard"
+      className="flex min-h-full flex-1 bg-background"
+    >
+      <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
         <div className="border-b border-sidebar-border px-4 py-4">
-          <p className="text-sm font-semibold tracking-tight">TradeFlow</p>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          <Link href="/dashboard/orders" className="block">
+            {/* Wordmark: w-56 is too tight for the full dark lockup tagline. */}
+            <img
+              src="/brand/tradeflow-wordmark-white.svg"
+              alt="TradeFlow"
+              className="h-6 w-auto"
+            />
+          </Link>
+          <p className="mt-2 truncate text-xs text-sidebar-foreground/70">
             {business.name}
           </p>
         </div>
@@ -50,7 +61,7 @@ export default async function DashboardLayout({
           </p>
           <SignOutButton />
         </header>
-        <div className="border-b px-2 py-2 md:hidden">
+        <div className="border-b border-sidebar-border bg-sidebar px-2 py-2 text-sidebar-foreground md:hidden">
           <DashboardNav orientation="top" />
         </div>
         <main className="flex-1 p-4 md:p-6">{children}</main>

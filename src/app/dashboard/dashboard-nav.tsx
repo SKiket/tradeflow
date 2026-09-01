@@ -63,7 +63,7 @@ export function DashboardNav({ orientation }: { orientation: "side" | "top" }) {
               side ? "px-3 py-2" : "px-3 py-1.5",
               active
                 ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-sidebar-foreground hover:bg-sidebar-accent/60",
+                : "text-sidebar-foreground hover:bg-sidebar-accent/20",
               !item.live && "text-muted-foreground",
             )}
             aria-current={active ? "page" : undefined}

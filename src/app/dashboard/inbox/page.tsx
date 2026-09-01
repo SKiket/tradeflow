@@ -15,7 +15,7 @@ export default async function InboxPage() {
     const message = error instanceof Error ? error.message : String(error);
     return (
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
+        <h1 className="tf-page-heading">Inbox</h1>
         <p className="text-sm text-destructive">
           Couldn&apos;t load conversations. {message}
         </p>
@@ -27,7 +27,7 @@ export default async function InboxPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
+          <h1 className="tf-page-heading">Inbox</h1>
           <p className="text-sm text-muted-foreground">
             {threads.length === 0
               ? "Your WhatsApp conversations will appear here."

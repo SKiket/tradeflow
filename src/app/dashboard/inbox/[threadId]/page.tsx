@@ -76,7 +76,7 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
   if (error) {
     return (
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Conversation</h1>
+        <h1 className="tf-page-heading">Conversation</h1>
         <p className="text-sm text-destructive">
           Couldn&apos;t load this thread. {error.message}
         </p>

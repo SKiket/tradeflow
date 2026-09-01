@@ -16,7 +16,7 @@ export default async function SettingsPage() {
   if (error) {
     return (
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="tf-page-heading">Settings</h1>
         <p className="text-sm text-destructive">
           Couldn&apos;t load settings. {error.message}
         </p>
@@ -27,7 +27,7 @@ export default async function SettingsPage() {
   if (!data) {
     return (
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="tf-page-heading">Settings</h1>
         <p className="text-sm text-muted-foreground">Business not found.</p>
       </div>
     );
@@ -56,7 +56,7 @@ export default async function SettingsPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="tf-page-heading">Settings</h1>
         <p className="text-sm text-muted-foreground">
           Your business details, payment status, and WhatsApp connection.
         </p>

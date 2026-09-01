@@ -27,7 +27,7 @@ export default async function ProductsPage() {
   if (error) {
     return (
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
+        <h1 className="tf-page-heading">Products</h1>
         <p className="text-sm text-destructive">
           Couldn&apos;t load products. {error.message}
         </p>
@@ -55,7 +55,7 @@ export default async function ProductsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
+          <h1 className="tf-page-heading">Products</h1>
           <p className="text-sm text-muted-foreground">
             {products.length === 0
               ? "Your catalogue will appear here."
@@ -64,7 +64,7 @@ export default async function ProductsPage() {
         </div>
         <Link
           href="/dashboard/products/new"
-          className="inline-flex h-8 items-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/80"
+          className="inline-flex h-8 items-center rounded-lg bg-tradeflow-cta px-3 text-sm font-medium text-tradeflow-cta-text hover:bg-tradeflow-cta-hover"
         >
           Add product
         </Link>

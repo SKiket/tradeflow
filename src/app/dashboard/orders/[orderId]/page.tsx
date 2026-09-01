@@ -95,7 +95,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
           Back to orders
         </Link>
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <h1 className="font-mono text-2xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-semibold tracking-tight">
             {order.order_ref as string}
           </h1>
           <StatusBadge status={order.status as string} />
@@ -113,7 +113,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
           >
             Buyer tracking page
           </a>
-          <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">
+            <span className="mt-1 block break-all text-xs text-muted-foreground">
             {trackingUrl}
           </span>
         </p>

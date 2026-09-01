@@ -22,7 +22,7 @@ export default async function NewProductPage() {
           <ArrowLeft className="size-4" />
           Back to products
         </Link>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight">
+        <h1 className="tf-page-heading mt-3">
           Add product
         </h1>
       </div>

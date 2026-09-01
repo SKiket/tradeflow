@@ -111,7 +111,7 @@ export function OrdersTable({ orders }: { orders: OrderListRow[] }) {
                 className="flex w-full flex-col gap-2 rounded-xl border bg-card p-4 text-left shadow-xs transition-colors hover:bg-muted/40"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-sm font-semibold">
+                  <span className="text-sm font-semibold">
                     {order.order_ref}
                   </span>
                   <StatusBadge status={order.status} />
@@ -154,7 +154,7 @@ export function OrdersTable({ orders }: { orders: OrderListRow[] }) {
                       }
                     }}
                   >
-                    <td className="px-4 py-3 font-mono font-medium">
+                    <td className="px-4 py-3 font-medium">
                       <Link
                         href={`/dashboard/orders/${order.id}`}
                         className="hover:underline"
