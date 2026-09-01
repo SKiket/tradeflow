@@ -371,7 +371,6 @@ async function handleSellerSubscription(
     status: 200,
     body: {
       ok: true,
-      handled: synced.handled,
       type: eventType,
       ...synced,
     },
@@ -434,7 +433,6 @@ async function handleInvoicePaymentFailed(
     status: 200,
     body: {
       ok: true,
-      handled: synced.handled,
       type: "invoice.payment_failed",
       ...synced,
     },
