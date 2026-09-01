@@ -68,6 +68,24 @@ export async function notifySellerOfUnmatchedOrder(params: {
 }
 
 /**
+ * WhatsApp the seller when a cooling-off return was auto-approved.
+ * Distinct from notifySellerOfReturnRequest — no approve/decline action.
+ */
+export async function notifySellerOfAutoApprovedReturn(params: {
+  businessId: string;
+  orderRef: string;
+  supabase: SupabaseClient;
+}): Promise<SellerNotifyResult> {
+  const text = `A return has been automatically approved under the buyer's statutory cooling-off right — no action needed from you. Order ${params.orderRef}.`;
+  return notifySeller({
+    businessId: params.businessId,
+    text,
+    supabase: params.supabase,
+    label: "seller return auto-approved",
+  });
+}
+
+/**
  * WhatsApp the seller when a buyer requests a return.
  */
 export async function notifySellerOfReturnRequest(params: {
@@ -145,6 +163,18 @@ async function notifySeller(params: {
       businessId: params.businessId,
       to: sellerPhone,
       error: message,
+    });
+    await params.supabase.from("messages").insert({
+      business_id: params.businessId,
+      channel: "whatsapp",
+      direction: "outbound",
+      normalised_text: params.text,
+      raw_payload: {
+        provider: "twilio",
+        send_failed: true,
+        error: message,
+        label: params.label,
+      },
     });
     return {
       attempted: true,

@@ -4,6 +4,7 @@ import { generateSupportReply } from "@/lib/ai/tasks/support-reply";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import {
   buyerReturnAlreadyMessage,
+  buyerReturnApprovedMessage,
   buyerReturnNotDeliveredMessage,
   buyerReturnRequestedMessage,
   buyerReturnWhichOrderMessage,
@@ -92,6 +93,7 @@ export async function handleQuestionReply(
   let reply = generated.reply;
   let escalateToSeller = generated.escalate_to_seller;
   let returnOutcome: SupportInboundOutcome["returnOutcome"];
+  let skipBuyerSend = false;
 
   if (generated.is_return_request) {
     escalateToSeller = false;
@@ -106,9 +108,12 @@ export async function handleQuestionReply(
     });
     reply = applied.reply;
     returnOutcome = applied.returnOutcome;
+    skipBuyerSend = applied.returnOutcome?.action === "auto_approved";
   }
 
-  const buyerSend = await trySend({
+  const buyerSend = skipBuyerSend
+    ? { ok: true }
+    : await trySend({
     businessId: params.businessId,
     toPhoneE164: params.customerPhoneE164,
     text: reply,
@@ -208,6 +213,12 @@ async function applyReturnRequest(params: {
         reason: outcome.reason,
         detail: outcome.detail,
       }),
+      returnOutcome: outcome,
+    };
+  }
+  if (outcome.action === "auto_approved") {
+    return {
+      reply: buyerReturnApprovedMessage(outcome.orderRef),
       returnOutcome: outcome,
     };
   }

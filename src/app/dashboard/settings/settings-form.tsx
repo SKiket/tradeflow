@@ -13,6 +13,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ImageUpload } from "@/components/upload/image-upload";
+import {
+  DEFAULT_RETURN_WINDOW_DAYS,
+  RETURN_WINDOW_BELOW_STATUTORY_WARNING,
+} from "@/lib/orders/return-window";
 import { BUSINESS_BRANDING_BUCKET } from "@/lib/storage/upload";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -30,6 +34,7 @@ export type SettingsFormValues = {
   dispatch_city: string | null;
   dispatch_postcode: string | null;
   returns_policy_text: string | null;
+  return_window_days: number;
   ai_tone: string;
   default_low_stock_threshold: number;
   stripe_connected_account_id: string | null;
@@ -66,6 +71,9 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
   const [returnsPolicy, setReturnsPolicy] = useState(
     business.returns_policy_text ?? "",
   );
+  const [returnWindowDays, setReturnWindowDays] = useState(
+    String(business.return_window_days ?? DEFAULT_RETURN_WINDOW_DAYS),
+  );
   const [aiTone, setAiTone] = useState(business.ai_tone || "friendly");
   const [lowStock, setLowStock] = useState(
     String(business.default_low_stock_threshold ?? 5),
@@ -85,6 +93,9 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
   );
 
   const returnsEmpty = returnsPolicy.trim().length === 0;
+  const parsedWindowDays = Number.parseInt(returnWindowDays, 10);
+  const windowBelowStatutory =
+    Number.isFinite(parsedWindowDays) && parsedWindowDays < 14;
   const toneOptions = AI_TONES.includes(aiTone as (typeof AI_TONES)[number])
     ? AI_TONES
     : ([aiTone, ...AI_TONES] as string[]);
@@ -120,6 +131,9 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
           dispatch_city: city.trim() || null,
           dispatch_postcode: postcode.trim() || null,
           returns_policy_text: returnsPolicy.trim() || null,
+          return_window_days: Number.isFinite(Number.parseInt(returnWindowDays, 10))
+            ? Math.trunc(Number.parseInt(returnWindowDays, 10))
+            : (business.return_window_days ?? DEFAULT_RETURN_WINDOW_DAYS),
           ai_tone: aiTone.trim() || "friendly",
           default_low_stock_threshold: parseThreshold(
             lowStock,
@@ -290,6 +304,27 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
                 answered automatically and will be passed to you instead.
               </p>
             )}
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="return-window-days">Return window (days)</Label>
+            <Input
+              id="return-window-days"
+              type="number"
+              step="1"
+              value={returnWindowDays}
+              onChange={(event) => setReturnWindowDays(event.target.value)}
+              disabled={pending}
+            />
+            <p className="text-xs text-muted-foreground">
+              Used to auto-approve &quot;changed mind&quot; returns. The policy
+              text above is what buyers read; this number is what the system
+              uses.
+            </p>
+            {windowBelowStatutory ? (
+              <p className="text-xs text-amber-800">
+                {RETURN_WINDOW_BELOW_STATUTORY_WARNING}
+              </p>
+            ) : null}
           </div>
           <div className="space-y-1">
             <Label htmlFor="low-stock">Default low-stock threshold</Label>

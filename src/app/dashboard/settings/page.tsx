@@ -1,4 +1,5 @@
 import { sellerBillingStatus } from "@/lib/stripe/billing";
+import { DEFAULT_RETURN_WINDOW_DAYS } from "@/lib/orders/return-window";
 import { storefrontUrl } from "@/lib/storefront/url";
 
 import { SettingsForm, type SettingsFormValues } from "./settings-form";
@@ -14,7 +15,7 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
   const { data, error } = await supabase
     .from("businesses")
     .select(
-      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color",
+      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, return_window_days, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color",
     )
     .eq("id", businessId)
     .maybeSingle();
@@ -48,6 +49,8 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
     dispatch_city: (data.dispatch_city as string | null) ?? null,
     dispatch_postcode: (data.dispatch_postcode as string | null) ?? null,
     returns_policy_text: (data.returns_policy_text as string | null) ?? null,
+    return_window_days:
+      (data.return_window_days as number | null) ?? DEFAULT_RETURN_WINDOW_DAYS,
     ai_tone: (data.ai_tone as string) || "friendly",
     default_low_stock_threshold:
       (data.default_low_stock_threshold as number | null) ?? 5,

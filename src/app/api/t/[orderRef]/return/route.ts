@@ -52,6 +52,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
     switch (outcome.action) {
       case "requested":
         return NextResponse.json({ ok: true, ...outcome });
+      case "auto_approved":
+        return NextResponse.json({ ok: true, ...outcome });
       case "already_requested":
         return NextResponse.json(
           {

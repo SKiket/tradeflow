@@ -29,6 +29,7 @@ export type OrderActionsProps = {
   returnReason: string | null;
   returnReasonDetail: string | null;
   returnNotes: string | null;
+  returnAutoApproved: boolean;
 };
 
 function apiErrorMessage(json: unknown, status: number): string {
@@ -87,6 +88,7 @@ export function OrderActions({
   returnReason,
   returnReasonDetail,
   returnNotes,
+  returnAutoApproved,
 }: OrderActionsProps) {
   const router = useRouter();
   const remainingPence = Math.max(0, totalPence - (refundedAmountPence ?? 0));
@@ -158,12 +160,18 @@ export function OrderActions({
     typedRefundPence !== null && typedRefundPence > remainingPence;
   const selectedRate = rates.find((rate) => rate.objectId === selectedRateId);
 
+  const showAutoApprovedLabel =
+    returnAutoApproved &&
+    (status === ORDER_STATUS.RETURN_APPROVED ||
+      status === ORDER_STATUS.RETURNED);
+
   if (
     !canDispatch &&
     !canDeliver &&
     !canRefund &&
     !canDecideReturn &&
     !canMarkReturned &&
+    !showAutoApprovedLabel &&
     !error &&
     !success
   ) {
@@ -299,6 +307,12 @@ export function OrderActions({
               {pending === "deliver" ? "Updating…" : "Mark as Delivered"}
             </Button>
           </form>
+        )}
+
+        {showAutoApprovedLabel && (
+          <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-950">
+            Auto-approved — statutory cooling-off right
+          </p>
         )}
 
         {canDecideReturn && (

@@ -7,8 +7,15 @@ import {
   RETURN_REASON_LABEL,
   type ReturnReason,
 } from "@/lib/orders/return-reasons";
+import {
+  isWithinReturnWindow,
+  parseReturnWindowDays,
+} from "@/lib/orders/return-window";
 import { ORDER_STATUS } from "@/lib/orders/status";
-import { notifySellerOfReturnRequest } from "@/lib/support/notify-seller";
+import {
+  notifySellerOfAutoApprovedReturn,
+  notifySellerOfReturnRequest,
+} from "@/lib/support/notify-seller";
 import { orderTrackingUrl } from "@/lib/storefront/url";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -29,6 +36,16 @@ const OPEN_RETURN_STATUSES = new Set<string>([
 
 export function returnSlipUrl(orderRef: string): string {
   return `${orderTrackingUrl(orderRef)}/return-slip`;
+}
+
+export function buyerReturnApprovedMessage(orderRef: string): string {
+  return [
+    `Your return for order ${orderRef} has been approved.`,
+    "",
+    `Please print your return slip: ${returnSlipUrl(orderRef)}`,
+    "",
+    "You're responsible for return postage — the slip has the return address.",
+  ].join("\n");
 }
 
 export function buyerReturnRequestedMessage(params: {
@@ -159,6 +176,14 @@ export type RequestReturnOutcome =
       reason: ReturnReason;
       detail: string | null;
     }
+  | {
+      action: "auto_approved";
+      orderId: string;
+      orderRef: string;
+      reason: ReturnReason;
+      detail: string | null;
+      slipUrl: string;
+    }
   | { action: "already_requested"; orderId: string; orderRef: string; status: string }
   | { action: "not_delivered"; orderId: string; orderRef: string; status: string }
   | { action: "invalid_reason" }
@@ -206,14 +231,26 @@ export async function requestReturn(
     };
   }
 
+  const autoApprove = await shouldAutoApproveCoolingOff(supabase, {
+    orderId,
+    businessId: row.business_id,
+    reason: parsed,
+  });
+
   const now = new Date().toISOString();
+  const nextStatus = autoApprove
+    ? ORDER_STATUS.RETURN_APPROVED
+    : ORDER_STATUS.RETURN_REQUESTED;
+
   const { data: updated, error: updateError } = await supabase
     .from("orders")
     .update({
-      status: ORDER_STATUS.RETURN_REQUESTED,
+      status: nextStatus,
       return_reason: parsed,
       return_reason_detail: detailText,
       return_requested_at: now,
+      return_decided_at: autoApprove ? now : null,
+      return_auto_approved: autoApprove,
     })
     .eq("id", orderId)
     .eq("status", ORDER_STATUS.DELIVERED)
@@ -248,8 +285,30 @@ export async function requestReturn(
     order_id: orderId,
     business_id: row.business_id,
     from_status: ORDER_STATUS.DELIVERED,
-    to_status: ORDER_STATUS.RETURN_REQUESTED,
+    to_status: nextStatus,
   });
+
+  if (autoApprove) {
+    await notifySellerOfAutoApprovedReturn({
+      businessId: row.business_id,
+      orderRef: row.order_ref,
+      supabase,
+    });
+    await sendBuyerWhatsApp({
+      businessId: row.business_id,
+      customerId: row.customer_id,
+      threadId: row.thread_id,
+      text: buyerReturnApprovedMessage(row.order_ref),
+    });
+    return {
+      action: "auto_approved",
+      orderId: row.id,
+      orderRef: row.order_ref,
+      reason: parsed,
+      detail: detailText,
+      slipUrl: returnSlipUrl(row.order_ref),
+    };
+  }
 
   await notifySellerOfReturnRequest({
     businessId: row.business_id,
@@ -338,13 +397,7 @@ export async function decideReturn(
   const slipUrl = returnSlipUrl(order.order_ref as string);
   const text =
     decision === "approve"
-      ? [
-          `Your return for order ${order.order_ref} has been approved.`,
-          "",
-          `Please print your return slip: ${slipUrl}`,
-          "",
-          "You're responsible for return postage — the slip has the return address.",
-        ].join("\n")
+      ? buyerReturnApprovedMessage(order.order_ref as string)
       : await declineBuyerMessage(
           supabase,
           order.business_id as string,
@@ -435,6 +488,33 @@ export async function markReturned(
     orderId,
     orderRef: order.order_ref as string,
   };
+}
+
+async function shouldAutoApproveCoolingOff(
+  supabase: SupabaseClient,
+  params: { orderId: string; businessId: string; reason: ReturnReason },
+): Promise<boolean> {
+  if (params.reason !== "changed_mind") return false;
+
+  const [{ data: business }, { data: delivered }] = await Promise.all([
+    supabase
+      .from("businesses")
+      .select("return_window_days")
+      .eq("id", params.businessId)
+      .maybeSingle(),
+    supabase
+      .from("order_status_history")
+      .select("changed_at")
+      .eq("order_id", params.orderId)
+      .eq("to_status", ORDER_STATUS.DELIVERED)
+      .order("changed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  if (!delivered?.changed_at) return false;
+  const windowDays = parseReturnWindowDays(business?.return_window_days);
+  return isWithinReturnWindow(new Date(delivered.changed_at as string), windowDays);
 }
 
 async function declineBuyerMessage(

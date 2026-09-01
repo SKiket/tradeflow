@@ -39,7 +39,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, customers(id, phone_e164, name)",
+      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
     .maybeSingle();
@@ -102,6 +102,11 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
             {order.order_ref as string}
           </h1>
           <StatusBadge status={order.status as string} />
+          {order.return_auto_approved ? (
+            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-950">
+              Auto-approved — statutory cooling-off right
+            </span>
+          ) : null}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
           Placed {formatDateTime(order.created_at as string)}
@@ -153,6 +158,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
         returnReason={(order.return_reason as string | null) ?? null}
         returnReasonDetail={(order.return_reason_detail as string | null) ?? null}
         returnNotes={(order.return_notes as string | null) ?? null}
+        returnAutoApproved={Boolean(order.return_auto_approved)}
       />
 
       <section className="space-y-3">

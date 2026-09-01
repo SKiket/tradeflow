@@ -13,9 +13,18 @@ export function RequestReturnForm({ orderRef }: { orderRef: string }) {
   const [detail, setDetail] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  const [done, setDone] = useState<"requested" | "auto_approved" | false>(false);
 
-  if (done) {
+  if (done === "auto_approved") {
+    return (
+      <p className="mt-3 text-sm text-zinc-700">
+        Return approved for {orderRef}. Print your return slip — you arrange
+        and pay return postage.
+      </p>
+    );
+  }
+
+  if (done === "requested") {
     return (
       <p className="mt-3 text-sm text-zinc-700">
         Return requested for {orderRef}. We&apos;ll let you know once the seller
@@ -47,11 +56,14 @@ export function RequestReturnForm({ orderRef }: { orderRef: string }) {
             const json = (await response.json().catch(() => ({}))) as {
               ok?: boolean;
               error?: string;
+              action?: string;
             };
             if (!response.ok || json.ok === false) {
               throw new Error(json.error || `Request failed (${response.status})`);
             }
-            setDone(true);
+            setDone(
+              json.action === "auto_approved" ? "auto_approved" : "requested",
+            );
           } catch (caught) {
             setError(caught instanceof Error ? caught.message : String(caught));
           } finally {
