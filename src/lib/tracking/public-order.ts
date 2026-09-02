@@ -2,6 +2,7 @@ import { cache } from "react";
 
 import { parseAccentHex } from "@/lib/brand/accent";
 import { unwrapRelation } from "@/lib/orders/display";
+import type { OrderStatus } from "@/lib/orders/status";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import { carrierTrackingUrl } from "./carrier";
@@ -28,7 +29,7 @@ export type PublicTrackingShipment = {
 
 export type PublicTrackingOrder = {
   orderRef: string;
-  status: string;
+  status: OrderStatus;
   createdAt: string;
   totalPence: number;
   refundedAmountPence: number;
@@ -146,7 +147,7 @@ export const fetchPublicTrackingOrder = cache(
 
     return {
       orderRef: order.order_ref as string,
-      status: order.status as string,
+      status: order.status as OrderStatus,
       createdAt: order.created_at as string,
       totalPence: order.total_pence as number,
       refundedAmountPence: (order.refunded_amount_pence as number) ?? 0,
