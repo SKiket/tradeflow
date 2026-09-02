@@ -175,12 +175,14 @@ async function ensureUser(email, password) {
 
 async function deleteProducts(ids) {
   if (!ids.length) return;
+  await admin.from("product_images").delete().in("product_id", ids);
   await admin.from("product_variants").delete().in("product_id", ids);
   await admin.from("products").delete().in("id", ids);
 }
 
 async function deleteBusinesses(ids) {
   if (!ids.length) return;
+  await admin.from("product_images").delete().in("business_id", ids);
   await admin.from("product_variants").delete().in("business_id", ids);
   await admin.from("products").delete().in("business_id", ids);
   await admin.from("businesses").delete().in("id", ids);

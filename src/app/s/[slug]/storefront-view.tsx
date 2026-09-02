@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Package, RotateCcw, ShieldCheck } from "lucide-react";
 
@@ -293,6 +293,87 @@ function ProductPhoto({ src }: { src: string | null }) {
   );
 }
 
+function ProductGallery({ urls }: { urls: string[] }) {
+  const [index, setIndex] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const touchStartX = useRef(0);
+  const current = urls[index] ?? urls[0] ?? "";
+  const showPhoto = Boolean(current) && !failed;
+
+  function goTo(next: number) {
+    if (urls.length === 0) return;
+    const wrapped = (next + urls.length) % urls.length;
+    setIndex(wrapped);
+    setFailed(false);
+  }
+
+  return (
+    <div
+      className="tf-product-slot relative aspect-[4/3] overflow-hidden"
+      data-product-gallery=""
+      data-gallery-count={urls.length}
+      onTouchStart={(event) => {
+        touchStartX.current = event.changedTouches[0]?.clientX ?? 0;
+      }}
+      onTouchEnd={(event) => {
+        const endX = event.changedTouches[0]?.clientX ?? touchStartX.current;
+        const delta = endX - touchStartX.current;
+        if (delta > 40) goTo(index - 1);
+        else if (delta < -40) goTo(index + 1);
+      }}
+    >
+      {showPhoto ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={current}
+          alt=""
+          className="h-full w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center">
+          <NodesRingMotif />
+        </div>
+      )}
+
+      <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 bg-gradient-to-t from-black/45 to-transparent px-2 pb-2 pt-8">
+        <div className="flex justify-center gap-1.5">
+          {urls.map((url, i) => (
+            <button
+              key={`${url}-${i}`}
+              type="button"
+              aria-label={`Show photo ${i + 1}`}
+              aria-current={i === index ? true : undefined}
+              className={`h-1.5 rounded-full transition-all ${
+                i === index
+                  ? "w-4 bg-white"
+                  : "w-1.5 bg-white/60 hover:bg-white/80"
+              }`}
+              onClick={() => goTo(i)}
+            />
+          ))}
+        </div>
+        <div className="flex justify-center gap-1.5 overflow-x-auto">
+          {urls.map((url, i) => (
+            <button
+              key={`thumb-${url}-${i}`}
+              type="button"
+              aria-label={`Photo ${i + 1}`}
+              className={`size-10 shrink-0 overflow-hidden rounded-md border-2 ${
+                i === index ? "border-white" : "border-white/40"
+              }`}
+              onClick={() => goTo(i)}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt="" className="h-full w-full object-cover" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProductCard({
   product,
 }: {
@@ -308,7 +389,11 @@ function ProductCard({
 
   return (
     <article className="scroll-mb-28 overflow-hidden rounded-[16px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] shadow-sm">
-      <ProductPhoto src={product.photoUrl} />
+      {product.imageUrls.length >= 2 ? (
+        <ProductGallery urls={product.imageUrls} />
+      ) : (
+        <ProductPhoto src={product.photoUrl} />
+      )}
       <div className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 space-y-1.5">

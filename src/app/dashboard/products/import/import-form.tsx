@@ -124,7 +124,8 @@ export function CatalogImportForm() {
           </li>
           <li>
             <code className="rounded bg-muted px-1">photo_url</code> — optional
-            http(s) URL (no file upload in bulk import)
+            http(s) URL (no file upload in bulk import). Multiple photos are
+            added later in the product editor, not as extra CSV columns.
           </li>
           <li>
             <code className="rounded bg-muted px-1">active</code> — yes or no,

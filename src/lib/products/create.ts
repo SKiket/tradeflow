@@ -73,6 +73,7 @@ export async function createProductWithVariants(
       if (variantError) throw new Error(variantError.message);
     }
   } catch (caught) {
+    await supabase.from("product_images").delete().eq("product_id", productId);
     await supabase.from("product_variants").delete().eq("product_id", productId);
     await supabase.from("products").delete().eq("id", productId);
     throw caught;
@@ -98,6 +99,7 @@ export async function createCatalogProducts(
     return { productIds };
   } catch (caught) {
     for (const id of productIds.reverse()) {
+      await supabase.from("product_images").delete().eq("product_id", id);
       await supabase.from("product_variants").delete().eq("product_id", id);
       await supabase.from("products").delete().eq("id", id);
     }

@@ -6,10 +6,18 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ImageUpload } from "@/components/upload/image-upload";
+import {
+  ProductGalleryUpload,
+  type GalleryDraft,
+} from "@/components/upload/product-gallery-upload";
 import { poundsToPence, penceToPoundsInput } from "@/lib/orders/display";
 import { createProductWithVariants } from "@/lib/products/create";
-import { PRODUCT_IMAGES_BUCKET } from "@/lib/storage/upload";
+import {
+  coverImageUrl,
+  replaceProductGallery,
+  sortProductImages,
+  type ProductImageRow,
+} from "@/lib/products/images";
 import { createClient } from "@/lib/supabase/client";
 
 export type ProductFormVariant = {
@@ -27,6 +35,7 @@ export type ProductFormValues = {
   description: string | null;
   price_pence: number;
   photo_url: string | null;
+  images: ProductImageRow[];
   active: boolean;
   variants: ProductFormVariant[];
 };
@@ -82,9 +91,18 @@ export function ProductForm({
   const [price, setPrice] = useState(
     product ? penceToPoundsInput(product.price_pence) : "",
   );
-  const [photoUrl, setPhotoUrl] = useState<string | null>(
-    product?.photo_url ?? null,
-  );
+  const [images, setImages] = useState<GalleryDraft[]>(() => {
+    if (product?.images?.length) {
+      return sortProductImages(product.images).map((image) => ({
+        clientId: image.id,
+        url: image.image_url,
+      }));
+    }
+    if (product?.photo_url) {
+      return [{ clientId: "cover-fallback", url: product.photo_url }];
+    }
+    return [];
+  });
   const [photoUploading, setPhotoUploading] = useState(false);
   const [active, setActive] = useState(product?.active ?? true);
   const [variants, setVariants] = useState<VariantDraft[]>(() => {
@@ -148,7 +166,7 @@ export function ProductForm({
 
     setPending(true);
     const supabase = createClient();
-    const photo = photoUrl?.trim() || null;
+    const photo = coverImageUrl(images.map((image) => image.url));
     const desc = description.trim();
 
     try {
@@ -192,6 +210,12 @@ export function ProductForm({
       }
 
       if (!productId) throw new Error("Product was not saved.");
+
+      await replaceProductGallery(supabase, {
+        productId,
+        businessId,
+        imageUrls: images.map((image) => image.url),
+      });
 
       if (isEdit) {
         for (const variant of variants) {
@@ -284,14 +308,10 @@ export function ProductForm({
             className="max-w-xs"
           />
         </div>
-        <ImageUpload
-          label="Photo"
-          hint="JPEG, PNG, WebP, or GIF. Maximum 5 MB."
-          value={photoUrl}
-          onChange={setPhotoUrl}
+        <ProductGalleryUpload
+          images={images}
+          onChange={setImages}
           businessId={businessId}
-          bucket={PRODUCT_IMAGES_BUCKET}
-          prefix="product"
           disabled={pending}
           onUploadingChange={setPhotoUploading}
         />

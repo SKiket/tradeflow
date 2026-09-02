@@ -16,7 +16,7 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
   const { data: product } = await supabase
     .from("products")
     .select(
-      "id, name, description, price_pence, photo_url, active, product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory, weight_grams)",
+      "id, name, description, price_pence, photo_url, active, product_images(id, image_url, sort_order), product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory, weight_grams)",
     )
     .eq("id", productId)
     .eq("business_id", businessId)
@@ -30,12 +30,23 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
       ? [product.product_variants]
       : [];
 
+  const images = Array.isArray(product.product_images)
+    ? product.product_images
+    : product.product_images
+      ? [product.product_images]
+      : [];
+
   const values: ProductFormValues = {
     id: product.id as string,
     name: product.name as string,
     description: (product.description as string | null) ?? null,
     price_pence: product.price_pence as number,
     photo_url: (product.photo_url as string | null) ?? null,
+    images: images.map((image) => ({
+      id: image.id as string,
+      image_url: image.image_url as string,
+      sort_order: image.sort_order as number,
+    })),
     active: product.active as boolean,
     variants: variants.map((variant) => ({
       id: variant.id as string,

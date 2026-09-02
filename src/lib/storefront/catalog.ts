@@ -24,6 +24,8 @@ export type PublicStorefrontProduct = {
   description: string | null;
   pricePence: number;
   photoUrl: string | null;
+  /** Ordered gallery. Storefront cards only carousel when this has 2+ URLs. */
+  imageUrls: string[];
   variants: PublicStorefrontVariant[];
 };
 
@@ -107,7 +109,7 @@ export const fetchPublicStorefront = cache(
     const { data: productRows, error: productError } = await supabase
       .from("products")
       .select(
-        "name, description, price_pence, photo_url, product_variants(id, label, deleted_at, track_inventory, stock_quantity, reserved_quantity, low_stock_threshold)",
+        "name, description, price_pence, photo_url, product_images(image_url, sort_order), product_variants(id, label, deleted_at, track_inventory, stock_quantity, reserved_quantity, low_stock_threshold)",
       )
       .eq("business_id", business.id)
       .eq("active", true)
@@ -136,11 +138,21 @@ export const fetchPublicStorefront = cache(
           };
         });
       if (variants.length === 0) continue;
+      const gallery = (
+        (row.product_images as
+          | { image_url: string; sort_order: number }[]
+          | null) ?? []
+      )
+        .slice()
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((image) => image.image_url)
+        .filter((url) => Boolean(url?.trim()));
       products.push({
         name,
         description: (row.description as string | null) ?? null,
         pricePence: row.price_pence as number,
         photoUrl: (row.photo_url as string | null) ?? null,
+        imageUrls: gallery,
         variants,
       });
     }
