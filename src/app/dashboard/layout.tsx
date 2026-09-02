@@ -1,12 +1,14 @@
 import Link from "next/link";
 
 import { LegalLinks } from "@/components/brand/legal-links";
+import { fetchSetupProgress } from "@/lib/dashboard/setup-progress";
 import { canAcceptOrders, ordersPausedBanner } from "@/lib/stripe/billing-gate";
 
 import { BillingPausedBanner } from "./billing-paused-banner";
 import { BusinessSwitcher } from "./business-switcher";
 import { DashboardNav } from "./dashboard-nav";
 import { requireSeller } from "./require-seller";
+import { SetupChecklist } from "./setup-checklist";
 import { SignOutButton } from "./sign-out-button";
 
 export default async function DashboardLayout({
@@ -14,7 +16,8 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { business, businesses } = await requireSeller();
+  const { supabase, business, businesses } = await requireSeller();
+  const setupProgress = await fetchSetupProgress(supabase, business.id);
 
   const takingOrders = canAcceptOrders({
     stripe_subscription_status:
@@ -86,7 +89,10 @@ export default async function DashboardLayout({
             hasCustomer={Boolean(business.stripe_customer_id)}
           />
         ) : null}
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        <main className="flex-1 p-4 md:p-6">
+          {setupProgress ? <SetupChecklist progress={setupProgress} /> : null}
+          {children}
+        </main>
         <LegalLinks
           className="border-t px-4 py-3 text-center text-[11px] text-muted-foreground md:hidden"
           linkClassName="underline-offset-2 hover:underline"

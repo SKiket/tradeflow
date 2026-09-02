@@ -158,6 +158,27 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
     }
   }
 
+  async function openStripeConnect() {
+    setError(null);
+    setSuccess(null);
+    setBillingPending(true);
+    try {
+      const response = await fetch("/api/onboarding/stripe-connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "dashboard" }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.url) {
+        throw new Error(result.error ?? "Could not start Stripe setup.");
+      }
+      window.location.href = result.url;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setBillingPending(false);
+    }
+  }
+
   async function openBilling(kind: "trial" | "portal") {
     setError(null);
     setSuccess(null);
@@ -182,7 +203,10 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
   return (
     <div className="space-y-8">
       <form onSubmit={handleSubmit} className="space-y-6">
-        <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
+        <section
+          id="storefront"
+          className="scroll-mt-24 space-y-3 rounded-xl border bg-muted/20 p-4"
+        >
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             Storefront
           </h2>
@@ -288,7 +312,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
               Used when answering buyer questions over WhatsApp.
             </p>
           </div>
-          <div className="space-y-1">
+          <div id="returns" className="scroll-mt-24 space-y-1">
             <Label htmlFor="returns-policy">Returns policy</Label>
             <textarea
               id="returns-policy"
@@ -360,7 +384,10 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
         </Button>
       </form>
 
-      <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
+      <section
+        id="stripe"
+        className="scroll-mt-24 space-y-3 rounded-xl border bg-muted/20 p-4"
+      >
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Stripe
         </h2>
@@ -389,6 +416,19 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
           This is how buyers pay you. TradeFlow billing (your £10/month
           subscription) is separate, below.
         </p>
+        {!business.stripe_charges_enabled ? (
+          <Button
+            type="button"
+            disabled={billingPending}
+            onClick={() => openStripeConnect()}
+          >
+            {billingPending
+              ? "Opening Stripe…"
+              : business.stripe_connected_account_id
+                ? "Continue Stripe setup"
+                : "Connect Stripe"}
+          </Button>
+        ) : null}
       </section>
 
       <section
@@ -420,7 +460,10 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
         )}
       </section>
 
-      <section className="space-y-3 rounded-xl border bg-muted/20 p-4">
+      <section
+        id="whatsapp"
+        className="scroll-mt-24 space-y-3 rounded-xl border bg-muted/20 p-4"
+      >
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           WhatsApp
         </h2>

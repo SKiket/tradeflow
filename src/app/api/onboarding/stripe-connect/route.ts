@@ -27,11 +27,13 @@ export async function POST(request: NextRequest) {
   }
 
   let addingAnother = false;
+  let fromDashboard = false;
   try {
     const raw = await request.text();
     if (raw.trim()) {
-      const body = JSON.parse(raw) as { add?: unknown };
+      const body = JSON.parse(raw) as { add?: unknown; source?: unknown };
       addingAnother = body.add === true;
+      fromDashboard = body.source === "dashboard";
     }
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
@@ -77,10 +79,15 @@ export async function POST(request: NextRequest) {
 
     const origin = new URL(request.url).origin;
     const extra = addingAnother ? "&add=1" : "";
+    const dashboardSettings = `${origin}/dashboard/settings#stripe`;
     const url = await createAccountOnboardingLink({
       connectedAccountId,
-      refreshUrl: `${origin}/onboarding?step=C${extra}`,
-      returnUrl: `${origin}/onboarding?step=D${extra}`,
+      refreshUrl: fromDashboard
+        ? dashboardSettings
+        : `${origin}/onboarding?step=C${extra}`,
+      returnUrl: fromDashboard
+        ? dashboardSettings
+        : `${origin}/onboarding?step=D${extra}`,
     });
 
     return NextResponse.json({ url, connectedAccountId });
