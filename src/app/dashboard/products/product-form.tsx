@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ImageUpload } from "@/components/upload/image-upload";
 import { poundsToPence, penceToPoundsInput } from "@/lib/orders/display";
+import { createProductWithVariants } from "@/lib/products/create";
 import { PRODUCT_IMAGES_BUCKET } from "@/lib/storage/upload";
 import { createClient } from "@/lib/supabase/client";
 
@@ -166,62 +167,72 @@ export function ProductForm({
           .eq("id", productId);
         if (updateError) throw new Error(updateError.message);
       } else {
-        const { data: inserted, error: insertError } = await supabase
-          .from("products")
-          .insert({
-            business_id: businessId,
-            name: trimmedName,
-            description: desc || null,
-            price_pence: pricePence,
-            photo_url: photo,
-            active,
-          })
-          .select("id")
-          .single();
-        if (insertError) throw new Error(insertError.message);
-        productId = inserted.id as string;
+        const variantsToCreate = variants
+          .filter((variant) => !variant.removed)
+          .map((variant) => ({
+            label: variant.label.trim() || null,
+            stock_quantity: Math.max(0, parseIntField(variant.stockQuantity, 0)),
+            low_stock_threshold: Math.max(
+              0,
+              parseIntField(variant.lowStockThreshold, 5),
+            ),
+            track_inventory: variant.trackInventory,
+            weight_grams: weightByClientId.get(variant.clientId) ?? 200,
+          }));
+        const created = await createProductWithVariants(supabase, {
+          businessId,
+          name: trimmedName,
+          description: desc || null,
+          price_pence: pricePence,
+          photo_url: photo,
+          active,
+          variants: variantsToCreate,
+        });
+        productId = created.productId;
       }
 
       if (!productId) throw new Error("Product was not saved.");
 
-      for (const variant of variants) {
-        if (variant.removed && variant.id) {
-          const { error: deleteError } = await supabase
-            .from("product_variants")
-            .update({ deleted_at: new Date().toISOString() })
-            .eq("id", variant.id);
-          if (deleteError) throw new Error(deleteError.message);
-          continue;
-        }
-        if (variant.removed || !productId) continue;
+      if (isEdit) {
+        for (const variant of variants) {
+          if (variant.removed && variant.id) {
+            const { error: deleteError } = await supabase
+              .from("product_variants")
+              .update({ deleted_at: new Date().toISOString() })
+              .eq("id", variant.id);
+            if (deleteError) throw new Error(deleteError.message);
+            continue;
+          }
+          if (variant.removed || !productId) continue;
 
-        const payload = {
-          label: variant.label.trim() || null,
-          stock_quantity: Math.max(0, parseIntField(variant.stockQuantity, 0)),
-          low_stock_threshold: Math.max(
-            0,
-            parseIntField(variant.lowStockThreshold, 5),
-          ),
-          track_inventory: variant.trackInventory,
-          weight_grams: weightByClientId.get(variant.clientId) ?? 200,
-        };
+          const payload = {
+            label: variant.label.trim() || null,
+            stock_quantity: Math.max(0, parseIntField(variant.stockQuantity, 0)),
+            low_stock_threshold: Math.max(
+              0,
+              parseIntField(variant.lowStockThreshold, 5),
+            ),
+            track_inventory: variant.trackInventory,
+            weight_grams: weightByClientId.get(variant.clientId) ?? 200,
+          };
 
-        if (variant.id) {
-          const { error: variantUpdateError } = await supabase
-            .from("product_variants")
-            .update(payload)
-            .eq("id", variant.id);
-          if (variantUpdateError) throw new Error(variantUpdateError.message);
-        } else {
-          const { error: variantInsertError } = await supabase
-            .from("product_variants")
-            .insert({
-              ...payload,
-              product_id: productId,
-              business_id: businessId,
-              reserved_quantity: 0,
-            });
-          if (variantInsertError) throw new Error(variantInsertError.message);
+          if (variant.id) {
+            const { error: variantUpdateError } = await supabase
+              .from("product_variants")
+              .update(payload)
+              .eq("id", variant.id);
+            if (variantUpdateError) throw new Error(variantUpdateError.message);
+          } else {
+            const { error: variantInsertError } = await supabase
+              .from("product_variants")
+              .insert({
+                ...payload,
+                product_id: productId,
+                business_id: businessId,
+                reserved_quantity: 0,
+              });
+            if (variantInsertError) throw new Error(variantInsertError.message);
+          }
         }
       }
 

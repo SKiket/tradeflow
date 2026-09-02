@@ -63,12 +63,20 @@ export default async function ProductsPage() {
               : `${products.length} product${products.length === 1 ? "" : "s"}.`}
           </p>
         </div>
-        <Link
-          href="/dashboard/products/new"
-          className="inline-flex h-8 items-center rounded-lg bg-tradeflow-cta px-3 text-sm font-medium text-tradeflow-cta-text hover:bg-tradeflow-cta-hover"
-        >
-          Add product
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/dashboard/products/import"
+            className="inline-flex h-8 items-center rounded-lg border px-3 text-sm font-medium hover:bg-muted"
+          >
+            Import CSV
+          </Link>
+          <Link
+            href="/dashboard/products/new"
+            className="inline-flex h-8 items-center rounded-lg bg-tradeflow-cta px-3 text-sm font-medium text-tradeflow-cta-text hover:bg-tradeflow-cta-hover"
+          >
+            Add product
+          </Link>
+        </div>
       </div>
       <ProductsList products={products} />
     </div>

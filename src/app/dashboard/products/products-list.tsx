@@ -38,12 +38,20 @@ export function ProductsList({ products }: { products: ProductListRow[] }) {
           Add what you sell so customers can order over WhatsApp. Nothing
           shows in the catalogue until you create your first product.
         </p>
-        <Link
-          href="/dashboard/products/new"
-          className="mt-4 inline-flex h-8 items-center rounded-lg bg-tradeflow-cta px-3 text-sm font-medium text-tradeflow-cta-text hover:bg-tradeflow-cta-hover"
-        >
-          Add product
-        </Link>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <Link
+            href="/dashboard/products/import"
+            className="inline-flex h-8 items-center rounded-lg border px-3 text-sm font-medium hover:bg-muted"
+          >
+            Import CSV
+          </Link>
+          <Link
+            href="/dashboard/products/new"
+            className="inline-flex h-8 items-center rounded-lg bg-tradeflow-cta px-3 text-sm font-medium text-tradeflow-cta-text hover:bg-tradeflow-cta-hover"
+          >
+            Add product
+          </Link>
+        </div>
       </div>
     );
   }
