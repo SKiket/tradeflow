@@ -22,10 +22,14 @@ type FormData = {
 
 const STEPS: OnboardingStep[] = ["A", "B", "C", "D"];
 
+const ONBOARDING_BUSINESS_KEY = "tf_onboarding_business_id";
+
 export function OnboardingWizard({
   initialStep = "A",
+  addingAnother = false,
 }: {
   initialStep?: OnboardingStep;
+  addingAnother?: boolean;
 }) {
   const router = useRouter();
   const [step, setStep] = useState<OnboardingStep>(initialStep);
@@ -56,6 +60,12 @@ export function OnboardingWizard({
     setSlugAvailable(result.available === true);
     setSlugChecking(false);
   }, []);
+
+  useEffect(() => {
+    if (initialStep === "A") {
+      sessionStorage.removeItem(ONBOARDING_BUSINESS_KEY);
+    }
+  }, [initialStep]);
 
   useEffect(() => {
     if (step !== "A" || !form.slug) return;
@@ -115,9 +125,34 @@ export function OnboardingWizard({
     }
   }
 
-  // Idempotently creates the business row for the signed-in user. Returns true
-  // once a row exists (either freshly created here or already present).
+  async function setActiveBusiness(businessId: string): Promise<boolean> {
+    const response = await fetch("/api/dashboard/active-business", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ businessId }),
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      setError(
+        typeof result.error === "string"
+          ? result.error
+          : "Could not select this shop.",
+      );
+      return false;
+    }
+    return true;
+  }
+
+  // Creates the business row for this wizard session. First-time sign-up
+  // reuses an existing row if the user already has one (retry-safe). Adding
+  // another shop always inserts a new row, using sessionStorage so a Stripe
+  // round-trip does not create a third shop.
   async function ensureBusiness(): Promise<boolean> {
+    const storedId = sessionStorage.getItem(ONBOARDING_BUSINESS_KEY);
+    if (storedId) {
+      return setActiveBusiness(storedId);
+    }
+
     const supabase = createClient();
     const {
       data: { user },
@@ -129,30 +164,50 @@ export function OnboardingWizard({
       return false;
     }
 
-    const { data: existing } = await supabase
-      .from("businesses")
-      .select("id")
-      .eq("owner_user_id", user.id)
-      .is("deleted_at", null)
-      .maybeSingle();
+    if (!addingAnother) {
+      const { data: existing } = await supabase
+        .from("businesses")
+        .select("id")
+        .eq("owner_user_id", user.id)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (existing) return true;
+      if (existing) {
+        sessionStorage.setItem(ONBOARDING_BUSINESS_KEY, existing.id as string);
+        return setActiveBusiness(existing.id as string);
+      }
+    }
 
-    const { error: insertError } = await supabase.from("businesses").insert({
-      owner_user_id: user.id,
-      name: form.name.trim(),
-      slug: form.slug.trim(),
-      dispatch_address_line1: form.dispatch_address_line1.trim(),
-      dispatch_city: form.dispatch_city.trim(),
-      dispatch_postcode: form.dispatch_postcode.trim(),
-    });
-
-    if (insertError) {
-      setError(insertError.message);
+    const name = form.name.trim();
+    const slug = form.slug.trim();
+    if (!name || !slug) {
+      setError("Enter a business name and slug first.");
+      setStep("A");
       return false;
     }
 
-    return true;
+    const { data: created, error: insertError } = await supabase
+      .from("businesses")
+      .insert({
+        owner_user_id: user.id,
+        name,
+        slug,
+        dispatch_address_line1: form.dispatch_address_line1.trim(),
+        dispatch_city: form.dispatch_city.trim(),
+        dispatch_postcode: form.dispatch_postcode.trim(),
+      })
+      .select("id")
+      .single();
+
+    if (insertError || !created) {
+      setError(insertError?.message ?? "Could not create this shop.");
+      return false;
+    }
+
+    sessionStorage.setItem(ONBOARDING_BUSINESS_KEY, created.id as string);
+    return setActiveBusiness(created.id as string);
   }
 
   // Persists the business (if needed) then redirects into Stripe's hosted
@@ -168,6 +223,8 @@ export function OnboardingWizard({
 
     const response = await fetch("/api/onboarding/stripe-connect", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ add: addingAnother }),
     });
     const result = await response.json();
 
@@ -212,8 +269,15 @@ export function OnboardingWizard({
           Step {stepIndex} of {STEPS.length}
         </p>
         <h1 className="text-2xl font-semibold tracking-tight">
-          Set up your business
+          {addingAnother ? "Add another shop" : "Set up your business"}
         </h1>
+        {addingAnother ? (
+          <p className="text-sm text-muted-foreground">
+            <a href="/dashboard/orders" className="underline-offset-4 hover:underline">
+              Back to dashboard
+            </a>
+          </p>
+        ) : null}
       </div>
 
       {step === "A" && (

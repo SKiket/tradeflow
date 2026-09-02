@@ -49,12 +49,14 @@ function previewText(value: string | null): string {
  */
 export async function listInboxThreads(
   supabase: SupabaseClient,
+  businessId: string,
 ): Promise<InboxThreadSummary[]> {
   const { data: rows, error } = await supabase
     .from("messages")
     .select(
       "id, thread_id, customer_id, direction, normalised_text, ai_parse_result, created_at, customers(phone_e164, name, ai_paused_until)",
     )
+    .eq("business_id", businessId)
     .not("thread_id", "is", null)
     .is("deleted_at", null)
     .order("created_at", { ascending: false })
@@ -130,6 +132,7 @@ export async function listInboxThreads(
     const { data: orders, error: orderError } = await supabase
       .from("orders")
       .select("thread_id, status")
+      .eq("business_id", businessId)
       .in("thread_id", threadIds)
       .is("deleted_at", null);
     if (orderError) throw new Error(orderError.message);

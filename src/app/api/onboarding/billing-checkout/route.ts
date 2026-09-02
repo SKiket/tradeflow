@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireUser } from "@/lib/api/auth";
+import { resolveActiveOwnedBusiness } from "@/lib/auth/active-business";
 import {
   createSellerSubscriptionCheckout,
   getOrCreateSellerCustomer,
@@ -19,15 +20,13 @@ export async function POST(request: NextRequest) {
   }
 
   const { user, supabase } = auth;
-  const { data: business, error: businessError } = await supabase
-    .from("businesses")
-    .select("id, name, stripe_customer_id, stripe_subscription_status")
-    .eq("owner_user_id", user.id)
-    .is("deleted_at", null)
-    .maybeSingle();
+  const { business, error: businessError } = await resolveActiveOwnedBusiness(
+    supabase,
+    user.id,
+  );
 
   if (businessError) {
-    return NextResponse.json({ error: businessError.message }, { status: 500 });
+    return NextResponse.json({ error: businessError }, { status: 500 });
   }
   if (!business) {
     return NextResponse.json(

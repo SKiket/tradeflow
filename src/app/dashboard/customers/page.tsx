@@ -54,10 +54,14 @@ export default async function CustomersPage({
     { data: orderRows, error: ordersError },
     { facts, error: factsError },
   ] = await Promise.all([
-    supabase.from("customers").select("id, name, phone_e164, tags, created_at"),
+    supabase
+      .from("customers")
+      .select("id, name, phone_e164, tags, created_at")
+      .eq("business_id", businessId),
     supabase
       .from("orders")
-      .select("customer_id, status, total_pence, refunded_amount_pence, created_at"),
+      .select("customer_id, status, total_pence, refunded_amount_pence, created_at")
+      .eq("business_id", businessId),
     fetchPaidOrderFacts(supabase, businessId),
   ]);
 

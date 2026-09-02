@@ -1,21 +1,28 @@
-import { createClient } from "@/lib/supabase/server";
+import { cache } from "react";
 import { redirect } from "next/navigation";
 
-export async function requireSeller() {
+import { resolveActiveOwnedBusiness } from "@/lib/auth/active-business";
+import { createClient } from "@/lib/supabase/server";
+
+export const requireSeller = cache(async () => {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: business } = await supabase
-    .from("businesses")
-    .select("id")
-    .eq("owner_user_id", user.id)
-    .is("deleted_at", null)
-    .maybeSingle();
+  const { business, businesses, error } = await resolveActiveOwnedBusiness(
+    supabase,
+    user.id,
+  );
 
-  if (!business) redirect("/onboarding");
+  if (error || !business) redirect("/onboarding");
 
-  return { supabase, user, businessId: business.id as string };
-}
+  return {
+    supabase,
+    user,
+    businessId: business.id,
+    business,
+    businesses,
+  };
+});

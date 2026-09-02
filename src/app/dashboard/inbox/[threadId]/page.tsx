@@ -62,7 +62,7 @@ function formatParse(parse: unknown): {
 
 export default async function InboxThreadPage({ params }: ThreadPageProps) {
   const { threadId } = await params;
-  const { supabase } = await requireSeller();
+  const { supabase, businessId } = await requireSeller();
 
   const { data: messages, error } = await supabase
     .from("messages")
@@ -70,6 +70,7 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
       "id, direction, normalised_text, ai_parse_result, created_at, customer_id, customers(phone_e164, name, last_customer_message_at, ai_paused_until)",
     )
     .eq("thread_id", threadId)
+    .eq("business_id", businessId)
     .is("deleted_at", null)
     .order("created_at", { ascending: true });
 

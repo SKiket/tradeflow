@@ -10,6 +10,7 @@ export function SignOutButton() {
 
   async function handleSignOut() {
     const supabase = createClient();
+    await fetch("/api/dashboard/active-business", { method: "DELETE" });
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();

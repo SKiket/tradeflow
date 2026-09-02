@@ -85,6 +85,7 @@ async function cleanup() {
     .in("slug", slugs);
   if (businesses?.length) {
     const ids = businesses.map((b) => b.id);
+    await admin.from("product_variants").delete().in("business_id", ids);
     await admin.from("products").delete().in("business_id", ids);
     await admin.from("businesses").delete().in("id", ids);
   }

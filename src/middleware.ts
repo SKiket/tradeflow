@@ -30,7 +30,8 @@ export async function middleware(request: NextRequest) {
 
     const destination = await getPostAuthPath(supabase);
     const finishingStep = request.nextUrl.searchParams.get("step");
-    if (destination === "/dashboard" && !finishingStep) {
+    const addingAnother = request.nextUrl.searchParams.get("add") === "1";
+    if (destination === "/dashboard" && !finishingStep && !addingAnother) {
       const dashboardUrl = request.nextUrl.clone();
       dashboardUrl.pathname = "/dashboard";
       return NextResponse.redirect(dashboardUrl);

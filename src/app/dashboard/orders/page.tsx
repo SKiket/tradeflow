@@ -1,15 +1,16 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireSeller } from "../require-seller";
 import { unwrapRelation } from "@/lib/orders/display";
 
 import { OrdersTable, type OrderListRow } from "./orders-table";
 
 export default async function OrdersPage() {
-  const supabase = await createClient();
+  const { supabase, businessId } = await requireSeller();
   const { data, error } = await supabase
     .from("orders")
     .select(
       "id, order_ref, status, total_pence, created_at, customers(phone_e164, name)",
     )
+    .eq("business_id", businessId)
     .order("created_at", { ascending: false });
 
   if (error) {

@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
 import { LegalLinks } from "@/components/brand/legal-links";
 import { canAcceptOrders, ordersPausedBanner } from "@/lib/stripe/billing-gate";
-import { createClient } from "@/lib/supabase/server";
 
 import { BillingPausedBanner } from "./billing-paused-banner";
+import { BusinessSwitcher } from "./business-switcher";
 import { DashboardNav } from "./dashboard-nav";
+import { requireSeller } from "./require-seller";
 import { SignOutButton } from "./sign-out-button";
 
 export default async function DashboardLayout({
@@ -14,21 +14,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect("/login");
-
-  const { data: business } = await supabase
-    .from("businesses")
-    .select("name, stripe_subscription_status, stripe_customer_id, trial_ends_at")
-    .eq("owner_user_id", user.id)
-    .is("deleted_at", null)
-    .maybeSingle();
-
-  if (!business) redirect("/onboarding");
+  const { business, businesses } = await requireSeller();
 
   const takingOrders = canAcceptOrders({
     stripe_subscription_status:
@@ -40,6 +26,11 @@ export default async function DashboardLayout({
         status: (business.stripe_subscription_status as string | null) ?? null,
         trialEndsAt: (business.trial_ends_at as string | null) ?? null,
       });
+
+  const switcherBusinesses = businesses.map((row) => ({
+    id: row.id,
+    name: row.name,
+  }));
 
   return (
     <div
@@ -56,9 +47,11 @@ export default async function DashboardLayout({
               className="h-6 w-auto"
             />
           </Link>
-          <p className="mt-2 truncate text-xs text-sidebar-foreground/70">
-            {business.name}
-          </p>
+          <BusinessSwitcher
+            businesses={switcherBusinesses}
+            activeId={business.id}
+            variant="sidebar"
+          />
         </div>
         <div className="flex-1 p-3">
           <DashboardNav orientation="side" />
@@ -72,7 +65,11 @@ export default async function DashboardLayout({
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between gap-3 border-b px-4 py-3 md:px-6">
           <div className="min-w-0 md:hidden">
-            <p className="truncate text-sm font-semibold">{business.name}</p>
+            <BusinessSwitcher
+              businesses={switcherBusinesses}
+              activeId={business.id}
+              variant="header"
+            />
           </div>
           <p className="hidden truncate text-sm font-medium md:block">
             {business.name}

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireUser } from "@/lib/api/auth";
+import { resolveActiveOwnedBusiness } from "@/lib/auth/active-business";
 import { createSellerBillingPortalSession } from "@/lib/stripe/billing";
 
 /**
@@ -14,15 +15,13 @@ export async function POST(request: NextRequest) {
   }
 
   const { user, supabase } = auth;
-  const { data: business, error: businessError } = await supabase
-    .from("businesses")
-    .select("id, stripe_customer_id")
-    .eq("owner_user_id", user.id)
-    .is("deleted_at", null)
-    .maybeSingle();
+  const { business, error: businessError } = await resolveActiveOwnedBusiness(
+    supabase,
+    user.id,
+  );
 
   if (businessError) {
-    return NextResponse.json({ error: businessError.message }, { status: 500 });
+    return NextResponse.json({ error: businessError }, { status: 500 });
   }
   if (!business) {
     return NextResponse.json({ error: "Business not found." }, { status: 400 });

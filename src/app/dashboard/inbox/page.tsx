@@ -6,11 +6,11 @@ import { requireSeller } from "../require-seller";
 import { InboxList } from "./inbox-list";
 
 export default async function InboxPage() {
-  const { supabase } = await requireSeller();
+  const { supabase, businessId } = await requireSeller();
 
   let threads;
   try {
-    threads = await listInboxThreads(supabase);
+    threads = await listInboxThreads(supabase, businessId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return (

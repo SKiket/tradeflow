@@ -14,6 +14,7 @@ export async function getPostAuthPath(
     .select("id")
     .eq("owner_user_id", user.id)
     .is("deleted_at", null)
+    .limit(1)
     .maybeSingle();
 
   return business ? "/dashboard" : "/onboarding";

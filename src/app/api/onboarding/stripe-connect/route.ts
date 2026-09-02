@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { resolveActiveOwnedBusiness } from "@/lib/auth/active-business";
 import {
   createAccountOnboardingLink,
   createExpressConnectedAccount,
@@ -7,7 +8,8 @@ import {
 import { createClient } from "@/lib/supabase/server";
 
 /**
- * Starts Stripe Connect Express onboarding for the signed-in user's business.
+ * Starts Stripe Connect Express onboarding for the signed-in user's
+ * active business (cookie-selected, falling back to most recent).
  *
  * Creates a connected account (if one does not yet exist), stores its id on
  * businesses.stripe_connected_account_id, then returns a hosted onboarding
@@ -24,15 +26,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data: business, error: businessError } = await supabase
-    .from("businesses")
-    .select("id, stripe_connected_account_id")
-    .eq("owner_user_id", user.id)
-    .is("deleted_at", null)
-    .maybeSingle();
+  let addingAnother = false;
+  try {
+    const raw = await request.text();
+    if (raw.trim()) {
+      const body = JSON.parse(raw) as { add?: unknown };
+      addingAnother = body.add === true;
+    }
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const { business, error: businessError } = await resolveActiveOwnedBusiness(
+    supabase,
+    user.id,
+  );
 
   if (businessError) {
-    return NextResponse.json({ error: businessError.message }, { status: 500 });
+    return NextResponse.json({ error: businessError }, { status: 500 });
   }
   if (!business) {
     return NextResponse.json(
@@ -65,10 +76,11 @@ export async function POST(request: NextRequest) {
     }
 
     const origin = new URL(request.url).origin;
+    const extra = addingAnother ? "&add=1" : "";
     const url = await createAccountOnboardingLink({
       connectedAccountId,
-      refreshUrl: `${origin}/onboarding?step=C`,
-      returnUrl: `${origin}/onboarding?step=D`,
+      refreshUrl: `${origin}/onboarding?step=C${extra}`,
+      returnUrl: `${origin}/onboarding?step=D${extra}`,
     });
 
     return NextResponse.json({ url, connectedAccountId });

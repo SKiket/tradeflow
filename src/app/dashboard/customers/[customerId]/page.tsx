@@ -17,12 +17,13 @@ export default async function CustomerDetailPage({
   params,
 }: CustomerDetailPageProps) {
   const { customerId } = await params;
-  const { supabase } = await requireSeller();
+  const { supabase, businessId } = await requireSeller();
 
   const { data: customer } = await supabase
     .from("customers")
     .select("id, name, phone_e164, notes, tags, broadcast_opt_in")
     .eq("id", customerId)
+    .eq("business_id", businessId)
     .maybeSingle();
 
   if (!customer) notFound();
@@ -33,6 +34,7 @@ export default async function CustomerDetailPage({
       "id, order_ref, status, total_pence, refunded_amount_pence, created_at",
     )
     .eq("customer_id", customerId)
+    .eq("business_id", businessId)
     .order("created_at", { ascending: false });
 
   const lifetime = summarizeCustomerLifetime(

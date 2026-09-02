@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireUser } from "@/lib/api/auth";
+import { resolveActiveOwnedBusiness } from "@/lib/auth/active-business";
 
 interface RouteContext {
   params: Promise<{ threadId: string }>;
@@ -17,14 +18,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   const { threadId } = await context.params;
 
-  const { data: business, error: bizError } = await auth.supabase
-    .from("businesses")
-    .select("id")
-    .eq("owner_user_id", auth.user.id)
-    .is("deleted_at", null)
-    .maybeSingle();
+  const { business, error: bizError } = await resolveActiveOwnedBusiness(
+    auth.supabase,
+    auth.user.id,
+  );
   if (bizError) {
-    return NextResponse.json({ error: bizError.message }, { status: 500 });
+    return NextResponse.json({ error: bizError }, { status: 500 });
   }
   if (!business) {
     return NextResponse.json({ error: "Business not found" }, { status: 404 });

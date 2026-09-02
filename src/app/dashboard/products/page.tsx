@@ -15,12 +15,13 @@ type VariantStockRow = {
 };
 
 export default async function ProductsPage() {
-  const { supabase } = await requireSeller();
+  const { supabase, businessId } = await requireSeller();
   const { data, error } = await supabase
     .from("products")
     .select(
       "id, name, price_pence, active, updated_at, product_variants(id, deleted_at, track_inventory, stock_quantity, reserved_quantity, low_stock_threshold)",
     )
+    .eq("business_id", businessId)
     .is("deleted_at", null)
     .order("updated_at", { ascending: false });
 

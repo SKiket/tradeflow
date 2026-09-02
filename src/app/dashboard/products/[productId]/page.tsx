@@ -19,6 +19,7 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
       "id, name, description, price_pence, photo_url, active, product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory, weight_grams)",
     )
     .eq("id", productId)
+    .eq("business_id", businessId)
     .maybeSingle();
 
   if (!product) notFound();

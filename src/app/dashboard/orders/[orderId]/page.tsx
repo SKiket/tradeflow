@@ -10,8 +10,8 @@ import {
   unwrapRelation,
 } from "@/lib/orders/display";
 import { orderTrackingUrl } from "@/lib/storefront/url";
-import { createClient } from "@/lib/supabase/server";
 
+import { requireSeller } from "../../require-seller";
 import { OrderActions } from "./order-actions";
 
 function shippingLines(value: unknown): string[] {
@@ -34,7 +34,7 @@ type VariantJoin = {
 
 export default async function OrderDetailPage({ params }: OrderDetailPageProps) {
   const { orderId } = await params;
-  const supabase = await createClient();
+  const { supabase, businessId } = await requireSeller();
 
   const { data: order } = await supabase
     .from("orders")
@@ -42,6 +42,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
       "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
+    .eq("business_id", businessId)
     .maybeSingle();
 
   if (!order) notFound();
@@ -53,11 +54,13 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
         "id, quantity, unit_price_pence, product_variants(label, products(name))",
       )
       .eq("order_id", orderId)
+      .eq("business_id", businessId)
       .order("created_at", { ascending: true }),
     supabase
       .from("order_status_history")
       .select("id, from_status, to_status, changed_at")
       .eq("order_id", orderId)
+      .eq("business_id", businessId)
       .order("changed_at", { ascending: true }),
   ]);
 
