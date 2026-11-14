@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { generateSupportReply } from "@/lib/ai/tasks/support-reply";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { withReplyPrefix } from "@/lib/channels/voice-note";
 import {
   buyerReturnAlreadyMessage,
   buyerReturnApprovedMessage,
@@ -50,6 +51,8 @@ export interface HandleSupportParams {
   customerPhoneE164: string;
   threadId: string;
   messageText: string;
+  /** Optional transparency prefix (e.g. voice-note "I heard: … — "). */
+  buyerReplyPrefix?: string | null;
   supabase?: SupabaseClient;
 }
 
@@ -110,6 +113,8 @@ export async function handleQuestionReply(
     returnOutcome = applied.returnOutcome;
     skipBuyerSend = applied.returnOutcome?.action === "auto_approved";
   }
+
+  reply = withReplyPrefix(params.buyerReplyPrefix, reply);
 
   const buyerSend = skipBuyerSend
     ? { ok: true }

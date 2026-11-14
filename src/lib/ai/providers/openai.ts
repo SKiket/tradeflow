@@ -16,6 +16,9 @@ export const openaiProvider: AIProvider = {
   name: "openai",
 
   async generateStructured(params: GenerateStructuredParams) {
+    if (params.media) {
+      throw new Error("media not supported by openai provider");
+    }
     const client = getClient();
     const response = await client.chat.completions.create(
       {

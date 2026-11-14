@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { OrderParseItem, OrderParseResult } from "@/lib/ai/tasks/order-parse";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { withReplyPrefix } from "@/lib/channels/voice-note";
 import {
   cancelAwaitingPaymentOrder,
   findAwaitingPaymentForThread,
@@ -42,6 +43,8 @@ export type DraftOrderOutcome =
       totalPence: number;
       outboundMessageId: string;
       confirmationMessage: string;
+      /** Present when Twilio (or persist) rejected the confirmation send. */
+      sendError?: string;
       /** Set when an unpaid AWAITING_PAYMENT order was cancelled to make room. */
       supersededOrderId?: string;
     };
@@ -52,6 +55,8 @@ export interface CreateDraftOrderParams {
   customerPhoneE164: string;
   threadId: string;
   parseResult: OrderParseResult;
+  /** Optional transparency prefix (e.g. voice-note "I heard: … — "). */
+  buyerReplyPrefix?: string | null;
   supabase?: SupabaseClient;
 }
 
@@ -114,12 +119,16 @@ export async function createDraftOrderFromParse(
     return { action: "ignored", reason: "empty_items" };
   }
 
+  const replyPrefix = params.buyerReplyPrefix ?? null;
+
   const gate = await evaluateConfirmGate(supabase, params.businessId, parse);
   if (!gate.ok) {
-    const message =
+    const message = withReplyPrefix(
+      replyPrefix,
       parse.clarification_message?.trim() ||
-      gate.fallbackMessage ||
-      "Sorry — I wasn't sure which items you wanted. Could you tell me the product name and size/colour again?";
+        gate.fallbackMessage ||
+        "Sorry — I wasn't sure which items you wanted. Could you tell me the product name and size/colour again?",
+    );
     const sent = await sendWhatsAppMessage({
       businessId: params.businessId,
       toPhoneE164: params.customerPhoneE164,
@@ -139,7 +148,10 @@ export async function createDraftOrderFromParse(
     (line) => line.trackInventory && line.available < line.quantity,
   );
   if (shortages.length > 0) {
-    const message = formatStockShortageMessage(shortages);
+    const message = withReplyPrefix(
+      replyPrefix,
+      formatStockShortageMessage(shortages),
+    );
     const sent = await sendWhatsAppMessage({
       businessId: params.businessId,
       toPhoneE164: params.customerPhoneE164,
@@ -277,31 +289,48 @@ export async function createDraftOrderFromParse(
     throw new Error(`Failed to insert order items: ${itemsError.message}`);
   }
 
-  const confirmationMessage = formatConfirmationMessage(gate.lines, totalPence);
-  const sent = await sendWhatsAppMessage({
-    businessId: params.businessId,
-    toPhoneE164: params.customerPhoneE164,
-    text: confirmationMessage,
-    threadId: params.threadId,
-    customerId: params.customerId,
-    supabase,
-  });
+  const confirmationMessage = withReplyPrefix(
+    replyPrefix,
+    formatConfirmationMessage(gate.lines, totalPence),
+  );
 
-  console.info("[orders] Draft confirmation sent", {
-    action,
-    orderId,
-    orderRef,
-    totalPence,
-    outboundMessageId: sent.messageId,
-  });
+  let outboundMessageId = "";
+  let sendError: string | undefined;
+  try {
+    const sent = await sendWhatsAppMessage({
+      businessId: params.businessId,
+      toPhoneE164: params.customerPhoneE164,
+      text: confirmationMessage,
+      threadId: params.threadId,
+      customerId: params.customerId,
+      supabase,
+    });
+    outboundMessageId = sent.messageId;
+    console.info("[orders] Draft confirmation sent", {
+      action,
+      orderId,
+      orderRef,
+      totalPence,
+      outboundMessageId: sent.messageId,
+    });
+  } catch (error) {
+    sendError = error instanceof Error ? error.message : String(error);
+    console.error("[orders] Draft confirmation send failed (draft kept)", {
+      action,
+      orderId,
+      orderRef,
+      error: sendError,
+    });
+  }
 
   return {
     action,
     orderId,
     orderRef,
     totalPence,
-    outboundMessageId: sent.messageId,
+    outboundMessageId,
     confirmationMessage,
+    ...(sendError ? { sendError } : {}),
     ...(supersededOrderId ? { supersededOrderId } : {}),
   };
 }

@@ -1,5 +1,11 @@
 import type { JSONSchema7 } from "json-schema";
 
+/** Optional binary media part for multimodal providers (e.g. Gemini audio). */
+export interface GatewayMediaInput {
+  mimeType: string;
+  data: Buffer;
+}
+
 export interface GenerateStructuredParams {
   model: string;
   systemPrompt: string;
@@ -7,6 +13,7 @@ export interface GenerateStructuredParams {
   schema: JSONSchema7;
   maxTokens?: number;
   signal?: AbortSignal;
+  media?: GatewayMediaInput;
 }
 
 export interface GenerateStructuredResult {
@@ -39,6 +46,8 @@ export interface GatewayRunParams {
   systemPrompt: string;
   userPrompt: string;
   schema: JSONSchema7;
+  /** When set, only providers that support media (Gemini) may succeed. */
+  media?: GatewayMediaInput;
 }
 
 export interface GatewayRunResult extends GenerateStructuredResult {

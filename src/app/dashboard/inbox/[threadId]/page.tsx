@@ -67,7 +67,7 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
   const { data: messages, error } = await supabase
     .from("messages")
     .select(
-      "id, direction, normalised_text, ai_parse_result, created_at, customer_id, customers(phone_e164, name, last_customer_message_at, ai_paused_until)",
+      "id, direction, normalised_text, source_kind, ai_parse_result, created_at, customer_id, customers(phone_e164, name, last_customer_message_at, ai_paused_until)",
     )
     .eq("thread_id", threadId)
     .eq("business_id", businessId)
@@ -169,9 +169,21 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
                   </span>
                   <time>{formatDateTime(row.created_at as string)}</time>
                 </div>
-                <p className="whitespace-pre-wrap text-sm">
-                  {(row.normalised_text as string | null)?.trim() || "(no text)"}
-                </p>
+                {row.source_kind === "voice_note" ? (
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Voice note
+                    </p>
+                    <p className="whitespace-pre-wrap text-sm">
+                      {(row.normalised_text as string | null)?.trim() ||
+                        "(no transcript)"}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-wrap text-sm">
+                    {(row.normalised_text as string | null)?.trim() || "(no text)"}
+                  </p>
+                )}
                 {isAiPausedSkip(row.ai_parse_result) ? (
                   <p className="text-xs font-medium text-amber-800">
                     Needs seller reply — AI paused

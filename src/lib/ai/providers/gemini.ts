@@ -81,9 +81,21 @@ export const geminiProvider: AIProvider = {
         })
       : null;
 
+    const content = params.media
+      ? [
+          { text: params.userPrompt },
+          {
+            inlineData: {
+              mimeType: params.media.mimeType,
+              data: params.media.data.toString("base64"),
+            },
+          },
+        ]
+      : params.userPrompt;
+
     const result = await (abortPromise
-      ? Promise.race([model.generateContent(params.userPrompt), abortPromise])
-      : model.generateContent(params.userPrompt));
+      ? Promise.race([model.generateContent(content), abortPromise])
+      : model.generateContent(content));
 
     const text = result.response.text();
     const data = JSON.parse(text) as unknown;

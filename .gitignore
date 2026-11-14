@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/scripts/fixtures/voice/
 
 # next.js
 /.next/

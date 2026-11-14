@@ -38,8 +38,13 @@ const PLACED_STATUSES = new Set<string>([
   ORDER_STATUS.REFUNDED,
 ]);
 
-function previewText(value: string | null): string {
+function previewText(value: string | null, sourceKind?: string | null): string {
   const text = (value ?? "").replace(/\s+/g, " ").trim();
+  if (sourceKind === "voice_note") {
+    if (!text) return "Voice note";
+    const body = text.length > 100 ? `${text.slice(0, 97)}…` : text;
+    return `Voice note: ${body}`;
+  }
   if (!text) return "(no text)";
   return text.length > 120 ? `${text.slice(0, 117)}…` : text;
 }
@@ -54,7 +59,7 @@ export async function listInboxThreads(
   const { data: rows, error } = await supabase
     .from("messages")
     .select(
-      "id, thread_id, customer_id, direction, normalised_text, ai_parse_result, created_at, customers(phone_e164, name, ai_paused_until)",
+      "id, thread_id, customer_id, direction, normalised_text, source_kind, ai_parse_result, created_at, customers(phone_e164, name, ai_paused_until)",
     )
     .eq("business_id", businessId)
     .not("thread_id", "is", null)
@@ -104,7 +109,10 @@ export async function listInboxThreads(
         customerId: (row.customer_id as string | null) ?? null,
         customerName: customer?.name ?? null,
         customerPhone: customer?.phone_e164 ?? null,
-        lastMessagePreview: previewText(row.normalised_text as string | null),
+        lastMessagePreview: previewText(
+          row.normalised_text as string | null,
+          row.source_kind as string | null,
+        ),
         lastMessageAt: row.created_at as string,
         lastDirection: row.direction as string,
         lastInboundParse:

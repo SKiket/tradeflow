@@ -2,6 +2,8 @@ import { classifyReply } from "@/lib/ai/tasks/reply-classify";
 import { parseOrder } from "@/lib/ai/tasks/order-parse";
 import { twilioWhatsAppAdapter } from "@/lib/channels/adapters/twilio-whatsapp";
 import { normaliseAndPersist } from "@/lib/channels/normaliser";
+import { isAudioOnlyInbound } from "@/lib/channels/twilio-media";
+import { handleVoiceNoteInbound } from "@/lib/channels/voice-note-inbound";
 import {
   cancelAwaitingPaymentOrder,
   cancelPendingDraft,
@@ -244,15 +246,137 @@ export async function handleTwilioWhatsApp(
         .select("ai_paused_until")
         .eq("id", result.message.customerId)
         .maybeSingle();
-      if (isAiPaused(pauseRow?.ai_paused_until as string | null)) {
+      const aiPaused = isAiPaused(pauseRow?.ai_paused_until as string | null);
+
+      // Voice notes: transcribe before pause short-circuit so the inbox still
+      // shows what was heard. Fixed limit/unclear replies are skipped while paused.
+      let messageText = result.message.normalisedText;
+      let buyerReplyPrefix: string | null = null;
+      let voiceOutcome: Record<string, unknown> | null = null;
+
+      const audioOnly = isAudioOnlyInbound({
+        text: result.message.normalisedText,
+        mediaUrls: result.message.mediaUrls,
+        rawPayload: result.message.rawPayload,
+      });
+
+      if (audioOnly) {
+        const voice = await handleVoiceNoteInbound({
+          messageId: result.messageId,
+          businessId: result.message.businessId,
+          customerId: result.message.customerId,
+          customerPhoneE164: result.message.customerPhone,
+          threadId: result.message.threadId,
+          text: result.message.normalisedText,
+          mediaUrls: result.message.mediaUrls,
+          rawPayload: result.message.rawPayload,
+          skipBuyerReplies: aiPaused,
+          supabase,
+        });
+        voiceOutcome = { kind: voice.kind };
+
+        if (voice.kind === "rejected_too_long") {
+          voiceOutcome = { ...voiceOutcome, buyerSend: voice.buyerSend };
+          console.info("[whatsapp] voice note rejected (too long/large)", {
+            messageId: result.messageId,
+            aiPaused,
+          });
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              handled: true,
+              messageId: result.messageId,
+              businessId: result.message.businessId,
+              customerId: result.message.customerId,
+              threadId: result.message.threadId,
+              customerCreated: result.customerCreated,
+              mediaCount: result.message.mediaUrls.length,
+              parseStored: false,
+              voice: voiceOutcome,
+              ...(aiPaused ? { aiPaused: true } : {}),
+            },
+          };
+        }
+
+        if (voice.kind === "unclear" || voice.kind === "error") {
+          voiceOutcome = {
+            ...voiceOutcome,
+            ...(voice.kind === "unclear"
+              ? {
+                  transcript: voice.transcript,
+                  confidence: voice.confidence,
+                  buyerSend: voice.buyerSend,
+                }
+              : { error: voice.error, buyerSend: voice.buyerSend }),
+          };
+          console.info("[whatsapp] voice note unclear/error — skipped order_parse", {
+            messageId: result.messageId,
+            kind: voice.kind,
+            aiPaused,
+          });
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              handled: true,
+              messageId: result.messageId,
+              businessId: result.message.businessId,
+              customerId: result.message.customerId,
+              threadId: result.message.threadId,
+              customerCreated: result.customerCreated,
+              mediaCount: result.message.mediaUrls.length,
+              parseStored: false,
+              voice: voiceOutcome,
+              ...(aiPaused ? { aiPaused: true } : {}),
+            },
+          };
+        }
+
+        if (voice.kind === "ready") {
+          messageText = voice.transcript;
+          buyerReplyPrefix = voice.buyerReplyPrefix;
+          voiceOutcome = {
+            kind: voice.kind,
+            transcript: voice.transcript,
+            confidence: voice.confidence,
+            language: voice.language,
+          };
+          console.info("[whatsapp] voice note transcribed", {
+            messageId: result.messageId,
+            confidence: voice.confidence,
+            language: voice.language,
+            transcriptLength: voice.transcript.length,
+          });
+        }
+      }
+
+      if (aiPaused) {
+        // Preserve voice_note transcription metadata when present.
+        const { data: existingParse } = await supabase
+          .from("messages")
+          .select("ai_parse_result")
+          .eq("id", result.messageId)
+          .maybeSingle();
+        const prior =
+          existingParse?.ai_parse_result &&
+          typeof existingParse.ai_parse_result === "object"
+            ? (existingParse.ai_parse_result as Record<string, unknown>)
+            : {};
         await supabase
           .from("messages")
-          .update({ ai_parse_result: AI_PAUSED_PARSE })
+          .update({
+            ai_parse_result: {
+              ...prior,
+              ...AI_PAUSED_PARSE,
+            },
+          })
           .eq("id", result.messageId);
         console.info("[whatsapp] AI paused — skipped order_parse/support_reply", {
           messageId: result.messageId,
           customerId: result.message.customerId,
           aiPausedUntil: pauseRow?.ai_paused_until,
+          voiceNote: Boolean(voiceOutcome),
         });
 
         return {
@@ -268,6 +392,7 @@ export async function handleTwilioWhatsApp(
             mediaCount: result.message.mediaUrls.length,
             parseStored: false,
             aiPaused: true,
+            ...(voiceOutcome ? { voice: voiceOutcome } : {}),
           },
         };
       }
@@ -281,7 +406,7 @@ export async function handleTwilioWhatsApp(
           customerId: result.message.customerId,
           customerPhoneE164: result.message.customerPhone,
           threadId: result.message.threadId,
-          messageText: result.message.normalisedText,
+          messageText,
           supabase,
         });
         if (reply.handled) {
@@ -306,18 +431,38 @@ export async function handleTwilioWhatsApp(
       if (!replyHandled) {
         // Run order_parse on every inbound customer message (simplest correct
         // default). Failures must not fail the webhook — the message is already
-        // persisted.
+        // persisted. Voice-note transcripts use the same path as typed text.
         try {
           const parseResult = await parseOrder({
             businessId: result.message.businessId,
-            messageText: result.message.normalisedText,
+            messageText,
             threadId: result.message.threadId,
             supabase,
           });
 
+          const voiceMeta =
+            voiceOutcome && typeof voiceOutcome === "object"
+              ? {
+                  voice_note: true,
+                  transcribed: true,
+                  language:
+                    typeof voiceOutcome.language === "string"
+                      ? voiceOutcome.language
+                      : undefined,
+                  confidence:
+                    typeof voiceOutcome.confidence === "string"
+                      ? voiceOutcome.confidence
+                      : undefined,
+                }
+              : null;
+
           const { error: updateError } = await supabase
             .from("messages")
-            .update({ ai_parse_result: parseResult })
+            .update({
+              ai_parse_result: voiceMeta
+                ? { ...parseResult, ...voiceMeta }
+                : parseResult,
+            })
             .eq("id", result.messageId);
 
           if (updateError) {
@@ -341,7 +486,7 @@ export async function handleTwilioWhatsApp(
                 const notify = await notifySellerOfUnmatchedOrder({
                   businessId: result.message.businessId,
                   customerPhoneE164: result.message.customerPhone,
-                  buyerMessage: result.message.normalisedText,
+                  buyerMessage: messageText,
                   supabase,
                 });
                 unmatchedNotify = { ...notify };
@@ -373,6 +518,7 @@ export async function handleTwilioWhatsApp(
                   customerPhoneE164: result.message.customerPhone,
                   threadId: result.message.threadId,
                   parseResult,
+                  buyerReplyPrefix,
                   supabase,
                 });
                 draftOutcome = { ...outcome };
@@ -398,7 +544,8 @@ export async function handleTwilioWhatsApp(
                   customerId: result.message.customerId,
                   customerPhoneE164: result.message.customerPhone,
                   threadId: result.message.threadId,
-                  messageText: result.message.normalisedText,
+                  messageText,
+                  buyerReplyPrefix,
                   supabase,
                 });
                 supportOutcome = { ...outcome };
@@ -413,6 +560,7 @@ export async function handleTwilioWhatsApp(
                   .update({
                     ai_parse_result: {
                       ...parseResult,
+                      ...(voiceMeta ?? {}),
                       escalate_to_seller: outcome.escalateToSeller,
                     },
                   })
@@ -441,7 +589,7 @@ export async function handleTwilioWhatsApp(
                   customerId: result.message.customerId,
                   customerPhoneE164: result.message.customerPhone,
                   threadId: result.message.threadId,
-                  messageText: result.message.normalisedText,
+                  messageText,
                   supabase,
                 });
                 supportOutcome = { ...outcome };
@@ -481,7 +629,8 @@ export async function handleTwilioWhatsApp(
         customerCreated: result.customerCreated,
         threadCreated: result.threadCreated,
         mediaCount: result.message.mediaUrls.length,
-        hasText: result.message.normalisedText.length > 0,
+        hasText: messageText.length > 0,
+        voiceNote: Boolean(voiceOutcome),
         parseStored,
         replyAction: replyOutcome?.replyAction ?? null,
         draftAction: draftOutcome?.action ?? null,
@@ -501,6 +650,7 @@ export async function handleTwilioWhatsApp(
           mediaCount: result.message.mediaUrls.length,
           parseStored,
           ...(parseError ? { parseError } : {}),
+          ...(voiceOutcome ? { voice: voiceOutcome } : {}),
           ...(replyOutcome ? { reply: replyOutcome } : {}),
           ...(draftOutcome ? { draft: draftOutcome } : {}),
           ...(supportOutcome ? { support: supportOutcome } : {}),

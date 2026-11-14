@@ -49,6 +49,7 @@ async function callProvider(
       schema: params.schema,
       maxTokens: params.maxTokens ?? undefined,
       signal: controller.signal,
+      ...(params.media ? { media: params.media } : {}),
     };
 
     const result = await provider.generateStructured(generateParams);
@@ -72,6 +73,7 @@ export async function run(params: GatewayRunParams): Promise<GatewayRunResult> {
     userPrompt: params.userPrompt,
     schema: params.schema,
     maxTokens: config.max_tokens,
+    ...(params.media ? { media: params.media } : {}),
   };
 
   try {

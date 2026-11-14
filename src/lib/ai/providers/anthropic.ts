@@ -16,6 +16,9 @@ export const anthropicProvider: AIProvider = {
   name: "anthropic",
 
   async generateStructured(params: GenerateStructuredParams) {
+    if (params.media) {
+      throw new Error("media not supported by anthropic provider");
+    }
     const client = getClient();
     const response = await client.messages.create(
       {
