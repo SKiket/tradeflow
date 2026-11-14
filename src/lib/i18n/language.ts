@@ -13,13 +13,17 @@ export function normaliseLanguageCode(
   if (!value) return null;
   const trimmed = value.trim().toLowerCase();
   if (!trimmed || trimmed === "unknown" || trimmed === "und") return null;
-  // Accept "fr", "fr-FR", "French", etc. — keep first two letters when latin.
   const match = trimmed.match(/^[a-z]{2}/);
   return match ? match[0] : null;
 }
 
 /**
- * Short ack / yes-no replies must never flip preferred_language.
+ * Exact language rule (D1):
+ * - Reply language comes from the latest *substantive* message.
+ * - Substantive ≈ 3+ words (after trim), or a confident language detection
+ *   on a message that is not a short ack.
+ * - Very short messages ("ok", "3 mugs", YES/NO) keep the stored preference
+ *   and must not flip preferred_language.
  */
 export function isSubstantiveMessage(text: string): boolean {
   const trimmed = text.trim();
@@ -31,10 +35,36 @@ export function isSubstantiveMessage(text: string): boolean {
     .replace(/^[\s.,!?]+|[\s.,!?]+$/g, "")
     .replace(/\s+/g, " ");
 
-  // Single short token (e.g. "ok", "ja", "si") — not enough to set language.
-  if (!normalized.includes(" ") && normalized.length <= 4) return false;
+  const words = normalized.split(" ").filter(Boolean);
+  // Short messages keep stored preference: "ok", "3 mugs", etc.
+  if (words.length < 3) return false;
 
   return true;
+}
+
+/**
+ * True when the model reported a usable language with enough confidence
+ * that we may treat a shorter-than-3-word message as a language signal.
+ * (Reserved for AI paths that pass confidence; word-count rule still
+ * applies for fixed short acks.)
+ */
+export function isConfidentLanguageSignal(params: {
+  text: string;
+  detectedLanguage: string | null | undefined;
+  confidence?: number | null;
+}): boolean {
+  if (!normaliseLanguageCode(params.detectedLanguage)) return false;
+  if (isAffirmativeReply(params.text) || isNegativeReply(params.text)) {
+    return false;
+  }
+  const words = params.text.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 3) return true;
+  // Confident detection alone is enough only when not a tiny ack and
+  // confidence is high (e.g. clear French voice note of 2 words).
+  if (typeof params.confidence === "number" && params.confidence >= 0.8) {
+    return words.length >= 2;
+  }
+  return false;
 }
 
 export async function getCustomerPreferredLanguage(
@@ -50,14 +80,17 @@ export async function getCustomerPreferredLanguage(
 }
 
 /**
- * Persist preferred_language only for substantive messages with a usable code.
- * Returns the language that should be used for the next reply (stored or prior).
+ * Persist preferred_language only for substantive messages (or confident
+ * signals). Returns the language that should be used for the next reply:
+ * detected language when the message is substantive, otherwise stored.
  */
 export async function maybeUpdatePreferredLanguage(params: {
   supabase: SupabaseClient;
   customerId: string;
   messageText: string;
   detectedLanguage: string | null | undefined;
+  /** Optional AI confidence 0–1 for shorter-but-confident signals. */
+  confidence?: number | null;
 }): Promise<SupportedLang> {
   const { data: row } = await params.supabase
     .from("customers")
@@ -68,11 +101,14 @@ export async function maybeUpdatePreferredLanguage(params: {
   const current = (row?.preferred_language as string | null) ?? null;
   const detected = normaliseLanguageCode(params.detectedLanguage);
 
-  if (
-    detected &&
-    isSubstantiveMessage(params.messageText) &&
-    detected !== current
-  ) {
+  const substantive = isSubstantiveMessage(params.messageText);
+  const confident = isConfidentLanguageSignal({
+    text: params.messageText,
+    detectedLanguage: params.detectedLanguage,
+    confidence: params.confidence,
+  });
+
+  if (detected && (substantive || confident) && detected !== current) {
     await params.supabase
       .from("customers")
       .update({ preferred_language: detected })
@@ -80,7 +116,12 @@ export async function maybeUpdatePreferredLanguage(params: {
     return resolveLang(detected);
   }
 
-  return resolveLang(current ?? detected);
+  // Short messages ("ok", "3 mugs"): keep stored preference for the reply.
+  if (!substantive && !confident) {
+    return resolveLang(current ?? detected);
+  }
+
+  return resolveLang(detected ?? current);
 }
 
 /** Language instruction appended to AI system prompts for buyer-facing replies. */

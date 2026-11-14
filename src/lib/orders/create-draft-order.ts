@@ -132,19 +132,31 @@ export async function createDraftOrderFromParse(
         gate.fallbackMessage ||
         t("draft.clarification_unsure", lang),
     );
-    const sent = await sendWhatsAppMessage({
-      businessId: params.businessId,
-      toPhoneE164: params.customerPhoneE164,
-      text: message,
-      threadId: params.threadId,
-      customerId: params.customerId,
-      supabase,
-    });
-    return {
-      action: "clarification_sent",
-      message,
-      outboundMessageId: sent.messageId,
-    };
+    try {
+      const sent = await sendWhatsAppMessage({
+        businessId: params.businessId,
+        toPhoneE164: params.customerPhoneE164,
+        text: message,
+        threadId: params.threadId,
+        customerId: params.customerId,
+        supabase,
+        audience: "buyer",
+      });
+      return {
+        action: "clarification_sent",
+        message,
+        outboundMessageId: sent.messageId,
+      };
+    } catch (error) {
+      console.error("[orders] Clarification send failed (persisted)", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        action: "clarification_sent",
+        message,
+        outboundMessageId: "",
+      };
+    }
   }
 
   const shortages = gate.lines.filter(
@@ -155,25 +167,43 @@ export async function createDraftOrderFromParse(
       replyPrefix,
       formatStockShortageMessage(shortages, lang),
     );
-    const sent = await sendWhatsAppMessage({
-      businessId: params.businessId,
-      toPhoneE164: params.customerPhoneE164,
-      text: message,
-      threadId: params.threadId,
-      customerId: params.customerId,
-      supabase,
-    });
-    return {
-      action: "stock_shortage",
-      message,
-      outboundMessageId: sent.messageId,
-      shortages: shortages.map((line) => ({
-        productName: line.productName,
-        variantLabel: line.variantLabel,
-        requested: line.quantity,
-        available: line.available,
-      })),
-    };
+    try {
+      const sent = await sendWhatsAppMessage({
+        businessId: params.businessId,
+        toPhoneE164: params.customerPhoneE164,
+        text: message,
+        threadId: params.threadId,
+        customerId: params.customerId,
+        supabase,
+        audience: "buyer",
+      });
+      return {
+        action: "stock_shortage",
+        message,
+        outboundMessageId: sent.messageId,
+        shortages: shortages.map((line) => ({
+          productName: line.productName,
+          variantLabel: line.variantLabel,
+          requested: line.quantity,
+          available: line.available,
+        })),
+      };
+    } catch (error) {
+      console.error("[orders] Stock shortage send failed (persisted)", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        action: "stock_shortage",
+        message,
+        outboundMessageId: "",
+        shortages: shortages.map((line) => ({
+          productName: line.productName,
+          variantLabel: line.variantLabel,
+          requested: line.quantity,
+          available: line.available,
+        })),
+      };
+    }
   }
 
   const totalPence = gate.lines.reduce(
@@ -191,11 +221,33 @@ export async function createDraftOrderFromParse(
   let orderRef: string;
   let action: "draft_created" | "draft_updated";
   let supersededOrderId: string | undefined;
+  /** Snapshot so a failed confirmation can restore what the buyer last saw. */
+  let previousDraft: {
+    totalPence: number;
+    items: Array<{
+      product_variant_id: string;
+      quantity: number;
+      unit_price_pence: number;
+    }>;
+  } | null = null;
 
   if (existing) {
     orderId = existing.id;
     orderRef = existing.order_ref;
     action = "draft_updated";
+
+    const { data: priorItems } = await supabase
+      .from("order_items")
+      .select("product_variant_id, quantity, unit_price_pence")
+      .eq("order_id", orderId);
+    previousDraft = {
+      totalPence: existing.total_pence,
+      items: (priorItems ?? []).map((row) => ({
+        product_variant_id: row.product_variant_id as string,
+        quantity: row.quantity as number,
+        unit_price_pence: row.unit_price_pence as number,
+      })),
+    };
 
     const { error: deleteError } = await supabase
       .from("order_items")
@@ -307,6 +359,7 @@ export async function createDraftOrderFromParse(
       threadId: params.threadId,
       customerId: params.customerId,
       supabase,
+      audience: "buyer",
     });
     outboundMessageId = sent.messageId;
     console.info("[orders] Draft confirmation sent", {
@@ -315,14 +368,21 @@ export async function createDraftOrderFromParse(
       orderRef,
       totalPence,
       outboundMessageId: sent.messageId,
+      deliveryStatus: sent.deliveryStatus,
     });
   } catch (error) {
     sendError = error instanceof Error ? error.message : String(error);
-    console.error("[orders] Draft confirmation send failed (draft kept)", {
+    console.error("[orders] Draft confirmation send failed — reverting draft", {
       action,
       orderId,
       orderRef,
       error: sendError,
+    });
+    await revertUndeliveredDraft(supabase, {
+      action,
+      orderId,
+      businessId: params.businessId,
+      previousDraft,
     });
   }
 
@@ -330,12 +390,82 @@ export async function createDraftOrderFromParse(
     action,
     orderId,
     orderRef,
-    totalPence,
+    // After revert, report the totals the buyer still has (previous) when
+    // an update failed; otherwise the new totals.
+    totalPence:
+      sendError && previousDraft ? previousDraft.totalPence : totalPence,
     outboundMessageId,
     confirmationMessage,
     ...(sendError ? { sendError } : {}),
     ...(supersededOrderId ? { supersededOrderId } : {}),
   };
+}
+
+/**
+ * Keep draft state aligned with what the buyer last received.
+ * - draft_updated + failed send → restore previous items/total
+ * - draft_created + failed send → cancel the unseen draft
+ */
+async function revertUndeliveredDraft(
+  supabase: SupabaseClient,
+  params: {
+    action: "draft_created" | "draft_updated";
+    orderId: string;
+    businessId: string;
+    previousDraft: {
+      totalPence: number;
+      items: Array<{
+        product_variant_id: string;
+        quantity: number;
+        unit_price_pence: number;
+      }>;
+    } | null;
+  },
+): Promise<void> {
+  if (params.action === "draft_updated" && params.previousDraft) {
+    await supabase.from("order_items").delete().eq("order_id", params.orderId);
+    if (params.previousDraft.items.length) {
+      await supabase.from("order_items").insert(
+        params.previousDraft.items.map((item) => ({
+          order_id: params.orderId,
+          business_id: params.businessId,
+          product_variant_id: item.product_variant_id,
+          quantity: item.quantity,
+          unit_price_pence: item.unit_price_pence,
+        })),
+      );
+    }
+    await supabase
+      .from("orders")
+      .update({
+        total_pence: params.previousDraft.totalPence,
+        status: ORDER_STATUS.PENDING_CONFIRMATION,
+      })
+      .eq("id", params.orderId);
+    console.info("[orders] Reverted draft to last delivered contents", {
+      orderId: params.orderId,
+      totalPence: params.previousDraft.totalPence,
+      itemCount: params.previousDraft.items.length,
+    });
+    return;
+  }
+
+  if (params.action === "draft_created") {
+    await supabase.from("order_items").delete().eq("order_id", params.orderId);
+    await supabase
+      .from("orders")
+      .update({ status: ORDER_STATUS.CANCELLED })
+      .eq("id", params.orderId);
+    await insertStatusHistory(supabase, {
+      orderId: params.orderId,
+      businessId: params.businessId,
+      fromStatus: ORDER_STATUS.PENDING_CONFIRMATION,
+      toStatus: ORDER_STATUS.CANCELLED,
+    });
+    console.info("[orders] Cancelled undelivered new draft", {
+      orderId: params.orderId,
+    });
+  }
 }
 
 async function evaluateConfirmGate(
@@ -486,10 +616,10 @@ async function findPendingDraft(
   supabase: SupabaseClient,
   businessId: string,
   threadId: string,
-): Promise<{ id: string; order_ref: string } | null> {
+): Promise<{ id: string; order_ref: string; total_pence: number } | null> {
   const { data, error } = await supabase
     .from("orders")
-    .select("id, order_ref")
+    .select("id, order_ref, total_pence")
     .eq("business_id", businessId)
     .eq("thread_id", threadId)
     .eq("status", ORDER_STATUS.PENDING_CONFIRMATION)

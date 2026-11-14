@@ -3,6 +3,17 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
+  isRateLimitFailure,
+  isRetryableTwilioFailure,
+  MAX_DELIVERY_ATTEMPTS,
+  nextRetryAtIso,
+  plainDeliveryReason,
+  retryBackoffMinutes,
+  shouldSkipRealTwilioSend,
+  type DeliveryAudience,
+  type DeliveryStatus,
+} from "@/lib/channels/send/delivery";
+import {
   WhatsAppNotConfiguredError,
   WhatsAppSendError,
 } from "@/lib/channels/send/errors";
@@ -17,6 +28,13 @@ export interface SendWhatsAppMessageParams {
   /** Optional; resolved from toPhoneE164 when omitted. */
   customerId?: string | null;
   supabase?: SupabaseClient;
+  /** Defaults to buyer — seller alerts use "seller". */
+  audience?: DeliveryAudience;
+  /**
+   * When retrying an existing failed outbound row, pass its id so the
+   * row is updated in place instead of inserting a duplicate.
+   */
+  existingMessageId?: string | null;
 }
 
 export interface SendWhatsAppMessageResult {
@@ -26,6 +44,9 @@ export interface SendWhatsAppMessageResult {
   threadId: string;
   customerId: string;
   fromPhoneE164: string;
+  deliveryStatus: DeliveryStatus;
+  /** True when no Twilio HTTP call was made (test-range skip). */
+  simulated: boolean;
 }
 
 function normaliseE164(phone: string): string {
@@ -33,7 +54,6 @@ function normaliseE164(phone: string): string {
   if (!trimmed) {
     throw new WhatsAppSendError("toPhoneE164 must not be empty");
   }
-  // Accept bare E.164 or a whatsapp:-prefixed value from callers.
   return trimmed.replace(/^whatsapp:/i, "");
 }
 
@@ -43,14 +63,14 @@ function toWhatsAppAddress(phoneE164: string): string {
 
 /**
  * Send a free-form WhatsApp text message via Twilio and persist it as an
- * outbound row on the messages table (same thread as the conversation when
- * provided / resolvable).
+ * outbound row. Every attempt is recorded — including Twilio rejections
+ * that create no Message SID (e.g. 63038) — with delivery_status.
  *
- * Template messages (for outside the 24h service window) are Phase 2 — this
- * only sends free-form replies valid inside an open customer care window.
+ * Reserved UK test numbers (+447700900xxx) are recorded as simulated
+ * unless FORCE_REAL_SEND=true.
  *
  * @throws {WhatsAppNotConfiguredError} when the business has no WhatsApp number
- * @throws {WhatsAppSendError} when Twilio rejects the send or credentials are missing
+ * @throws {WhatsAppSendError} when Twilio rejects the send (after persisting failed row)
  */
 export async function sendWhatsAppMessage(
   params: SendWhatsAppMessageParams,
@@ -62,6 +82,7 @@ export async function sendWhatsAppMessage(
 
   const toPhoneE164 = normaliseE164(params.toPhoneE164);
   const supabase = params.supabase ?? createAdminClient();
+  const audience: DeliveryAudience = params.audience ?? "buyer";
 
   const { data: business, error: businessError } = await supabase
     .from("businesses")
@@ -96,54 +117,148 @@ export async function sendWhatsAppMessage(
     params.threadId,
   );
 
-  const twilio = await postTwilioMessage({
-    from: toWhatsAppAddress(fromPhoneE164),
-    to: toWhatsAppAddress(toPhoneE164),
-    body: text,
-  });
+  const priorAttempts = params.existingMessageId
+    ? await readAttempts(supabase, params.existingMessageId)
+    : 0;
 
-  const { data: inserted, error: insertError } = await supabase
-    .from("messages")
-    .insert({
-      business_id: params.businessId,
-      customer_id: customerId,
-      channel: "whatsapp",
-      direction: "outbound",
-      normalised_text: text,
-      thread_id: threadId,
-      raw_payload: {
+  if (shouldSkipRealTwilioSend(toPhoneE164)) {
+    const messageId = await persistOutbound(supabase, {
+      existingMessageId: params.existingMessageId,
+      businessId: params.businessId,
+      customerId,
+      threadId,
+      text,
+      audience,
+      deliveryStatus: "simulated",
+      attempts: priorAttempts + 1,
+      rawPayload: {
         provider: "twilio",
-        sid: twilio.sid,
-        status: twilio.status,
+        simulated: true,
+        reason: "reserved_test_number",
         from: fromPhoneE164,
         to: toPhoneE164,
       },
-      media_urls: null,
-    })
-    .select("id")
-    .single();
-
-  if (insertError || !inserted) {
-    // Twilio already accepted the message — log and still return success so
-    // callers don't retry and double-send. The SID is the source of truth.
-    console.error("[whatsapp-send] Twilio send succeeded but DB persist failed", {
-      sid: twilio.sid,
-      error: insertError?.message ?? "no row returned",
+    });
+    console.info("[whatsapp-send] Simulated send (test number)", {
+      messageId,
+      to: toPhoneE164,
+      businessId: params.businessId,
     });
     return {
-      sid: twilio.sid,
-      status: twilio.status,
-      messageId: "",
+      sid: `SIMULATED_${messageId}`,
+      status: "simulated",
+      messageId,
       threadId,
       customerId,
       fromPhoneE164,
+      deliveryStatus: "simulated",
+      simulated: true,
     };
   }
+
+  let twilio: { sid: string; status: string };
+  try {
+    twilio = await postTwilioMessage({
+      from: toWhatsAppAddress(fromPhoneE164),
+      to: toWhatsAppAddress(toPhoneE164),
+      body: text,
+    });
+  } catch (error) {
+    const sendError =
+      error instanceof WhatsAppSendError
+        ? error
+        : new WhatsAppSendError(
+            error instanceof Error ? error.message : String(error),
+          );
+    const attempts = priorAttempts + 1;
+    const rateLimited = isRateLimitFailure({
+      twilioCode: sendError.twilioCode,
+      twilioStatus: sendError.twilioStatus,
+    });
+    const retryable =
+      isRetryableTwilioFailure({
+        twilioCode: sendError.twilioCode,
+        twilioStatus: sendError.twilioStatus,
+      }) && attempts < MAX_DELIVERY_ATTEMPTS;
+    const backoff = retryable
+      ? retryBackoffMinutes({
+          attemptJustFinished: attempts,
+          rateLimited,
+        })
+      : null;
+    // Rate-limit after hard cap: day window exhausted — do not schedule more.
+    const nextRetry =
+      backoff != null && retryable ? nextRetryAtIso(backoff) : null;
+    const plain = plainDeliveryReason({
+      errorCode: sendError.twilioCode,
+      errorMessage: sendError.message,
+    });
+
+    const messageId = await persistOutbound(supabase, {
+      existingMessageId: params.existingMessageId,
+      businessId: params.businessId,
+      customerId,
+      threadId,
+      text,
+      audience,
+      deliveryStatus: "failed",
+      attempts,
+      errorCode:
+        sendError.twilioCode != null ? String(sendError.twilioCode) : null,
+      errorText: plain,
+      nextRetryAt: nextRetry,
+      rawPayload: {
+        provider: "twilio",
+        from: fromPhoneE164,
+        to: toPhoneE164,
+        error_code: sendError.twilioCode ?? null,
+        error_message: sendError.message,
+        http_status: sendError.twilioStatus ?? null,
+        rate_limited: rateLimited,
+      },
+    });
+
+    console.error("[whatsapp-send] Outbound send failed (persisted)", {
+      messageId,
+      businessId: params.businessId,
+      to: toPhoneE164,
+      twilioCode: sendError.twilioCode,
+      attempts,
+      nextRetryAt: nextRetry,
+      error: sendError.message,
+    });
+
+    throw new WhatsAppSendError(sendError.message, {
+      twilioStatus: sendError.twilioStatus,
+      twilioCode: sendError.twilioCode,
+    });
+  }
+
+  const messageId = await persistOutbound(supabase, {
+    existingMessageId: params.existingMessageId,
+    businessId: params.businessId,
+    customerId,
+    threadId,
+    text,
+    audience,
+    deliveryStatus: "sent",
+    attempts: priorAttempts + 1,
+    nextRetryAt: null,
+    errorCode: null,
+    errorText: null,
+    rawPayload: {
+      provider: "twilio",
+      sid: twilio.sid,
+      status: twilio.status,
+      from: fromPhoneE164,
+      to: toPhoneE164,
+    },
+  });
 
   console.info("[whatsapp-send] Outbound message sent", {
     sid: twilio.sid,
     status: twilio.status,
-    messageId: inserted.id,
+    messageId,
     businessId: params.businessId,
     threadId,
     to: toPhoneE164,
@@ -152,11 +267,95 @@ export async function sendWhatsAppMessage(
   return {
     sid: twilio.sid,
     status: twilio.status,
-    messageId: inserted.id,
+    messageId,
     threadId,
     customerId,
     fromPhoneE164,
+    deliveryStatus: "sent",
+    simulated: false,
   };
+}
+
+async function readAttempts(
+  supabase: SupabaseClient,
+  messageId: string,
+): Promise<number> {
+  const { data } = await supabase
+    .from("messages")
+    .select("delivery_attempts")
+    .eq("id", messageId)
+    .maybeSingle();
+  return typeof data?.delivery_attempts === "number"
+    ? data.delivery_attempts
+    : 0;
+}
+
+async function persistOutbound(
+  supabase: SupabaseClient,
+  params: {
+    existingMessageId?: string | null;
+    businessId: string;
+    customerId: string;
+    threadId: string;
+    text: string;
+    audience: DeliveryAudience;
+    deliveryStatus: DeliveryStatus;
+    attempts: number;
+    errorCode?: string | null;
+    errorText?: string | null;
+    nextRetryAt?: string | null;
+    rawPayload: Record<string, unknown>;
+  },
+): Promise<string> {
+  const row = {
+    business_id: params.businessId,
+    customer_id: params.customerId,
+    channel: "whatsapp" as const,
+    direction: "outbound" as const,
+    normalised_text: params.text,
+    thread_id: params.threadId,
+    raw_payload: params.rawPayload,
+    media_urls: null as string[] | null,
+    delivery_status: params.deliveryStatus,
+    delivery_error_code: params.errorCode ?? null,
+    delivery_error_text: params.errorText ?? null,
+    delivery_attempts: params.attempts,
+    next_retry_at: params.nextRetryAt ?? null,
+    delivery_audience: params.audience,
+  };
+
+  if (params.existingMessageId) {
+    const { data, error } = await supabase
+      .from("messages")
+      .update(row)
+      .eq("id", params.existingMessageId)
+      .select("id")
+      .single();
+    if (error || !data) {
+      console.error("[whatsapp-send] Failed to update outbound row", {
+        messageId: params.existingMessageId,
+        error: error?.message,
+      });
+      return params.existingMessageId;
+    }
+    return data.id as string;
+  }
+
+  const { data, error } = await supabase
+    .from("messages")
+    .insert(row)
+    .select("id")
+    .single();
+
+  if (error || !data) {
+    // Twilio may already have accepted — log; callers still get SID when sent.
+    console.error("[whatsapp-send] DB persist failed", {
+      error: error?.message ?? "no row returned",
+      deliveryStatus: params.deliveryStatus,
+    });
+    return "";
+  }
+  return data.id as string;
 }
 
 async function resolveCustomerId(
@@ -236,6 +435,20 @@ async function postTwilioMessage(params: {
   to: string;
   body: string;
 }): Promise<{ sid: string; status: string }> {
+  const simulatedCode = process.env.TWILIO_SIMULATE_ERROR?.trim();
+  if (simulatedCode) {
+    const code = Number(simulatedCode) || simulatedCode;
+    throw new WhatsAppSendError(
+      code === 63038 || simulatedCode === "63038"
+        ? "Account exceeded the 50 daily messages limit"
+        : `Simulated Twilio error ${simulatedCode}`,
+      {
+        twilioStatus: simulatedCode === "63038" || code === 63038 ? 429 : 400,
+        twilioCode: code,
+      },
+    );
+  }
+
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   if (!accountSid || !authToken) {

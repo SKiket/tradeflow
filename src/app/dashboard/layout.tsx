@@ -1,10 +1,12 @@
 import Link from "next/link";
 
 import { LegalLinks } from "@/components/brand/legal-links";
+import { countRecentDeliveryFailures } from "@/lib/dashboard/delivery-failures";
 import { fetchSetupProgress } from "@/lib/dashboard/setup-progress";
 import { canAcceptOrders, ordersPausedBanner } from "@/lib/stripe/billing-gate";
 
 import { BillingPausedBanner } from "./billing-paused-banner";
+import { DeliveryFailedBanner } from "./delivery-failed-banner";
 import { BusinessSwitcher } from "./business-switcher";
 import { DashboardNav } from "./dashboard-nav";
 import { requireSeller } from "./require-seller";
@@ -18,6 +20,10 @@ export default async function DashboardLayout({
 }) {
   const { supabase, business, businesses } = await requireSeller();
   const setupProgress = await fetchSetupProgress(supabase, business.id);
+  const deliveryFailures = await countRecentDeliveryFailures(
+    supabase,
+    business.id,
+  );
 
   const takingOrders = canAcceptOrders({
     stripe_subscription_status:
@@ -89,6 +95,10 @@ export default async function DashboardLayout({
             hasCustomer={Boolean(business.stripe_customer_id)}
           />
         ) : null}
+        <DeliveryFailedBanner
+          count={deliveryFailures.count}
+          latestErrorText={deliveryFailures.latestErrorText}
+        />
         <main className="flex-1 p-4 md:p-6">
           {setupProgress ? <SetupChecklist progress={setupProgress} /> : null}
           {children}

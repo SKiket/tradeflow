@@ -67,7 +67,7 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
   const { data: messages, error } = await supabase
     .from("messages")
     .select(
-      "id, direction, normalised_text, source_kind, ai_parse_result, created_at, customer_id, customers(phone_e164, name, last_customer_message_at, ai_paused_until)",
+      "id, direction, normalised_text, source_kind, ai_parse_result, created_at, customer_id, delivery_status, delivery_error_text, customers(phone_e164, name, last_customer_message_at, ai_paused_until)",
     )
     .eq("thread_id", threadId)
     .eq("business_id", businessId)
@@ -184,6 +184,19 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
                     {(row.normalised_text as string | null)?.trim() || "(no text)"}
                   </p>
                 )}
+                {!inbound && row.delivery_status === "failed" ? (
+                  <p className="text-xs font-semibold text-red-700">
+                    Not delivered
+                    {(row.delivery_error_text as string | null)?.trim()
+                      ? `: ${(row.delivery_error_text as string).trim()}`
+                      : ""}
+                  </p>
+                ) : null}
+                {!inbound && row.delivery_status === "simulated" ? (
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Simulated (test number)
+                  </p>
+                ) : null}
                 {isAiPausedSkip(row.ai_parse_result) ? (
                   <p className="text-xs font-medium text-amber-800">
                     Needs seller reply — AI paused

@@ -150,6 +150,7 @@ async function notifySeller(params: {
       toPhoneE164: sellerPhone,
       text: params.text,
       supabase: params.supabase,
+      audience: "seller",
     });
     return {
       attempted: true,
@@ -158,23 +159,12 @@ async function notifySeller(params: {
       text: params.text,
     };
   } catch (error) {
+    // Failed outbound is already persisted by sendWhatsAppMessage.
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[support] ${params.label} send failed`, {
       businessId: params.businessId,
       to: sellerPhone,
       error: message,
-    });
-    await params.supabase.from("messages").insert({
-      business_id: params.businessId,
-      channel: "whatsapp",
-      direction: "outbound",
-      normalised_text: params.text,
-      raw_payload: {
-        provider: "twilio",
-        send_failed: true,
-        error: message,
-        label: params.label,
-      },
     });
     return {
       attempted: true,

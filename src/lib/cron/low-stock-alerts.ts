@@ -114,6 +114,7 @@ export async function runLowStockAlerts(
         toPhoneE164: sellerPhone,
         text,
         supabase,
+        audience: "seller",
       });
       businessesAlerted += 1;
       variantsAlerted += claimed.length;
@@ -123,6 +124,8 @@ export async function runLowStockAlerts(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // Failed row is already persisted by sendWhatsAppMessage (shows in
+      // dashboard delivery banner). Release claim so tomorrow can retry.
       console.error("[low-stock] WhatsApp send failed — releasing claim", {
         businessId,
         error: message,

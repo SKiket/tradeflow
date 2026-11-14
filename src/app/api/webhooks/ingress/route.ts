@@ -11,6 +11,14 @@ import { isWebhookSource } from "@/lib/webhooks/types";
 import { verifyWebhookSignature } from "@/lib/webhooks/verify";
 import { parseFormBody } from "@/lib/webhooks/verify/signatures";
 
+/** Empty TwiML — required Content-Type for Twilio inbound webhooks. */
+function twimlAck() {
+  return new NextResponse("<Response/>", {
+    status: 200,
+    headers: { "Content-Type": "text/xml" },
+  });
+}
+
 function unauthorized() {
   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 }
@@ -72,21 +80,20 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Inbound WhatsApp: normalise the verified payload into the messages table.
+  // Inbound WhatsApp: process as usual, but ACK with empty TwiML so Twilio
+  // stops logging error 12300 (Invalid Content-Type: application/json).
   if (sourceHeader === "twilio-whatsapp") {
     if (isDuplicate) {
-      return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+      return twimlAck();
     }
     try {
-      const result = await handleTwilioWhatsApp(rawBody);
-      return NextResponse.json(result.body, { status: result.status });
+      await handleTwilioWhatsApp(rawBody);
+      return twimlAck();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[whatsapp] Handler error", message);
-      return NextResponse.json(
-        { ok: true, handled: false, reason: "handler_error" },
-        { status: 200 },
-      );
+      // Still ACK with TwiML — processing already logged; avoid 12300 + retries.
+      return twimlAck();
     }
   }
 
