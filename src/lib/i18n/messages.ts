@@ -150,6 +150,30 @@ export const MESSAGES: Record<MessageId, Record<SupportedLang, string>> = {
     en: "The refund should appear in your account within a few business days.",
     fr: "Le remboursement devrait apparaître sur votre compte sous quelques jours ouvrés.",
   },
+  "return_reason.wrong_size": {
+    en: "wrong size",
+    fr: "mauvaise taille",
+  },
+  "return_reason.damaged_faulty": {
+    en: "item arrived damaged",
+    fr: "article arrivé endommagé",
+  },
+  "return_reason.changed_mind": {
+    en: "changed mind",
+    fr: "changement d'avis",
+  },
+  "return_reason.not_as_described": {
+    en: "not as described",
+    fr: "ne correspond pas à la description",
+  },
+  "return_reason.arrived_late": {
+    en: "arrived late",
+    fr: "arrivé en retard",
+  },
+  "return_reason.other": {
+    en: "other",
+    fr: "autre",
+  },
   "return.approved": {
     en: "Your return for order {orderRef} has been approved.\n\nPlease print your return slip: {slipUrl}\n\nYou're responsible for return postage — the slip has the return address.",
     fr: "Votre retour pour la commande {orderRef} a été approuvé.\n\nVeuillez imprimer votre bon de retour : {slipUrl}\n\nLes frais de retour sont à votre charge — l'adresse de retour figure sur le bon.",

@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { t } from "@/lib/i18n";
+import { buyerFacingRefundReasonDisplay } from "@/lib/i18n/buyer-reason";
 import {
   ORDER_STATUS,
   REFUNDABLE_STATUSES,
@@ -384,8 +385,12 @@ export function buildBuyerRefundMessage(params: {
           orderRef: params.orderRef,
         }),
   ];
-  if (params.reason) {
-    lines.push(t("refund.reason", params.lang, { reason: params.reason }));
+  const displayReason = buyerFacingRefundReasonDisplay(
+    params.reason,
+    params.lang,
+  );
+  if (displayReason) {
+    lines.push(t("refund.reason", params.lang, { reason: displayReason }));
   }
   lines.push("", t("refund.timing", params.lang));
   return lines.join("\n");

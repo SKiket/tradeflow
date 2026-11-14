@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { t } from "@/lib/i18n";
+import { buyerFacingReturnReasonLabel } from "@/lib/i18n/buyer-reason";
 import { getCustomerPreferredLanguage } from "@/lib/i18n/language";
 import { statusLabel } from "@/lib/orders/display";
 import {
@@ -56,13 +57,13 @@ export function buyerReturnRequestedMessage(params: {
   detail?: string | null;
   lang?: string | null;
 }): string {
-  const label =
-    params.reason === "other" && params.detail?.trim()
-      ? params.detail.trim()
-      : RETURN_REASON_LABEL[params.reason];
   return t("return.requested", params.lang, {
     orderRef: params.orderRef,
-    reason: label,
+    reason: buyerFacingReturnReasonLabel(
+      params.reason,
+      params.detail,
+      params.lang,
+    ),
   });
 }
 
