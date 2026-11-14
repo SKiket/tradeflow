@@ -192,6 +192,30 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
                       : ""}
                   </p>
                 ) : null}
+                {!inbound && row.delivery_status === "superseded" ? (
+                  <p className="text-xs font-semibold text-amber-800">
+                    Superseded
+                    {(row.delivery_error_text as string | null)?.trim()
+                      ? `: ${(row.delivery_error_text as string).trim()}`
+                      : " — not sent (stale)"}
+                  </p>
+                ) : null}
+                {!inbound && row.delivery_status === "expired" ? (
+                  <p className="text-xs font-semibold text-red-700">
+                    Expired
+                    {(row.delivery_error_text as string | null)?.trim()
+                      ? `: ${(row.delivery_error_text as string).trim()}`
+                      : " — retry window closed"}
+                  </p>
+                ) : null}
+                {!inbound && row.delivery_status === "failed_processing" ? (
+                  <p className="text-xs font-semibold text-red-700">
+                    Processing failed
+                    {(row.delivery_error_text as string | null)?.trim()
+                      ? `: ${(row.delivery_error_text as string).trim()}`
+                      : ""}
+                  </p>
+                ) : null}
                 {!inbound && row.delivery_status === "simulated" ? (
                   <p className="text-xs font-medium text-muted-foreground">
                     Simulated (test number)

@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/api/auth";
 import { resolveActiveOwnedBusiness } from "@/lib/auth/active-business";
 import { isInServiceWindow } from "@/lib/channels/service-window";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { acknowledgeThreadDeliveryFailures } from "@/lib/dashboard/delivery-failures";
 import { pauseAiUntil } from "@/lib/inbox/ai-pause";
 import { unwrapRelation } from "@/lib/orders/display";
 
@@ -116,7 +117,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
       threadId,
       customerId: row.customer_id as string,
       supabase: auth.supabase,
+      audience: "buyer",
     });
+
+    await acknowledgeThreadDeliveryFailures(
+      auth.supabase,
+      business.id as string,
+      threadId,
+    );
 
     const pausedUntil = pauseAiUntil();
     const { error: pauseError } = await auth.supabase

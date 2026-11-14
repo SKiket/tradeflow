@@ -12,6 +12,7 @@ import {
   shouldSkipRealTwilioSend,
   type DeliveryAudience,
   type DeliveryStatus,
+  type RetryContext,
 } from "@/lib/channels/send/delivery";
 import {
   WhatsAppNotConfiguredError,
@@ -35,6 +36,8 @@ export interface SendWhatsAppMessageParams {
    * row is updated in place instead of inserting a duplicate.
    */
   existingMessageId?: string | null;
+  /** Stamped into raw_payload so retries can validate freshness. */
+  retryContext?: RetryContext | null;
 }
 
 export interface SendWhatsAppMessageResult {
@@ -83,6 +86,7 @@ export async function sendWhatsAppMessage(
   const toPhoneE164 = normaliseE164(params.toPhoneE164);
   const supabase = params.supabase ?? createAdminClient();
   const audience: DeliveryAudience = params.audience ?? "buyer";
+  const retryContext = params.retryContext ?? null;
 
   const { data: business, error: businessError } = await supabase
     .from("businesses")
@@ -117,9 +121,26 @@ export async function sendWhatsAppMessage(
     params.threadId,
   );
 
-  const priorAttempts = params.existingMessageId
-    ? await readAttempts(supabase, params.existingMessageId)
-    : 0;
+  const priorMeta = params.existingMessageId
+    ? await readOutboundMeta(supabase, params.existingMessageId)
+    : { attempts: 0, queuedAt: null as string | null, retryContext: null as RetryContext | null };
+  const priorAttempts = priorMeta.attempts;
+  const effectiveRetryContext = retryContext ?? priorMeta.retryContext;
+
+  function withRetryContext(
+    base: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const stamped = {
+      ...base,
+      queued_at:
+        priorMeta.queuedAt ??
+        (typeof base.queued_at === "string"
+          ? base.queued_at
+          : new Date().toISOString()),
+    };
+    if (!effectiveRetryContext) return stamped;
+    return { ...stamped, retry_context: effectiveRetryContext };
+  }
 
   if (shouldSkipRealTwilioSend(toPhoneE164)) {
     const messageId = await persistOutbound(supabase, {
@@ -131,13 +152,13 @@ export async function sendWhatsAppMessage(
       audience,
       deliveryStatus: "simulated",
       attempts: priorAttempts + 1,
-      rawPayload: {
+      rawPayload: withRetryContext({
         provider: "twilio",
         simulated: true,
         reason: "reserved_test_number",
         from: fromPhoneE164,
         to: toPhoneE164,
-      },
+      }),
     });
     console.info("[whatsapp-send] Simulated send (test number)", {
       messageId,
@@ -207,7 +228,7 @@ export async function sendWhatsAppMessage(
         sendError.twilioCode != null ? String(sendError.twilioCode) : null,
       errorText: plain,
       nextRetryAt: nextRetry,
-      rawPayload: {
+      rawPayload: withRetryContext({
         provider: "twilio",
         from: fromPhoneE164,
         to: toPhoneE164,
@@ -215,7 +236,7 @@ export async function sendWhatsAppMessage(
         error_message: sendError.message,
         http_status: sendError.twilioStatus ?? null,
         rate_limited: rateLimited,
-      },
+      }),
     });
 
     console.error("[whatsapp-send] Outbound send failed (persisted)", {
@@ -246,13 +267,13 @@ export async function sendWhatsAppMessage(
     nextRetryAt: null,
     errorCode: null,
     errorText: null,
-    rawPayload: {
+    rawPayload: withRetryContext({
       provider: "twilio",
       sid: twilio.sid,
       status: twilio.status,
       from: fromPhoneE164,
       to: toPhoneE164,
-    },
+    }),
   });
 
   console.info("[whatsapp-send] Outbound message sent", {
@@ -276,18 +297,35 @@ export async function sendWhatsAppMessage(
   };
 }
 
-async function readAttempts(
+async function readOutboundMeta(
   supabase: SupabaseClient,
   messageId: string,
-): Promise<number> {
+): Promise<{
+  attempts: number;
+  queuedAt: string | null;
+  retryContext: RetryContext | null;
+}> {
   const { data } = await supabase
     .from("messages")
-    .select("delivery_attempts")
+    .select("delivery_attempts, raw_payload")
     .eq("id", messageId)
     .maybeSingle();
-  return typeof data?.delivery_attempts === "number"
-    ? data.delivery_attempts
-    : 0;
+  const raw =
+    data?.raw_payload && typeof data.raw_payload === "object"
+      ? (data.raw_payload as Record<string, unknown>)
+      : {};
+  const queuedAt = typeof raw.queued_at === "string" ? raw.queued_at : null;
+  const retryCtx = raw.retry_context;
+  let parsed: RetryContext | null = null;
+  if (retryCtx && typeof retryCtx === "object") {
+    parsed = retryCtx as RetryContext;
+  }
+  return {
+    attempts:
+      typeof data?.delivery_attempts === "number" ? data.delivery_attempts : 0,
+    queuedAt,
+    retryContext: parsed,
+  };
 }
 
 async function persistOutbound(

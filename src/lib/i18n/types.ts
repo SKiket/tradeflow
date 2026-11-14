@@ -56,6 +56,7 @@ export type MessageId =
   | "return.which_order"
   | "return.not_approved"
   | "support.other_fallback"
+  | "support.processing_apology"
   | "billing.shop_unavailable"
   | "voice.too_long"
   | "voice.unclear"

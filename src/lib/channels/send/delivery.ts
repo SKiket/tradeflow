@@ -1,8 +1,32 @@
 /** Reserved UK test numbers (Ofcom 07700 900xxx) — never burn Twilio quota. */
 const TEST_NUMBER_RE = /^\+447700900\d{3}$/;
 
-export type DeliveryStatus = "sent" | "failed" | "simulated";
+export type DeliveryStatus =
+  | "sent"
+  | "failed"
+  | "simulated"
+  | "superseded"
+  | "expired"
+  | "failed_processing";
+
 export type DeliveryAudience = "buyer" | "seller";
+
+/** Context stamped on outbound rows so retries can validate freshness. */
+export type RetryContext =
+  | {
+      kind: "draft_confirmation";
+      orderId: string;
+      orderRef: string;
+      totalPence: number;
+      /** Stable signature of item lines: variantId:qty:unitPrice,… */
+      itemSignature: string;
+    }
+  | {
+      kind: "generic";
+    };
+
+export const RETRY_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+export const APOLOGY_COOLDOWN_MS = 10 * 60 * 1000;
 
 export function isReservedTestNumber(phoneE164: string): boolean {
   return TEST_NUMBER_RE.test(phoneE164.trim());
@@ -88,4 +112,46 @@ export function plainDeliveryReason(params: {
 
 export function nextRetryAtIso(minutes: number): string {
   return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+
+export function buildDraftItemSignature(
+  items: Array<{
+    product_variant_id: string;
+    quantity: number;
+    unit_price_pence: number;
+  }>,
+): string {
+  return [...items]
+    .map(
+      (i) =>
+        `${i.product_variant_id}:${i.quantity}:${i.unit_price_pence}`,
+    )
+    .sort()
+    .join(",");
+}
+
+export function parseRetryContext(
+  raw: Record<string, unknown> | null | undefined,
+): RetryContext | null {
+  const ctx = raw?.retry_context;
+  if (!ctx || typeof ctx !== "object") return null;
+  const row = ctx as Record<string, unknown>;
+  if (row.kind === "draft_confirmation") {
+    if (
+      typeof row.orderId === "string" &&
+      typeof row.orderRef === "string" &&
+      typeof row.totalPence === "number" &&
+      typeof row.itemSignature === "string"
+    ) {
+      return {
+        kind: "draft_confirmation",
+        orderId: row.orderId,
+        orderRef: row.orderRef,
+        totalPence: row.totalPence,
+        itemSignature: row.itemSignature,
+      };
+    }
+  }
+  if (row.kind === "generic") return { kind: "generic" };
+  return null;
 }

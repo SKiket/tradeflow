@@ -1,7 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import type { DeliveryAudience } from "@/lib/channels/send/delivery";
+import {
+  evaluateOutboundRetry,
+  markOutboundTerminal,
+} from "@/lib/channels/send/retry-eligibility";
+import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 
 const BATCH_LIMIT = 25;
 
@@ -10,12 +14,16 @@ export interface DeliveryRetryResult {
   succeeded: number;
   failed: number;
   skipped: number;
+  superseded: number;
+  expired: number;
 }
 
 /**
  * Re-attempt failed outbound WhatsApp rows whose next_retry_at has passed.
- * Uses minutes-scale backoff already stamped on the row; never hammers
- * Twilio — one attempt per due row per cron tick.
+ *
+ * Before sending, validates the queued text still matches current order/thread
+ * state. Stale rows become "superseded"; rows older than 12h become "expired".
+ * Never hammers Twilio — one attempt per due row per cron tick.
  */
 export async function runWhatsAppDeliveryRetry(
   supabase: SupabaseClient,
@@ -24,7 +32,7 @@ export async function runWhatsAppDeliveryRetry(
   const { data: due, error } = await supabase
     .from("messages")
     .select(
-      "id, business_id, customer_id, thread_id, normalised_text, delivery_audience, delivery_attempts, raw_payload",
+      "id, business_id, customer_id, thread_id, normalised_text, delivery_audience, delivery_attempts, raw_payload, created_at",
     )
     .eq("direction", "outbound")
     .eq("delivery_status", "failed")
@@ -41,6 +49,8 @@ export async function runWhatsAppDeliveryRetry(
   let succeeded = 0;
   let failed = 0;
   let skipped = 0;
+  let superseded = 0;
+  let expired = 0;
 
   for (const row of due ?? []) {
     const text = (row.normalised_text as string | null)?.trim();
@@ -72,8 +82,55 @@ export async function runWhatsAppDeliveryRetry(
       continue;
     }
 
+    const decision = await evaluateOutboundRetry({
+      supabase,
+      messageId: row.id as string,
+      businessId: row.business_id as string,
+      threadId: (row.thread_id as string | null) ?? null,
+      customerId: row.customer_id as string,
+      createdAt: row.created_at as string,
+      normalisedText: text,
+      rawPayload: raw,
+    });
+
+    if (decision.action === "expired") {
+      await markOutboundTerminal(
+        supabase,
+        row.id as string,
+        "expired",
+        decision.reason,
+      );
+      expired += 1;
+      console.info("[delivery-retry] expired", {
+        messageId: row.id,
+        reason: decision.reason,
+      });
+      continue;
+    }
+
+    if (decision.action === "superseded") {
+      await markOutboundTerminal(
+        supabase,
+        row.id as string,
+        "superseded",
+        decision.reason,
+      );
+      superseded += 1;
+      console.info("[delivery-retry] superseded — not sending stale text", {
+        messageId: row.id,
+        reason: decision.reason,
+        queuedTextPreview: text.slice(0, 80),
+      });
+      continue;
+    }
+
+    // Eligible: re-send the exact queued text (still matches current state).
     attempted += 1;
     try {
+      const retryContext =
+        raw.retry_context && typeof raw.retry_context === "object"
+          ? (raw.retry_context as import("@/lib/channels/send/delivery").RetryContext)
+          : null;
       await sendWhatsAppMessage({
         businessId: row.business_id as string,
         toPhoneE164: to,
@@ -83,6 +140,7 @@ export async function runWhatsAppDeliveryRetry(
         supabase,
         audience: (row.delivery_audience as DeliveryAudience) || "buyer",
         existingMessageId: row.id as string,
+        retryContext,
       });
       succeeded += 1;
     } catch (err) {
@@ -94,7 +152,7 @@ export async function runWhatsAppDeliveryRetry(
     }
   }
 
-  return { attempted, succeeded, failed, skipped };
+  return { attempted, succeeded, failed, skipped, superseded, expired };
 }
 
 async function lookupCustomerPhone(

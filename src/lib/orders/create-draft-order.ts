@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { OrderParseItem, OrderParseResult } from "@/lib/ai/tasks/order-parse";
+import { buildDraftItemSignature } from "@/lib/channels/send/delivery";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { withReplyPrefix } from "@/lib/channels/voice-note";
 import { t } from "@/lib/i18n";
@@ -360,6 +361,19 @@ export async function createDraftOrderFromParse(
       customerId: params.customerId,
       supabase,
       audience: "buyer",
+      retryContext: {
+        kind: "draft_confirmation",
+        orderId,
+        orderRef,
+        totalPence,
+        itemSignature: buildDraftItemSignature(
+          itemRows.map((row) => ({
+            product_variant_id: row.product_variant_id,
+            quantity: row.quantity,
+            unit_price_pence: row.unit_price_pence,
+          })),
+        ),
+      },
     });
     outboundMessageId = sent.messageId;
     console.info("[orders] Draft confirmation sent", {

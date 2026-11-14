@@ -222,6 +222,10 @@ export const MESSAGES: Record<MessageId, Record<SupportedLang, string>> = {
     en: "Sorry, I didn't quite catch that — did you want to place an order, or is there something else I can help with?",
     fr: "Désolé, je n'ai pas bien compris — souhaitiez-vous passer une commande, ou y a-t-il autre chose que je puisse faire ?",
   },
+  "support.processing_apology": {
+    en: "Sorry, something went wrong on our side — the seller has been notified",
+    fr: "Désolé, quelque chose a mal tourné de notre côté — le vendeur a été informé",
+  },
   "billing.shop_unavailable": {
     en: "This shop isn't currently taking new orders. If you already have an order with us, we'll still fulfil it. Please try again later.",
     fr: "Cette boutique n'accepte pas de nouvelles commandes pour le moment. Si vous avez déjà une commande chez nous, nous l'honorerons quand même. Veuillez réessayer plus tard.",

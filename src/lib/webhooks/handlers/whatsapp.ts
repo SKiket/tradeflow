@@ -27,6 +27,7 @@ import {
   maybeUpdatePreferredLanguage,
 } from "@/lib/i18n/language";
 import { canAcceptOrders } from "@/lib/stripe/billing-gate";
+import { handleInboundProcessingFailure } from "@/lib/channels/inbound-crash";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 
 export interface WhatsAppHandlerResult {
@@ -190,6 +191,78 @@ export async function handleTwilioWhatsApp(
 
   switch (result.status) {
     case "persisted": {
+      try {
+        return await processPersistedInbound(result, supabase);
+      } catch (error) {
+        const crash = await handleInboundProcessingFailure({
+          supabase,
+          businessId: result.message.businessId,
+          customerId: result.message.customerId,
+          customerPhoneE164: result.message.customerPhone,
+          threadId: result.message.threadId,
+          inboundMessageId: result.messageId,
+          error,
+        });
+        console.error("[whatsapp] inbound processing crash — apology path", {
+          messageId: result.messageId,
+          error: crash.errorText,
+          apologySent: crash.apologySent,
+          apologySkipped: crash.apologySkipped,
+        });
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            handled: true,
+            messageId: result.messageId,
+            businessId: result.message.businessId,
+            customerId: result.message.customerId,
+            threadId: result.message.threadId,
+            processingError: crash.errorText,
+            apologySent: crash.apologySent,
+            apologySkipped: crash.apologySkipped,
+            apologyMessageId: crash.apologyMessageId,
+          },
+        };
+      }
+    }
+
+    case "unresolved_business":
+      console.warn("[whatsapp] No business for receiving number", {
+        recipient: result.recipientAddress,
+      });
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          handled: false,
+          reason: "unresolved_business",
+          recipient: result.recipientAddress,
+        },
+      };
+
+    case "error":
+      console.error("[whatsapp] Normalisation failed", { reason: result.reason });
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          handled: false,
+          reason: result.reason,
+        },
+      };
+  }
+}
+
+type PersistedInbound = Extract<
+  Awaited<ReturnType<typeof normaliseAndPersist>>,
+  { status: "persisted" }
+>;
+
+async function processPersistedInbound(
+  result: PersistedInbound,
+  supabase: ReturnType<typeof createAdminClient>,
+): Promise<WhatsAppHandlerResult> {
       let parseStored = false;
       let parseError: string | null = null;
       let draftOutcome: Record<string, unknown> | null = null;
@@ -438,10 +511,14 @@ export async function handleTwilioWhatsApp(
       }
 
       if (!replyHandled) {
-        // Run order_parse on every inbound customer message (simplest correct
-        // default). Failures must not fail the webhook — the message is already
-        // persisted. Voice-note transcripts use the same path as typed text.
-        try {
+        // Run order_parse on every inbound customer message. Uncaught failures
+        // bubble to the outer catch-all (apology + seller banner). Voice-note
+        // transcripts use the same path as typed text.
+        {
+          if (process.env.INBOUND_SIMULATE_ERROR === "ai_timeout") {
+            throw new Error("AI gateway timeout");
+          }
+
           const preferredLanguage = await getCustomerPreferredLanguage(
             supabase,
             result.message.customerId,
@@ -477,6 +554,10 @@ export async function handleTwilioWhatsApp(
                 }
               : null;
 
+          if (process.env.INBOUND_SIMULATE_ERROR === "db_after_parse") {
+            throw new Error("database error after parse");
+          }
+
           const { error: updateError } = await supabase
             .from("messages")
             .update({
@@ -487,12 +568,12 @@ export async function handleTwilioWhatsApp(
             .eq("id", result.messageId);
 
           if (updateError) {
-            parseError = updateError.message;
-            console.error("[whatsapp] Failed to store ai_parse_result", {
-              messageId: result.messageId,
-              error: updateError.message,
-            });
-          } else {
+            throw new Error(
+              `Failed to store ai_parse_result: ${updateError.message}`,
+            );
+          }
+
+          {
             parseStored = true;
             console.info("[whatsapp] order_parse stored", {
               messageId: result.messageId,
@@ -632,12 +713,6 @@ export async function handleTwilioWhatsApp(
               }
             }
           }
-        } catch (error) {
-          parseError = error instanceof Error ? error.message : String(error);
-          console.error("[whatsapp] order_parse failed", {
-            messageId: result.messageId,
-            error: parseError,
-          });
         }
       }
 
@@ -678,27 +753,4 @@ export async function handleTwilioWhatsApp(
           ...(unmatchedNotify ? { unmatchedNotify } : {}),
         },
       };
-    }
-
-    case "unresolved_business":
-      console.warn("[whatsapp] No business for receiving number", {
-        recipient: result.recipientAddress,
-      });
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          handled: false,
-          reason: "unresolved_business",
-          recipient: result.recipientAddress,
-        },
-      };
-
-    case "error":
-      console.error("[whatsapp] Normalisation failed", { reason: result.reason });
-      return {
-        status: 200,
-        body: { ok: true, handled: false, reason: result.reason },
-      };
-  }
 }
