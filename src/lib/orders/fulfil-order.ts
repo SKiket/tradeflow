@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { t } from "@/lib/i18n";
 import {
   persistOrderShippingAddress,
   type OrderShippingAddress,
@@ -115,7 +116,7 @@ export async function fulfilPaidOrder(
 
   const { data: customer } = await supabase
     .from("customers")
-    .select("phone_e164")
+    .select("phone_e164, preferred_language")
     .eq("id", row.customer_id)
     .maybeSingle();
 
@@ -131,13 +132,11 @@ export async function fulfilPaidOrder(
   if (!buyerPhone) {
     console.error("[orders] fulfil: buyer phone missing", { orderId });
   } else {
-    const buyerText = [
-      `Payment received! Your order ${row.order_ref} is confirmed.`,
-      `Total: ${formatPence(row.total_pence)}.`,
-      "",
-      `Track your order: ${orderTrackingUrl(row.order_ref)}`,
-      "We'll be in touch about dispatch. Thanks for your order!",
-    ].join("\n");
+    const buyerText = t("fulfil.payment_received", customer?.preferred_language, {
+      orderRef: row.order_ref,
+      total: formatPence(row.total_pence),
+      url: orderTrackingUrl(row.order_ref),
+    });
 
     const buyerSent = await sendWhatsAppMessage({
       businessId: row.business_id,
@@ -224,7 +223,7 @@ export async function notifyBuyerPaymentFailed(
 
   const { data: customer } = await supabase
     .from("customers")
-    .select("phone_e164")
+    .select("phone_e164, preferred_language")
     .eq("id", order.customer_id)
     .maybeSingle();
 
@@ -233,10 +232,9 @@ export async function notifyBuyerPaymentFailed(
   await sendWhatsAppMessage({
     businessId: order.business_id,
     toPhoneE164: customer.phone_e164,
-    text: [
-      `Sorry — your payment for order ${order.order_ref} didn't go through.`,
-      "We've released the items back to stock. Reply anytime if you'd like to order again.",
-    ].join(" "),
+    text: t("fulfil.payment_failed", customer.preferred_language, {
+      orderRef: order.order_ref,
+    }),
     threadId: order.thread_id,
     customerId: order.customer_id,
     supabase,

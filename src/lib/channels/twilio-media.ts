@@ -7,9 +7,11 @@
 export const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB
 export const MAX_AUDIO_DURATION_SECONDS = 90;
 
+/** @deprecated Prefer t("voice.too_long", lang). */
 export const VOICE_NOTE_TOO_LONG_MESSAGE =
   "That voice note is a bit long for me — could you send a shorter one or type your order?";
 
+/** @deprecated Prefer t("voice.unclear", lang). */
 export const VOICE_NOTE_UNCLEAR_MESSAGE =
   "Sorry — I couldn't make out that voice note. Could you send it again, or type your order?";
 

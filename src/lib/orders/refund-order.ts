@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type Stripe from "stripe";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { t } from "@/lib/i18n";
 import {
   ORDER_STATUS,
   REFUNDABLE_STATUSES,
@@ -311,20 +312,22 @@ async function notifyBuyerRefundSucceeded(params: {
 
   if (!customer?.phone_e164) return;
 
-  const lines = [
-    params.isFullRefund
-      ? `A full refund of ${formatPence(params.amountPence)} has been processed for order ${params.order.order_ref}.`
-      : `A partial refund of ${formatPence(params.amountPence)} has been processed for order ${params.order.order_ref}.`,
-  ];
-  if (params.reason) {
-    lines.push(`Reason: ${params.reason}`);
-  }
-  lines.push("", "The refund should appear in your account within a few business days.");
+  const { data: langRow } = await admin
+    .from("customers")
+    .select("preferred_language")
+    .eq("id", params.order.customer_id)
+    .maybeSingle();
 
   await sendWhatsAppMessage({
     businessId: params.order.business_id,
     toPhoneE164: customer.phone_e164,
-    text: lines.join("\n"),
+    text: buildBuyerRefundMessage({
+      orderRef: params.order.order_ref,
+      amountPence: params.amountPence,
+      reason: params.reason,
+      isFullRefund: params.isFullRefund,
+      lang: (langRow?.preferred_language as string | null) ?? null,
+    }),
     threadId: params.order.thread_id,
     customerId: params.order.customer_id,
     supabase: admin,
@@ -367,13 +370,23 @@ export function buildBuyerRefundMessage(params: {
   amountPence: number;
   reason: string | null;
   isFullRefund: boolean;
+  lang?: string | null;
 }): string {
+  const amount = formatPence(params.amountPence);
   const lines = [
     params.isFullRefund
-      ? `A full refund of ${formatPence(params.amountPence)} has been processed for order ${params.orderRef}.`
-      : `A partial refund of ${formatPence(params.amountPence)} has been processed for order ${params.orderRef}.`,
+      ? t("refund.full", params.lang, {
+          amount,
+          orderRef: params.orderRef,
+        })
+      : t("refund.partial", params.lang, {
+          amount,
+          orderRef: params.orderRef,
+        }),
   ];
-  if (params.reason) lines.push(`Reason: ${params.reason}`);
-  lines.push("", "The refund should appear in your account within a few business days.");
+  if (params.reason) {
+    lines.push(t("refund.reason", params.lang, { reason: params.reason }));
+  }
+  lines.push("", t("refund.timing", params.lang));
   return lines.join("\n");
 }

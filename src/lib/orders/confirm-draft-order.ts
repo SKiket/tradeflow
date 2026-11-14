@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { t } from "@/lib/i18n";
+import { getCustomerPreferredLanguage } from "@/lib/i18n/language";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import {
   RESERVATION_HOURS,
@@ -119,6 +121,8 @@ export async function confirmDraftOrder(
 
   await sweepExpiredReservations(supabase, businessId);
 
+  const lang = await getCustomerPreferredLanguage(supabase, params.customerId);
+
   const stock = await checkOrderStockAvailable(supabase, orderId);
   if (!stock.ok) {
     await cancelDraftOrder(
@@ -127,8 +131,7 @@ export async function confirmDraftOrder(
       businessId,
       ORDER_STATUS.PENDING_CONFIRMATION,
     );
-    const message =
-      "Sorry — we no longer have enough stock to fulfil that order. Nothing has been charged. Want to try a different item or quantity?";
+    const message = t("confirm.stock_unavailable", lang);
     const sent = await sendWhatsAppMessage({
       businessId,
       toPhoneE164: params.customerPhoneE164,
@@ -204,7 +207,10 @@ export async function confirmDraftOrder(
     .update({ stripe_checkout_session_id: session.id })
     .eq("id", orderId);
 
-  const paymentMessage = `Great — here's your secure payment link: ${session.url} — valid for ${RESERVATION_HOURS} hours.`;
+  const paymentMessage = t("confirm.payment_link", lang, {
+    url: session.url,
+    hours: RESERVATION_HOURS,
+  });
   const sent = await sendWhatsAppMessage({
     businessId,
     toPhoneE164: params.customerPhoneE164,
@@ -302,10 +308,11 @@ export async function cancelPendingDraft(
     to_status: ORDER_STATUS.CANCELLED,
   });
 
+  const lang = await getCustomerPreferredLanguage(supabase, params.customerId);
   const sent = await sendWhatsAppMessage({
     businessId: params.businessId,
     toPhoneE164: params.customerPhoneE164,
-    text: "No problem — I've cancelled that draft order. Just message us anytime if you'd like to order something else.",
+    text: t("confirm.draft_cancelled", lang),
     threadId: params.threadId,
     customerId: params.customerId,
     supabase,
@@ -364,11 +371,17 @@ export async function findAwaitingPaymentForThread(
   return data;
 }
 
-export const BUYER_CANCELLED_AWAITING_PAYMENT_MESSAGE =
-  "No problem — I've cancelled that order. The payment link is no longer valid. Message us anytime if you'd like to order something else.";
+/** @deprecated Prefer t("confirm.awaiting_payment_cancelled", lang) — kept for English default. */
+export const BUYER_CANCELLED_AWAITING_PAYMENT_MESSAGE = t(
+  "confirm.awaiting_payment_cancelled",
+  "en",
+);
 
-export const PAYMENT_CHASE_AUTO_CANCEL_MESSAGE =
-  "Your order has been cancelled because we didn't receive payment in time. The payment link is no longer valid. Message us anytime if you'd like to order again.";
+/** @deprecated Prefer t("confirm.payment_auto_cancelled", lang) — kept for English default. */
+export const PAYMENT_CHASE_AUTO_CANCEL_MESSAGE = t(
+  "confirm.payment_auto_cancelled",
+  "en",
+);
 
 export type CancelAwaitingPaymentOutcome =
   | {
@@ -511,10 +524,13 @@ export async function cancelAwaitingPaymentOrder(params: {
     params.customerId
   ) {
     try {
+      const lang = await getCustomerPreferredLanguage(supabase, params.customerId);
       const sent = await sendWhatsAppMessage({
         businessId,
         toPhoneE164: params.customerPhoneE164,
-        text: params.buyerMessage ?? BUYER_CANCELLED_AWAITING_PAYMENT_MESSAGE,
+        text:
+          params.buyerMessage ??
+          t("confirm.awaiting_payment_cancelled", lang),
         threadId: params.threadId,
         customerId: params.customerId,
         supabase,

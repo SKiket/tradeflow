@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { t } from "@/lib/i18n";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { orderTrackingUrl } from "@/lib/storefront/url";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -91,38 +92,57 @@ async function sendBuyerUpdate(params: {
   return sent.messageId;
 }
 
+async function customerLang(
+  customerId: string,
+): Promise<string | null> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("customers")
+    .select("preferred_language")
+    .eq("id", customerId)
+    .maybeSingle();
+  return (data?.preferred_language as string | null) ?? null;
+}
+
 function buildDispatchMessage(
   orderRef: string,
   itemLines: string[],
   trackingNumber?: string,
   carrier?: string,
+  lang?: string | null,
 ): string {
-  const lines = [`Your order ${orderRef} has been dispatched!`, "", ...itemLines];
+  const lines = [
+    t("dispatch.dispatched", lang, { orderRef }),
+    "",
+    ...itemLines,
+  ];
 
-  if (trackingNumber || carrier) {
-    lines.push("");
-    if (carrier) lines.push(`Carrier: ${carrier}`);
-    if (trackingNumber) lines.push(`Tracking: ${trackingNumber}`);
-    lines.push(`Track your order: ${orderTrackingUrl(orderRef)}`);
-    lines.push("", "It's on its way to you!");
-  } else {
-    lines.push("");
-    lines.push(`Track your order: ${orderTrackingUrl(orderRef)}`);
-    lines.push("", "It's on its way to you!");
+  lines.push("");
+  if (carrier) lines.push(t("dispatch.carrier", lang, { carrier }));
+  if (trackingNumber) {
+    lines.push(t("dispatch.tracking", lang, { trackingNumber }));
   }
+  lines.push(
+    t("dispatch.track_order", lang, { url: orderTrackingUrl(orderRef) }),
+  );
+  lines.push("", t("dispatch.on_its_way", lang));
 
   return lines.join("\n");
 }
 
-export function buildDeliverMessage(orderRef: string, itemLines: string[]): string {
+export function buildDeliverMessage(
+  orderRef: string,
+  itemLines: string[],
+  lang?: string | null,
+): string {
   return [
-    `Your order ${orderRef} has been delivered!`,
+    t("deliver.delivered", lang, { orderRef }),
     "",
     ...itemLines,
     "",
-    "Enjoy — thanks for shopping with us!",
+    t("deliver.enjoy", lang),
     "",
-    `Track or manage your order: ${orderTrackingUrl(orderRef)}`,
+    t("deliver.track_manage", lang, { url: orderTrackingUrl(orderRef) }),
   ].join("\n");
 }
 
@@ -230,11 +250,13 @@ export async function dispatchOrder(
   });
 
   const itemLines = await formatItemLines(supabase, orderId);
+  const lang = await customerLang(row.customer_id);
   const message = buildDispatchMessage(
     row.order_ref,
     itemLines,
     trackingNumber,
     carrier || undefined,
+    lang,
   );
   let outboundMessageId = "";
   try {
@@ -357,7 +379,8 @@ export async function deliverOrder(
   });
 
   const itemLines = await formatItemLines(supabase, orderId);
-  const message = buildDeliverMessage(row.order_ref, itemLines);
+  const lang = await customerLang(row.customer_id);
+  const message = buildDeliverMessage(row.order_ref, itemLines, lang);
 
   let outboundMessageId = "";
   try {

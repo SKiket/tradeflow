@@ -1,10 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
-import {
-  cancelAwaitingPaymentOrder,
-  PAYMENT_CHASE_AUTO_CANCEL_MESSAGE,
-} from "@/lib/orders/confirm-draft-order";
+import { t } from "@/lib/i18n";
+import { cancelAwaitingPaymentOrder } from "@/lib/orders/confirm-draft-order";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { getOpenCheckoutUrl } from "@/lib/stripe/checkout";
 
@@ -61,6 +59,7 @@ export interface PaymentChaseRunResult {
 interface CustomerRow {
   id: string;
   phone_e164: string;
+  preferred_language: string | null;
 }
 
 /**
@@ -272,7 +271,12 @@ async function sendReminder(
     }
   }
 
-  const text = buildReminderText(kind, order.order_ref, checkoutUrl);
+  const text = buildReminderText(
+    kind,
+    order.order_ref,
+    checkoutUrl,
+    customer.preferred_language,
+  );
 
   try {
     const sent = await sendWhatsAppMessage({
@@ -320,17 +324,21 @@ function buildReminderText(
   kind: "12h" | "23h",
   orderRef: string,
   checkoutUrl: string | null,
+  lang: string | null,
 ): string {
   if (kind === "12h") {
     if (checkoutUrl) {
-      return `Just a reminder — here's your secure payment link: ${checkoutUrl} — still valid.`;
+      return t("chase.reminder_12h_with_url", lang, { url: checkoutUrl });
     }
-    return `Just a reminder — we haven't received payment for order ${orderRef} yet. Reply here if you'd still like to complete it.`;
+    return t("chase.reminder_12h_no_url", lang, { orderRef });
   }
   if (checkoutUrl) {
-    return `Final reminder — your order ${orderRef} will be cancelled in about an hour if we don't receive payment. Here's your secure payment link: ${checkoutUrl} — still valid.`;
+    return t("chase.reminder_23h_with_url", lang, {
+      orderRef,
+      url: checkoutUrl,
+    });
   }
-  return `Final reminder — your order ${orderRef} will be cancelled in about an hour if we don't receive payment. Reply here if you'd still like to complete it.`;
+  return t("chase.reminder_23h_no_url", lang, { orderRef });
 }
 
 async function autoCancelOrder(
@@ -349,7 +357,10 @@ async function autoCancelOrder(
     customerId: customer?.id,
     customerPhoneE164: customer?.phone_e164,
     threadId: order.thread_id ?? undefined,
-    buyerMessage: PAYMENT_CHASE_AUTO_CANCEL_MESSAGE,
+    buyerMessage: t(
+      "confirm.payment_auto_cancelled",
+      customer?.preferred_language,
+    ),
   });
 
   if (outcome.action === "error") {
@@ -380,9 +391,13 @@ async function loadCustomer(
   if (!order.customer_id) return null;
   const { data, error } = await supabase
     .from("customers")
-    .select("id, phone_e164")
+    .select("id, phone_e164, preferred_language")
     .eq("id", order.customer_id)
     .maybeSingle();
   if (error || !data?.phone_e164) return null;
-  return { id: data.id as string, phone_e164: data.phone_e164 as string };
+  return {
+    id: data.id as string,
+    phone_e164: data.phone_e164 as string,
+    preferred_language: (data.preferred_language as string | null) ?? null,
+  };
 }

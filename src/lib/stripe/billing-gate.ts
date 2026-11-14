@@ -35,6 +35,7 @@ export function canAcceptOrders(business: {
   return status === "trialing" || status === "active";
 }
 
+/** English default — prefer t("billing.shop_unavailable", lang) at send sites. */
 export const SHOP_UNAVAILABLE_BUYER_MESSAGE =
   "This shop isn't currently taking new orders. If you already have an order with us, we'll still fulfil it. Please try again later.";
 

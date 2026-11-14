@@ -21,7 +21,12 @@ import {
 import { notifySellerOfUnmatchedOrder } from "@/lib/support/notify-seller";
 import { parseFormBody } from "@/lib/webhooks/verify/signatures";
 import { AI_PAUSED_PARSE, isAiPaused } from "@/lib/inbox/ai-pause";
-import { canAcceptOrders, SHOP_UNAVAILABLE_BUYER_MESSAGE } from "@/lib/stripe/billing-gate";
+import { t } from "@/lib/i18n";
+import {
+  getCustomerPreferredLanguage,
+  maybeUpdatePreferredLanguage,
+} from "@/lib/i18n/language";
+import { canAcceptOrders } from "@/lib/stripe/billing-gate";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 
 export interface WhatsAppHandlerResult {
@@ -204,10 +209,14 @@ export async function handleTwilioWhatsApp(
         })
       ) {
         try {
+          const lang = await getCustomerPreferredLanguage(
+            supabase,
+            result.message.customerId,
+          );
           await sendWhatsAppMessage({
             businessId: result.message.businessId,
             toPhoneE164: result.message.customerPhone,
-            text: SHOP_UNAVAILABLE_BUYER_MESSAGE,
+            text: t("billing.shop_unavailable", lang),
             threadId: result.message.threadId,
             customerId: result.message.customerId,
             supabase,
@@ -433,11 +442,23 @@ export async function handleTwilioWhatsApp(
         // default). Failures must not fail the webhook — the message is already
         // persisted. Voice-note transcripts use the same path as typed text.
         try {
+          const preferredLanguage = await getCustomerPreferredLanguage(
+            supabase,
+            result.message.customerId,
+          );
           const parseResult = await parseOrder({
             businessId: result.message.businessId,
             messageText,
             threadId: result.message.threadId,
+            preferredLanguage,
             supabase,
+          });
+
+          await maybeUpdatePreferredLanguage({
+            supabase,
+            customerId: result.message.customerId,
+            messageText,
+            detectedLanguage: parseResult.language,
           });
 
           const voiceMeta =

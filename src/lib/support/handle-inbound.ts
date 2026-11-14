@@ -3,6 +3,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateSupportReply } from "@/lib/ai/tasks/support-reply";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { withReplyPrefix } from "@/lib/channels/voice-note";
+import { t } from "@/lib/i18n";
+import {
+  getCustomerPreferredLanguage,
+  maybeUpdatePreferredLanguage,
+} from "@/lib/i18n/language";
 import {
   buyerReturnAlreadyMessage,
   buyerReturnApprovedMessage,
@@ -18,8 +23,8 @@ import { parseReturnReason } from "@/lib/orders/return-reasons";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { notifySellerOfQuestion } from "@/lib/support/notify-seller";
 
-export const OTHER_FALLBACK_MESSAGE =
-  "Sorry, I didn't quite catch that — did you want to place an order, or is there something else I can help with?";
+/** @deprecated Prefer t("support.other_fallback", lang). */
+export const OTHER_FALLBACK_MESSAGE = t("support.other_fallback", "en");
 
 export interface SupportSendResult {
   ok: boolean;
@@ -66,6 +71,11 @@ export async function handleQuestionReply(
 ): Promise<SupportInboundOutcome> {
   const supabase = params.supabase ?? createAdminClient();
 
+  const preferredLanguage = await getCustomerPreferredLanguage(
+    supabase,
+    params.customerId,
+  );
+
   let generated;
   try {
     generated = await generateSupportReply({
@@ -73,6 +83,7 @@ export async function handleQuestionReply(
       messageText: params.messageText,
       threadId: params.threadId,
       customerId: params.customerId,
+      preferredLanguage,
       supabase,
     });
   } catch (error) {
@@ -93,6 +104,14 @@ export async function handleQuestionReply(
     };
   }
 
+  await maybeUpdatePreferredLanguage({
+    supabase,
+    customerId: params.customerId,
+    messageText: params.messageText,
+    detectedLanguage: generated.language,
+  });
+  const lang = await getCustomerPreferredLanguage(supabase, params.customerId);
+
   let reply = generated.reply;
   let escalateToSeller = generated.escalate_to_seller;
   let returnOutcome: SupportInboundOutcome["returnOutcome"];
@@ -108,6 +127,7 @@ export async function handleQuestionReply(
       returnOrderRef: generated.return_order_ref,
       returnReason: generated.return_reason,
       returnReasonDetail: generated.return_reason_detail,
+      lang,
     });
     reply = applied.reply;
     returnOutcome = applied.returnOutcome;
@@ -158,6 +178,7 @@ async function applyReturnRequest(params: {
   returnOrderRef: string | null;
   returnReason: string | null;
   returnReasonDetail: string | null;
+  lang: string;
 }): Promise<{
   reply: string;
   returnOutcome: SupportInboundOutcome["returnOutcome"];
@@ -174,7 +195,10 @@ async function applyReturnRequest(params: {
 
   if (delivered.length > 1 && mentioned.length !== 1) {
     return {
-      reply: buyerReturnWhichOrderMessage(delivered.map((order) => order.orderRef)),
+      reply: buyerReturnWhichOrderMessage(
+        delivered.map((order) => order.orderRef),
+        params.lang,
+      ),
       returnOutcome: { action: "needs_clarification" },
     };
   }
@@ -194,7 +218,7 @@ async function applyReturnRequest(params: {
 
   if (!target) {
     return {
-      reply: buyerReturnNotDeliveredMessage({}),
+      reply: buyerReturnNotDeliveredMessage({ lang: params.lang }),
       returnOutcome: { action: "not_found" },
     };
   }
@@ -217,13 +241,14 @@ async function applyReturnRequest(params: {
         orderRef: outcome.orderRef,
         reason: outcome.reason,
         detail: outcome.detail,
+        lang: params.lang,
       }),
       returnOutcome: outcome,
     };
   }
   if (outcome.action === "auto_approved") {
     return {
-      reply: buyerReturnApprovedMessage(outcome.orderRef),
+      reply: buyerReturnApprovedMessage(outcome.orderRef, params.lang),
       returnOutcome: outcome,
     };
   }
@@ -232,6 +257,7 @@ async function applyReturnRequest(params: {
       reply: buyerReturnNotDeliveredMessage({
         orderRef: outcome.orderRef,
         status: outcome.status,
+        lang: params.lang,
       }),
       returnOutcome: outcome,
     };
@@ -241,6 +267,7 @@ async function applyReturnRequest(params: {
       reply: buyerReturnAlreadyMessage({
         orderRef: outcome.orderRef,
         status: outcome.status,
+        lang: params.lang,
       }),
       returnOutcome: outcome,
     };
@@ -250,6 +277,7 @@ async function applyReturnRequest(params: {
     reply: buyerReturnNotDeliveredMessage({
       orderRef: target.orderRef,
       status: target.status,
+      lang: params.lang,
     }),
     returnOutcome: outcome,
   };
@@ -262,10 +290,12 @@ export async function handleOtherFallback(
   params: HandleSupportParams,
 ): Promise<SupportInboundOutcome> {
   const supabase = params.supabase ?? createAdminClient();
+  const lang = await getCustomerPreferredLanguage(supabase, params.customerId);
+  const reply = t("support.other_fallback", lang);
   const buyerSend = await trySend({
     businessId: params.businessId,
     toPhoneE164: params.customerPhoneE164,
-    text: OTHER_FALLBACK_MESSAGE,
+    text: reply,
     threadId: params.threadId,
     customerId: params.customerId,
     supabase,
@@ -275,7 +305,7 @@ export async function handleOtherFallback(
   return {
     action: "fallback",
     intent: "other",
-    reply: OTHER_FALLBACK_MESSAGE,
+    reply,
     escalateToSeller: false,
     aiCalled: false,
     buyerSend,

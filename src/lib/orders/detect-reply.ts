@@ -1,6 +1,6 @@
 /**
- * Deterministic affirmative-reply detection for draft confirmation.
- * No AI — fast path for obvious "yes" replies.
+ * Deterministic affirmative/negative reply detection for draft confirmation.
+ * No AI — fast path for obvious "yes"/"no" replies (English + French).
  */
 
 const AFFIRMATIVE_PHRASES = new Set([
@@ -14,6 +14,36 @@ const AFFIRMATIVE_PHRASES = new Set([
   "okay",
   "👍",
   "✅",
+  // French
+  "oui",
+  "ouais",
+  "d'accord",
+  "daccord",
+  "dac",
+  "volontiers",
+]);
+
+const NEGATIVE_PHRASES = new Set([
+  "no",
+  "no thanks",
+  "no thank you",
+  "no, cancel",
+  "no cancel",
+  "cancel",
+  "cancelled",
+  "canceled",
+  "nope",
+  "nah",
+  // French
+  "non",
+  "annuler",
+  "annule",
+  "annulé",
+  "annulee",
+  "annulée",
+  "laisse tomber",
+  "laisser tomber",
+  "non merci",
 ]);
 
 /** Strip trivial punctuation/whitespace for matching. */
@@ -39,21 +69,11 @@ export function isAffirmativeReply(text: string): boolean {
 export function isNegativeReply(text: string): boolean {
   const normalized = normalizeReply(text);
   if (!normalized) return false;
-  const negatives = [
-    "no",
-    "no thanks",
-    "no thank you",
-    "no, cancel",
-    "no cancel",
-    "cancel",
-    "cancelled",
-    "canceled",
-    "nope",
-    "nah",
-  ];
+  if (NEGATIVE_PHRASES.has(normalized)) return true;
   return (
-    negatives.includes(normalized) ||
     normalized.startsWith("no ") ||
-    normalized.startsWith("no,")
+    normalized.startsWith("no,") ||
+    normalized.startsWith("non ") ||
+    normalized.startsWith("non,")
   );
 }

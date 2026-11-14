@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { t } from "@/lib/i18n";
+import { getCustomerPreferredLanguage } from "@/lib/i18n/language";
 import { statusLabel } from "@/lib/orders/display";
 import {
   parseReturnReason,
@@ -38,58 +40,82 @@ export function returnSlipUrl(orderRef: string): string {
   return `${orderTrackingUrl(orderRef)}/return-slip`;
 }
 
-export function buyerReturnApprovedMessage(orderRef: string): string {
-  return [
-    `Your return for order ${orderRef} has been approved.`,
-    "",
-    `Please print your return slip: ${returnSlipUrl(orderRef)}`,
-    "",
-    "You're responsible for return postage — the slip has the return address.",
-  ].join("\n");
+export function buyerReturnApprovedMessage(
+  orderRef: string,
+  lang?: string | null,
+): string {
+  return t("return.approved", lang, {
+    orderRef,
+    slipUrl: returnSlipUrl(orderRef),
+  });
 }
 
 export function buyerReturnRequestedMessage(params: {
   orderRef: string;
   reason: ReturnReason;
   detail?: string | null;
+  lang?: string | null;
 }): string {
   const label =
     params.reason === "other" && params.detail?.trim()
       ? params.detail.trim()
       : RETURN_REASON_LABEL[params.reason];
-  return `Got it — return requested for order ${params.orderRef}, reason: ${label}. We'll let you know once the seller's reviewed it.`;
+  return t("return.requested", params.lang, {
+    orderRef: params.orderRef,
+    reason: label,
+  });
 }
 
 export function buyerReturnNotDeliveredMessage(params: {
   orderRef?: string | null;
   status?: string | null;
+  lang?: string | null;
 }): string {
   if (params.orderRef && params.status) {
-    return `A return can only be requested after the order has been delivered. Order ${params.orderRef} is currently ${statusLabel(params.status).toLowerCase()}, so I can't start a return yet.`;
+    return t("return.not_delivered_with_status", params.lang, {
+      orderRef: params.orderRef,
+      status: statusLabel(params.status).toLowerCase(),
+    });
   }
-  return "A return can only be requested after an order has been delivered. I can't start a return for you yet.";
+  return t("return.not_delivered", params.lang);
 }
 
 export function buyerReturnAlreadyMessage(params: {
   orderRef: string;
   status: string;
+  lang?: string | null;
 }): string {
   switch (params.status) {
     case ORDER_STATUS.RETURN_REQUESTED:
-      return `A return has already been requested for order ${params.orderRef}. The seller is still reviewing it.`;
+      return t("return.already_requested", params.lang, {
+        orderRef: params.orderRef,
+      });
     case ORDER_STATUS.RETURN_APPROVED:
-      return `A return for order ${params.orderRef} has already been approved. Print your return slip from the tracking page to send it back.`;
+      return t("return.already_approved", params.lang, {
+        orderRef: params.orderRef,
+      });
     case ORDER_STATUS.RETURN_DECLINED:
-      return `The return request for order ${params.orderRef} was declined.`;
+      return t("return.declined", params.lang, {
+        orderRef: params.orderRef,
+      });
     case ORDER_STATUS.RETURNED:
-      return `Order ${params.orderRef} has already been marked as returned.`;
+      return t("return.already_returned", params.lang, {
+        orderRef: params.orderRef,
+      });
     default:
-      return `A return has already been started for order ${params.orderRef}.`;
+      return t("return.already_started", params.lang, {
+        orderRef: params.orderRef,
+      });
   }
 }
 
-export function buyerReturnWhichOrderMessage(orderRefs: string[]): string {
-  return `Which order would you like to return? ${orderRefs.join(", ")}`;
+export function buyerReturnWhichOrderMessage(
+  orderRefs: string[],
+  lang?: string | null,
+): string {
+  return t("return.which_order", lang, {
+    orderRefs: orderRefs.join(", "),
+  });
 }
 
 export async function findCustomerOrderByRef(
@@ -294,11 +320,12 @@ export async function requestReturn(
       orderRef: row.order_ref,
       supabase,
     });
+    const lang = await getCustomerPreferredLanguage(supabase, row.customer_id);
     await sendBuyerWhatsApp({
       businessId: row.business_id,
       customerId: row.customer_id,
       threadId: row.thread_id,
-      text: buyerReturnApprovedMessage(row.order_ref),
+      text: buyerReturnApprovedMessage(row.order_ref, lang),
     });
     return {
       action: "auto_approved",
@@ -395,13 +422,18 @@ export async function decideReturn(
   });
 
   const slipUrl = returnSlipUrl(order.order_ref as string);
+  const lang = await getCustomerPreferredLanguage(
+    supabase,
+    order.customer_id as string,
+  );
   const text =
     decision === "approve"
-      ? buyerReturnApprovedMessage(order.order_ref as string)
+      ? buyerReturnApprovedMessage(order.order_ref as string, lang)
       : await declineBuyerMessage(
           supabase,
           order.business_id as string,
           order.order_ref as string,
+          order.customer_id as string,
         );
 
   await sendBuyerWhatsApp({
@@ -521,15 +553,18 @@ async function declineBuyerMessage(
   supabase: SupabaseClient,
   businessId: string,
   orderRef: string,
+  customerId: string,
 ): Promise<string> {
+  const lang = await getCustomerPreferredLanguage(supabase, customerId);
   const { data } = await supabase
     .from("businesses")
     .select("returns_policy_text")
     .eq("id", businessId)
     .maybeSingle();
   const policy = (data?.returns_policy_text as string | null)?.trim();
-  const lines = [`Your return for order ${orderRef} wasn't approved.`];
+  const lines = [t("return.not_approved", lang, { orderRef })];
   if (policy) {
+    // Seller policy text is inserted unchanged — never translate.
     lines.push("", policy);
   }
   return lines.join("\n");

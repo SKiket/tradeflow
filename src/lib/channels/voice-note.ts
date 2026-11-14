@@ -3,12 +3,16 @@
  * messages.normalised_text with source_kind = "voice_note".
  */
 
+import { t } from "@/lib/i18n";
+
 export const SOURCE_KIND_VOICE_NOTE = "voice_note";
 
 /** Prefix buyer-facing automated replies when the inbound was a voice note. */
-export function voiceHeardPrefix(transcript: string): string {
-  const trimmed = transcript.trim();
-  return `I heard: "${trimmed}" — `;
+export function voiceHeardPrefix(
+  transcript: string,
+  lang?: string | null,
+): string {
+  return t("voice.heard_prefix", lang, { transcript: transcript.trim() });
 }
 
 export function withReplyPrefix(

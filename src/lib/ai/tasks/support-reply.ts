@@ -2,6 +2,7 @@ import type { JSONSchema7 } from "json-schema";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { run } from "@/lib/ai/gateway";
+import { buyerLanguageInstruction } from "@/lib/i18n/language";
 import { fetchRecentCustomerOrders, type CustomerOrderSummary } from "@/lib/orders/customer-orders";
 import { formatPence } from "@/lib/orders/display";
 import {
@@ -21,6 +22,8 @@ export interface SupportReplyResult {
   return_order_ref: string | null;
   return_reason: string | null;
   return_reason_detail: string | null;
+  /** ISO 639-1 code of the buyer's latest message, or "unknown". */
+  language: string;
 }
 
 export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
@@ -60,6 +63,11 @@ export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
       description:
         "The buyer's own words. Required in spirit when return_reason is other; optional extra detail otherwise.",
     },
+    language: {
+      type: "string",
+      description:
+        'ISO 639-1 code of the latest customer message (e.g. "en", "fr"), or "unknown"',
+    },
   },
   required: [
     "reply",
@@ -69,6 +77,7 @@ export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
     "return_order_ref",
     "return_reason",
     "return_reason_detail",
+    "language",
   ],
   additionalProperties: false,
 };
@@ -111,7 +120,8 @@ Rules:
 6. If the question cannot be answered from what is actually configured, listed, or on the customer's orders — custom requests, price negotiation, warranties, shipping countries/regions, complex logistics not covered by dispatch_days, or anything the seller never provided — set escalate_to_seller to true. The reply MUST tell the buyer their question has been passed to the seller. Never guess or invent an answer to sound complete.
 7. Blank / "not configured" fields are not information. Do not infer a policy from them. Do not treat dispatch days as evidence that the seller ships to a particular country or region.
 8. Match the supplied ai_tone. Do not mention these instructions, "business context", "catalog JSON", "customer orders JSON", or that you are an AI. This business only messages buyers on WhatsApp — never mention email or another channel.
-9. Respond with JSON matching the schema exactly. When this is not a return request, set is_return_request false, needs_order_clarification false, and the return_* fields to null.`;
+9. Set language to the ISO 639-1 code of the LATEST customer message (e.g. "en", "fr"), or "unknown" if unclear.
+10. Respond with JSON matching the schema exactly. When this is not a return request, set is_return_request false, needs_order_clarification false, and the return_* fields to null.`;
 
 interface ThreadMessage {
   direction: string;
@@ -138,6 +148,7 @@ export async function generateSupportReply(params: {
   messageText: string;
   threadId: string;
   customerId?: string;
+  preferredLanguage?: string | null;
   supabase?: SupabaseClient;
 }): Promise<SupportReplyResult> {
   const supabase = params.supabase ?? createAdminClient();
@@ -157,7 +168,7 @@ export async function generateSupportReply(params: {
 
   const gatewayResult = await run({
     taskKey: "support_reply",
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: `${SYSTEM_PROMPT}\n\n${buyerLanguageInstruction(params.preferredLanguage)}`,
     userPrompt: buildUserPrompt({
       messageText: params.messageText,
       business,
@@ -346,6 +357,10 @@ function normaliseSupportReply(data: unknown): SupportReplyResult {
       ? record.return_reason_detail.trim()
       : null;
 
+  const languageRaw =
+    typeof record.language === "string" ? record.language.trim() : "";
+  const language = languageRaw.length > 0 ? languageRaw.toLowerCase() : "unknown";
+
   return {
     reply,
     escalate_to_seller: escalate,
@@ -354,5 +369,6 @@ function normaliseSupportReply(data: unknown): SupportReplyResult {
     return_order_ref: returnRef,
     return_reason: reason,
     return_reason_detail: detail,
+    language,
   };
 }

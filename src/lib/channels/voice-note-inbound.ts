@@ -7,13 +7,16 @@ import {
   firstMediaContentType,
   isAudioOnlyInbound,
   TwilioMediaError,
-  VOICE_NOTE_TOO_LONG_MESSAGE,
-  VOICE_NOTE_UNCLEAR_MESSAGE,
 } from "@/lib/channels/twilio-media";
 import {
   SOURCE_KIND_VOICE_NOTE,
   voiceHeardPrefix,
 } from "@/lib/channels/voice-note";
+import { t } from "@/lib/i18n";
+import {
+  getCustomerPreferredLanguage,
+  maybeUpdatePreferredLanguage,
+} from "@/lib/i18n/language";
 
 export type VoiceNoteInboundOutcome =
   | {
@@ -76,6 +79,10 @@ export async function handleVoiceNoteInbound(params: {
 
   const mimeType = firstMediaContentType(params.rawPayload) ?? "audio/ogg";
   const mediaUrl = params.mediaUrls[0];
+  const lang = await getCustomerPreferredLanguage(
+    params.supabase,
+    params.customerId,
+  );
 
   let downloaded;
   try {
@@ -90,7 +97,11 @@ export async function handleVoiceNoteInbound(params: {
     ) {
       const buyerSend = params.skipBuyerReplies
         ? { ok: true }
-        : await trySendFixed(params, VOICE_NOTE_TOO_LONG_MESSAGE, "voice too long");
+        : await trySendFixed(
+            params,
+            t("voice.too_long", lang),
+            "voice too long",
+          );
       await params.supabase
         .from("messages")
         .update({
@@ -127,7 +138,7 @@ export async function handleVoiceNoteInbound(params: {
     });
     const buyerSend = params.skipBuyerReplies
       ? { ok: true }
-      : await trySendFixed(params, VOICE_NOTE_UNCLEAR_MESSAGE, "voice unclear");
+      : await trySendFixed(params, t("voice.unclear", lang), "voice unclear");
     await params.supabase
       .from("messages")
       .update({
@@ -179,7 +190,7 @@ export async function handleVoiceNoteInbound(params: {
   if (unclear) {
     const buyerSend = params.skipBuyerReplies
       ? { ok: true }
-      : await trySendFixed(params, VOICE_NOTE_UNCLEAR_MESSAGE, "voice unclear");
+      : await trySendFixed(params, t("voice.unclear", lang), "voice unclear");
     return {
       kind: "unclear",
       transcript,
@@ -189,12 +200,19 @@ export async function handleVoiceNoteInbound(params: {
     };
   }
 
+  const replyLang = await maybeUpdatePreferredLanguage({
+    supabase: params.supabase,
+    customerId: params.customerId,
+    messageText: transcript,
+    detectedLanguage: language,
+  });
+
   return {
     kind: "ready",
     transcript,
     confidence,
     language,
-    buyerReplyPrefix: voiceHeardPrefix(transcript),
+    buyerReplyPrefix: voiceHeardPrefix(transcript, replyLang),
   };
 }
 

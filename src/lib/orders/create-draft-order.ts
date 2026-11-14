@@ -5,6 +5,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { OrderParseItem, OrderParseResult } from "@/lib/ai/tasks/order-parse";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { withReplyPrefix } from "@/lib/channels/voice-note";
+import { t } from "@/lib/i18n";
+import { getCustomerPreferredLanguage } from "@/lib/i18n/language";
 import {
   cancelAwaitingPaymentOrder,
   findAwaitingPaymentForThread,
@@ -120,14 +122,15 @@ export async function createDraftOrderFromParse(
   }
 
   const replyPrefix = params.buyerReplyPrefix ?? null;
+  const lang = await getCustomerPreferredLanguage(supabase, params.customerId);
 
-  const gate = await evaluateConfirmGate(supabase, params.businessId, parse);
+  const gate = await evaluateConfirmGate(supabase, params.businessId, parse, lang);
   if (!gate.ok) {
     const message = withReplyPrefix(
       replyPrefix,
       parse.clarification_message?.trim() ||
         gate.fallbackMessage ||
-        "Sorry — I wasn't sure which items you wanted. Could you tell me the product name and size/colour again?",
+        t("draft.clarification_unsure", lang),
     );
     const sent = await sendWhatsAppMessage({
       businessId: params.businessId,
@@ -150,7 +153,7 @@ export async function createDraftOrderFromParse(
   if (shortages.length > 0) {
     const message = withReplyPrefix(
       replyPrefix,
-      formatStockShortageMessage(shortages),
+      formatStockShortageMessage(shortages, lang),
     );
     const sent = await sendWhatsAppMessage({
       businessId: params.businessId,
@@ -291,7 +294,7 @@ export async function createDraftOrderFromParse(
 
   const confirmationMessage = withReplyPrefix(
     replyPrefix,
-    formatConfirmationMessage(gate.lines, totalPence),
+    formatConfirmationMessage(gate.lines, totalPence, lang),
   );
 
   let outboundMessageId = "";
@@ -339,6 +342,7 @@ async function evaluateConfirmGate(
   supabase: SupabaseClient,
   businessId: string,
   parse: OrderParseResult,
+  lang: string,
 ): Promise<
   | { ok: true; lines: ResolvedLine[] }
   | { ok: false; fallbackMessage: string }
@@ -346,23 +350,21 @@ async function evaluateConfirmGate(
   if (parse.needs_clarification) {
     return {
       ok: false,
-      fallbackMessage:
-        "I need a bit more detail before I can prepare that order — which product and size/colour did you want?",
+      fallbackMessage: t("draft.clarification_need_detail", lang),
     };
   }
 
   if (parse.confidence < CONFIRM_THRESHOLD) {
     return {
       ok: false,
-      fallbackMessage:
-        "I wasn't confident enough to prepare that order. Could you rephrase the items you want?",
+      fallbackMessage: t("draft.clarification_low_confidence", lang),
     };
   }
 
   const lines: ResolvedLine[] = [];
 
   for (const item of parse.items) {
-    const resolved = await resolveLine(supabase, businessId, item);
+    const resolved = await resolveLine(supabase, businessId, item, lang);
     if (!resolved.ok) {
       return { ok: false, fallbackMessage: resolved.fallbackMessage };
     }
@@ -376,6 +378,7 @@ async function resolveLine(
   supabase: SupabaseClient,
   businessId: string,
   item: OrderParseItem,
+  lang: string,
 ): Promise<
   | { ok: true; line: ResolvedLine }
   | { ok: false; fallbackMessage: string }
@@ -383,13 +386,17 @@ async function resolveLine(
   if (!item.matched_product_id) {
     return {
       ok: false,
-      fallbackMessage: `I couldn't match "${item.product_query}" to anything in our catalogue. Which product did you mean?`,
+      fallbackMessage: t("draft.clarification_unmatched", lang, {
+        query: item.product_query,
+      }),
     };
   }
   if (item.match_confidence < CONFIRM_THRESHOLD) {
     return {
       ok: false,
-      fallbackMessage: `I wasn't sure about "${item.product_query}". Could you confirm the exact product name?`,
+      fallbackMessage: t("draft.clarification_confirm_product", lang, {
+        query: item.product_query,
+      }),
     };
   }
 
@@ -405,7 +412,9 @@ async function resolveLine(
   if (productError || !product || product.deleted_at || !product.active) {
     return {
       ok: false,
-      fallbackMessage: `I couldn't find "${item.product_query}" in our catalogue right now. Could you pick something else?`,
+      fallbackMessage: t("draft.clarification_not_in_catalogue", lang, {
+        query: item.product_query,
+      }),
     };
   }
 
@@ -431,7 +440,10 @@ async function resolveLine(
     } else {
       return {
         ok: false,
-        fallbackMessage: `Which option of ${product.name} did you want${variants.length ? ` (${variants.map((v) => v.label).join(", ")})` : ""}?`,
+        fallbackMessage: t("draft.clarification_which_option", lang, {
+          product: product.name as string,
+          options: variants.map((v) => v.label).join(", "),
+        }),
       };
     }
   }
@@ -439,7 +451,9 @@ async function resolveLine(
   if (!variant) {
     return {
       ok: false,
-      fallbackMessage: `I couldn't resolve a purchasable option for ${product.name}.`,
+      fallbackMessage: t("draft.clarification_no_option", lang, {
+        product: product.name as string,
+      }),
     };
   }
 
@@ -519,40 +533,43 @@ function formatPence(pence: number): string {
 function formatConfirmationMessage(
   lines: ResolvedLine[],
   totalPence: number,
+  lang: string,
 ): string {
-  const itemLines = lines.map((line) => {
-    const label = line.variantLabel ? ` (${line.variantLabel})` : "";
-    const lineTotal = formatPence(line.unitPricePence * line.quantity);
-    return `• ${line.quantity}× ${line.productName}${label} — ${lineTotal}`;
-  });
+  const items = lines
+    .map((line) => {
+      const label = line.variantLabel ? ` (${line.variantLabel})` : "";
+      const lineTotal = formatPence(line.unitPricePence * line.quantity);
+      return `• ${line.quantity}× ${line.productName}${label} — ${lineTotal}`;
+    })
+    .join("\n");
 
-  return [
-    "Here's your draft order:",
-    ...itemLines,
-    "",
-    `Total: ${formatPence(totalPence)}`,
-    "",
-    "Reply YES to confirm and pay, or tell us what to change.",
-  ].join("\n");
+  return t("draft.confirmation", lang, {
+    items,
+    total: formatPence(totalPence),
+  });
 }
 
-function formatStockShortageMessage(lines: ResolvedLine[]): string {
+function formatStockShortageMessage(
+  lines: ResolvedLine[],
+  lang: string,
+): string {
   const details = lines
     .filter((line) => line.trackInventory && line.available < line.quantity)
     .map((line) => {
       const label = line.variantLabel ? ` (${line.variantLabel})` : "";
+      const name = `${line.productName}${label}`;
       if (line.available <= 0) {
-        return `• ${line.productName}${label} is out of stock`;
+        return t("draft.stock_out", lang, { name });
       }
-      return `• ${line.productName}${label}: only ${line.available} left (you asked for ${line.quantity})`;
-    });
+      return t("draft.stock_partial", lang, {
+        name,
+        available: line.available,
+        requested: line.quantity,
+      });
+    })
+    .join("\n");
 
-  return [
-    "Sorry — we don't have enough stock for that order right now:",
-    ...details,
-    "",
-    "Want a smaller quantity, or a different item?",
-  ].join("\n");
+  return t("draft.stock_shortage", lang, { details });
 }
 
 /**
@@ -563,6 +580,7 @@ export async function previewDraftBuyerReply(
   supabase: SupabaseClient,
   businessId: string,
   parse: OrderParseResult,
+  lang: string = "en",
 ): Promise<{
   action: "ignored" | "clarification" | "stock_shortage" | "draft_confirmation";
   reply: string | null;
@@ -574,14 +592,14 @@ export async function previewDraftBuyerReply(
     return { action: "ignored", reply: null };
   }
 
-  const gate = await evaluateConfirmGate(supabase, businessId, parse);
+  const gate = await evaluateConfirmGate(supabase, businessId, parse, lang);
   if (!gate.ok) {
     return {
       action: "clarification",
       reply:
         parse.clarification_message?.trim() ||
         gate.fallbackMessage ||
-        "Sorry — I wasn't sure which items you wanted. Could you tell me the product name and size/colour again?",
+        t("draft.clarification_unsure", lang),
     };
   }
 
@@ -591,7 +609,7 @@ export async function previewDraftBuyerReply(
   if (shortages.length > 0) {
     return {
       action: "stock_shortage",
-      reply: formatStockShortageMessage(shortages),
+      reply: formatStockShortageMessage(shortages, lang),
     };
   }
 
@@ -601,6 +619,6 @@ export async function previewDraftBuyerReply(
   );
   return {
     action: "draft_confirmation",
-    reply: formatConfirmationMessage(gate.lines, totalPence),
+    reply: formatConfirmationMessage(gate.lines, totalPence, lang),
   };
 }

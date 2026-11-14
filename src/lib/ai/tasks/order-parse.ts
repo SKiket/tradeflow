@@ -2,6 +2,7 @@ import type { JSONSchema7 } from "json-schema";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { run } from "@/lib/ai/gateway";
+import { buyerLanguageInstruction } from "@/lib/i18n/language";
 import {
   fetchActiveCatalog,
   type CatalogProduct,
@@ -29,6 +30,8 @@ export interface OrderParseResult {
   items: OrderParseItem[];
   needs_clarification: boolean;
   clarification_message: string | null;
+  /** ISO 639-1 code of the buyer's latest message, or "unknown". */
+  language: string;
 }
 
 export const ORDER_PARSE_SCHEMA: JSONSchema7 = {
@@ -67,6 +70,11 @@ export const ORDER_PARSE_SCHEMA: JSONSchema7 = {
     },
     needs_clarification: { type: "boolean" },
     clarification_message: { type: "string" },
+    language: {
+      type: "string",
+      description:
+        'ISO 639-1 code of the latest customer message (e.g. "en", "fr"), or "unknown"',
+    },
   },
   required: [
     "intent",
@@ -74,6 +82,7 @@ export const ORDER_PARSE_SCHEMA: JSONSchema7 = {
     "items",
     "needs_clarification",
     "clarification_message",
+    "language",
   ],
   additionalProperties: false,
 };
@@ -85,10 +94,11 @@ Given a customer's latest inbound message, recent thread context, and the busine
 1. Classify intent as exactly one of: "order", "question", "other".
 2. Extract any order line items the customer is requesting (including corrections to earlier items in the thread).
 3. Match each item ONLY against the supplied catalog. Never invent a product or variant that is not listed. If nothing matches, leave matched_product_id and matched_variant_id as null (or empty string) and set a low match_confidence.
-4. Set needs_clarification to true (and write a clear clarification_message) when the match is ambiguous, the referenced item is not in the catalog, quantity/variant is unclear, or a follow-up correction cannot be applied confidently.
+4. Set needs_clarification to true (and write a clear clarification_message) when the match is ambiguous, the referenced item is not in the catalog, quantity/variant is unclear, or a follow-up correction cannot be applied confidently. When you write clarification_message, reply in the same language as the buyer; if you cannot write that language well, reply in English. Never translate product names.
 5. For non-order messages (questions, greetings, other), set intent accordingly, leave items as [], and set needs_clarification false unless you genuinely need to ask something back.
    - After-sales status/tracking questions (e.g. "where's my order?", "when will this arrive?") are intent "question", not "order" or "other".
    - Complaints and problems (damaged, wrong item, missing, unhappy) are also intent "question" so they can be handled by support — not "other".
+6. Set language to the ISO 639-1 code of the LATEST customer message (e.g. "en", "fr"), or "unknown" if unclear. Do not use thread history alone to guess language.
 
 Rules:
 - match_confidence and confidence are numbers between 0 and 1.
@@ -113,6 +123,7 @@ export async function parseOrder(params: {
   businessId: string;
   messageText: string;
   threadId: string;
+  preferredLanguage?: string | null;
   supabase?: SupabaseClient;
 }): Promise<OrderParseResult> {
   const supabase = params.supabase ?? createAdminClient();
@@ -130,7 +141,7 @@ export async function parseOrder(params: {
 
   const gatewayResult = await run({
     taskKey: "order_parse",
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: `${SYSTEM_PROMPT}\n\n${buyerLanguageInstruction(params.preferredLanguage)}`,
     userPrompt,
     schema: ORDER_PARSE_SCHEMA,
   });
@@ -237,11 +248,16 @@ function normaliseParseResult(data: unknown): OrderParseResult {
     };
   });
 
+  const languageRaw =
+    typeof record.language === "string" ? record.language.trim() : "";
+  const language = languageRaw.length > 0 ? languageRaw.toLowerCase() : "unknown";
+
   return {
     intent,
     confidence: clamp01(record.confidence),
     items,
     needs_clarification: record.needs_clarification === true,
     clarification_message: nullishString(record.clarification_message),
+    language,
   };
 }
