@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { enqueuePendingReplay } from "@/lib/channels/pending-replay";
 import { APOLOGY_COOLDOWN_MS } from "@/lib/channels/send/delivery";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { t } from "@/lib/i18n";
@@ -70,6 +71,19 @@ export async function handleInboundProcessingFailure(
   }
 
   const processingMessageId = (processingRow?.id as string | null) ?? null;
+
+  // Always queue replay so the buyer's original request can be re-applied
+  // once sending works again (apology alone does not fulfil the request).
+  if (params.inboundMessageId) {
+    await enqueuePendingReplay({
+      supabase: params.supabase,
+      inboundMessageId: params.inboundMessageId,
+      businessId: params.businessId,
+      customerId: params.customerId,
+      threadId: params.threadId,
+      lastError: shortError,
+    }).catch(() => undefined);
+  }
 
   const recentApology = await findRecentApology(
     params.supabase,

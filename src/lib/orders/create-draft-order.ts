@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { OrderParseItem, OrderParseResult } from "@/lib/ai/tasks/order-parse";
+import { enqueuePendingReplay } from "@/lib/channels/pending-replay";
 import { buildDraftItemSignature } from "@/lib/channels/send/delivery";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { withReplyPrefix } from "@/lib/channels/voice-note";
@@ -61,6 +62,10 @@ export interface CreateDraftOrderParams {
   /** Optional transparency prefix (e.g. voice-note "I heard: … — "). */
   buyerReplyPrefix?: string | null;
   supabase?: SupabaseClient;
+  /** Inbound message that produced this draft — used to queue replay. */
+  inboundMessageId?: string | null;
+  /** When true, caller owns the pending_replay row (replay cron). */
+  skipReplayEnqueue?: boolean;
 }
 
 interface StockShortage {
@@ -142,6 +147,7 @@ export async function createDraftOrderFromParse(
         customerId: params.customerId,
         supabase,
         audience: "buyer",
+        scheduleOutboundRetry: false,
       });
       return {
         action: "clarification_sent",
@@ -149,9 +155,20 @@ export async function createDraftOrderFromParse(
         outboundMessageId: sent.messageId,
       };
     } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
       console.error("[orders] Clarification send failed (persisted)", {
-        error: error instanceof Error ? error.message : String(error),
+        error: err,
       });
+      if (params.inboundMessageId && !params.skipReplayEnqueue) {
+        await enqueuePendingReplay({
+          supabase,
+          inboundMessageId: params.inboundMessageId,
+          businessId: params.businessId,
+          customerId: params.customerId,
+          threadId: params.threadId,
+          lastError: err,
+        }).catch(() => undefined);
+      }
       return {
         action: "clarification_sent",
         message,
@@ -177,6 +194,7 @@ export async function createDraftOrderFromParse(
         customerId: params.customerId,
         supabase,
         audience: "buyer",
+        scheduleOutboundRetry: false,
       });
       return {
         action: "stock_shortage",
@@ -190,9 +208,20 @@ export async function createDraftOrderFromParse(
         })),
       };
     } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
       console.error("[orders] Stock shortage send failed (persisted)", {
-        error: error instanceof Error ? error.message : String(error),
+        error: err,
       });
+      if (params.inboundMessageId && !params.skipReplayEnqueue) {
+        await enqueuePendingReplay({
+          supabase,
+          inboundMessageId: params.inboundMessageId,
+          businessId: params.businessId,
+          customerId: params.customerId,
+          threadId: params.threadId,
+          lastError: err,
+        }).catch(() => undefined);
+      }
       return {
         action: "stock_shortage",
         message,
@@ -361,6 +390,7 @@ export async function createDraftOrderFromParse(
       customerId: params.customerId,
       supabase,
       audience: "buyer",
+      scheduleOutboundRetry: false,
       retryContext: {
         kind: "draft_confirmation",
         orderId,
@@ -398,6 +428,27 @@ export async function createDraftOrderFromParse(
       businessId: params.businessId,
       previousDraft,
     });
+    if (params.inboundMessageId && !params.skipReplayEnqueue) {
+      try {
+        await enqueuePendingReplay({
+          supabase,
+          inboundMessageId: params.inboundMessageId,
+          businessId: params.businessId,
+          customerId: params.customerId,
+          threadId: params.threadId,
+          lastError: sendError,
+          delayMinutes: 30,
+        });
+      } catch (enqueueError) {
+        console.error("[orders] pending_replay enqueue failed", {
+          inboundMessageId: params.inboundMessageId,
+          error:
+            enqueueError instanceof Error
+              ? enqueueError.message
+              : String(enqueueError),
+        });
+      }
+    }
   }
 
   return {

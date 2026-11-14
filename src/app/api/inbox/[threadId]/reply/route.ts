@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/api/auth";
 import { resolveActiveOwnedBusiness } from "@/lib/auth/active-business";
 import { isInServiceWindow } from "@/lib/channels/service-window";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { cancelPendingReplaysForCustomer } from "@/lib/channels/pending-replay";
 import { acknowledgeThreadDeliveryFailures } from "@/lib/dashboard/delivery-failures";
 import { pauseAiUntil } from "@/lib/inbox/ai-pause";
 import { unwrapRelation } from "@/lib/orders/display";
@@ -125,6 +126,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
       business.id as string,
       threadId,
     );
+    await cancelPendingReplaysForCustomer({
+      supabase: auth.supabase,
+      businessId: business.id as string,
+      customerId: row.customer_id as string,
+      reason: "Seller replied manually — replay cancelled",
+    });
 
     const pausedUntil = pauseAiUntil();
     const { error: pauseError } = await auth.supabase

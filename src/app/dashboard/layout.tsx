@@ -1,12 +1,14 @@
 import Link from "next/link";
 
 import { LegalLinks } from "@/components/brand/legal-links";
+import { countPendingReplays } from "@/lib/channels/pending-replay";
 import { countRecentDeliveryFailures } from "@/lib/dashboard/delivery-failures";
 import { fetchSetupProgress } from "@/lib/dashboard/setup-progress";
 import { canAcceptOrders, ordersPausedBanner } from "@/lib/stripe/billing-gate";
 
 import { BillingPausedBanner } from "./billing-paused-banner";
 import { DeliveryFailedBanner } from "./delivery-failed-banner";
+import { PendingReplayBanner } from "./pending-replay-banner";
 import { BusinessSwitcher } from "./business-switcher";
 import { DashboardNav } from "./dashboard-nav";
 import { requireSeller } from "./require-seller";
@@ -24,6 +26,7 @@ export default async function DashboardLayout({
     supabase,
     business.id,
   );
+  const pendingReplays = await countPendingReplays(supabase, business.id);
 
   const takingOrders = canAcceptOrders({
     stripe_subscription_status:
@@ -95,6 +98,7 @@ export default async function DashboardLayout({
             hasCustomer={Boolean(business.stripe_customer_id)}
           />
         ) : null}
+        <PendingReplayBanner count={pendingReplays} />
         <DeliveryFailedBanner
           count={deliveryFailures.count}
           latestErrorText={deliveryFailures.latestErrorText}

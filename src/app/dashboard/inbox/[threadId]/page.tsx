@@ -87,6 +87,27 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
 
   if (!messages?.length) notFound();
 
+  const inboundIds = messages
+    .filter((m) => m.direction === "inbound")
+    .map((m) => m.id as string);
+  const replayByInbound = new Map<
+    string,
+    { status: string; cancel_reason: string | null; last_error: string | null }
+  >();
+  if (inboundIds.length) {
+    const { data: replays } = await supabase
+      .from("pending_replays")
+      .select("inbound_message_id, status, cancel_reason, last_error")
+      .in("inbound_message_id", inboundIds);
+    for (const row of replays ?? []) {
+      replayByInbound.set(row.inbound_message_id as string, {
+        status: row.status as string,
+        cancel_reason: (row.cancel_reason as string | null) ?? null,
+        last_error: (row.last_error as string | null) ?? null,
+      });
+    }
+  }
+
   const firstCustomer = unwrapRelation(
     messages.find((row) => row.customers)?.customers as
       | {
@@ -152,6 +173,9 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
         {messages.map((row) => {
           const inbound = row.direction === "inbound";
           const parse = formatParse(row.ai_parse_result);
+          const replay = inbound
+            ? replayByInbound.get(row.id as string)
+            : undefined;
           return (
             <li
               key={row.id as string}
@@ -169,6 +193,28 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
                   </span>
                   <time>{formatDateTime(row.created_at as string)}</time>
                 </div>
+                {replay?.status === "pending" ? (
+                  <p className="text-xs font-semibold text-amber-800">
+                    Waiting to retry
+                    {replay.last_error ? `: ${replay.last_error}` : ""}
+                  </p>
+                ) : null}
+                {replay?.status === "superseded" ? (
+                  <p className="text-xs font-semibold text-amber-800">
+                    Replay cancelled
+                    {replay.cancel_reason
+                      ? `: ${replay.cancel_reason}`
+                      : ""}
+                  </p>
+                ) : null}
+                {replay?.status === "expired" ? (
+                  <p className="text-xs font-semibold text-red-700">
+                    Replay expired
+                    {replay.cancel_reason
+                      ? `: ${replay.cancel_reason}`
+                      : ""}
+                  </p>
+                ) : null}
                 {row.source_kind === "voice_note" ? (
                   <div className="space-y-1">
                     <p className="text-xs font-medium text-muted-foreground">

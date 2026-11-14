@@ -22,8 +22,19 @@ export type RetryContext =
       itemSignature: string;
     }
   | {
+      kind: "payment_link";
+      orderId: string;
+    }
+  | {
       kind: "generic";
     };
+
+/** State-dependent replies are recovered via pending_replay, not text retry. */
+export function isStateDependentRetryContext(
+  ctx: RetryContext | null | undefined,
+): boolean {
+  return ctx?.kind === "draft_confirmation" || ctx?.kind === "payment_link";
+}
 
 export const RETRY_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 export const APOLOGY_COOLDOWN_MS = 10 * 60 * 1000;
@@ -151,6 +162,9 @@ export function parseRetryContext(
         itemSignature: row.itemSignature,
       };
     }
+  }
+  if (row.kind === "payment_link" && typeof row.orderId === "string") {
+    return { kind: "payment_link", orderId: row.orderId };
   }
   if (row.kind === "generic") return { kind: "generic" };
   return null;

@@ -1,12 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
-  buildDraftItemSignature,
   parseRetryContext,
   RETRY_MAX_AGE_MS,
-  type RetryContext,
 } from "@/lib/channels/send/delivery";
-import { ORDER_STATUS } from "@/lib/orders/status";
 
 export type RetryDecision =
   | { action: "send"; reason: "eligible" }
@@ -14,14 +11,9 @@ export type RetryDecision =
   | { action: "superseded"; reason: string };
 
 /**
- * A retry may only send text that still matches current order/thread state.
- *
- * Cancel (supersede) when:
- * - the draft changed or was reverted (totals/items/order id mismatch)
- * - the buyer has written again since this outbound was created
- * - the order is no longer awaiting confirmation (for draft confirmations)
- *
- * Expire when the message is older than 12 hours.
+ * Plain-text outbound retries only (dispatch / delivery / refund / reminders).
+ * State-dependent replies (draft confirmation, payment link) are superseded
+ * here — recovery is via pending_replay of the inbound message.
  */
 export async function evaluateOutboundRetry(params: {
   supabase: SupabaseClient;
@@ -65,79 +57,16 @@ export async function evaluateOutboundRetry(params: {
 
   const ctx = parseRetryContext(params.rawPayload);
   if (!ctx) {
-    // No context: still allow retry if not expired / no newer inbound.
     return { action: "send", reason: "eligible" };
   }
 
-  if (ctx.kind === "draft_confirmation") {
-    return evaluateDraftConfirmation(params.supabase, ctx, params.normalisedText);
-  }
-
-  return { action: "send", reason: "eligible" };
-}
-
-async function evaluateDraftConfirmation(
-  supabase: SupabaseClient,
-  ctx: Extract<RetryContext, { kind: "draft_confirmation" }>,
-  intendedText: string,
-): Promise<RetryDecision> {
-  const { data: order } = await supabase
-    .from("orders")
-    .select("id, status, total_pence, order_ref")
-    .eq("id", ctx.orderId)
-    .is("deleted_at", null)
-    .maybeSingle();
-
-  if (!order) {
+  if (ctx.kind === "draft_confirmation" || ctx.kind === "payment_link") {
     return {
       action: "superseded",
-      reason: "Draft order no longer exists — retry cancelled",
+      reason:
+        "State-dependent reply — recovered via inbound replay, not text retry",
     };
   }
-
-  if (order.status !== ORDER_STATUS.PENDING_CONFIRMATION) {
-    return {
-      action: "superseded",
-      reason: `Order is ${order.status}, not awaiting confirmation — retry cancelled`,
-    };
-  }
-
-  if (order.total_pence !== ctx.totalPence) {
-    return {
-      action: "superseded",
-      reason: "Draft totals changed since this message — retry cancelled",
-    };
-  }
-
-  const { data: items } = await supabase
-    .from("order_items")
-    .select("product_variant_id, quantity, unit_price_pence")
-    .eq("order_id", ctx.orderId);
-
-  const signature = buildDraftItemSignature(
-    (items ?? []).map((row) => ({
-      product_variant_id: row.product_variant_id as string,
-      quantity: row.quantity as number,
-      unit_price_pence: row.unit_price_pence as number,
-    })),
-  );
-
-  if (signature !== ctx.itemSignature) {
-    return {
-      action: "superseded",
-      reason: "Draft line items changed since this message — retry cancelled",
-    };
-  }
-
-  if (order.order_ref !== ctx.orderRef) {
-    return {
-      action: "superseded",
-      reason: "Order reference mismatch — retry cancelled",
-    };
-  }
-
-  // intendedText is the queued body — must still describe this draft.
-  void intendedText;
 
   return { action: "send", reason: "eligible" };
 }

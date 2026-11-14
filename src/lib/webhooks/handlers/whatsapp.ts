@@ -28,6 +28,7 @@ import {
 } from "@/lib/i18n/language";
 import { canAcceptOrders } from "@/lib/stripe/billing-gate";
 import { handleInboundProcessingFailure } from "@/lib/channels/inbound-crash";
+import { cancelPendingReplaysForThread } from "@/lib/channels/pending-replay";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 
 export interface WhatsAppHandlerResult {
@@ -269,6 +270,14 @@ async function processPersistedInbound(
       let replyOutcome: Record<string, unknown> | null = null;
       let supportOutcome: Record<string, unknown> | null = null;
       let unmatchedNotify: Record<string, unknown> | null = null;
+
+      // Newer inbound supersedes any queued replay for this thread.
+      await cancelPendingReplaysForThread({
+        supabase,
+        businessId: result.message.businessId,
+        threadId: result.message.threadId,
+        reason: "Newer inbound on thread — replay superseded",
+      }).catch(() => undefined);
 
       const { data: billingRow } = await supabase
         .from("businesses")
@@ -622,6 +631,7 @@ async function processPersistedInbound(
                   parseResult,
                   buyerReplyPrefix,
                   supabase,
+                  inboundMessageId: result.messageId,
                 });
                 draftOutcome = { ...outcome };
                 console.info("[whatsapp] draft-order outcome", {

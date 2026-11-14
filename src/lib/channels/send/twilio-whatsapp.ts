@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   isRateLimitFailure,
   isRetryableTwilioFailure,
+  isStateDependentRetryContext,
   MAX_DELIVERY_ATTEMPTS,
   nextRetryAtIso,
   plainDeliveryReason,
@@ -38,6 +39,11 @@ export interface SendWhatsAppMessageParams {
   existingMessageId?: string | null;
   /** Stamped into raw_payload so retries can validate freshness. */
   retryContext?: RetryContext | null;
+  /**
+   * When false, never schedule outbound text retries (pending_replay owns
+   * recovery). Defaults to true for plain notices.
+   */
+  scheduleOutboundRetry?: boolean;
 }
 
 export interface SendWhatsAppMessageResult {
@@ -196,18 +202,24 @@ export async function sendWhatsAppMessage(
       twilioCode: sendError.twilioCode,
       twilioStatus: sendError.twilioStatus,
     });
+    // Draft confirmations / payment links recover via pending_replay — never
+    // re-send stale outbound text.
+    const stateDependent = isStateDependentRetryContext(effectiveRetryContext);
+    const allowTextRetry = params.scheduleOutboundRetry !== false;
     const retryable =
+      allowTextRetry &&
+      !stateDependent &&
       isRetryableTwilioFailure({
         twilioCode: sendError.twilioCode,
         twilioStatus: sendError.twilioStatus,
-      }) && attempts < MAX_DELIVERY_ATTEMPTS;
+      }) &&
+      attempts < MAX_DELIVERY_ATTEMPTS;
     const backoff = retryable
       ? retryBackoffMinutes({
           attemptJustFinished: attempts,
           rateLimited,
         })
       : null;
-    // Rate-limit after hard cap: day window exhausted — do not schedule more.
     const nextRetry =
       backoff != null && retryable ? nextRetryAtIso(backoff) : null;
     const plain = plainDeliveryReason({
