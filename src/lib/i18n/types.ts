@@ -58,6 +58,7 @@ export type MessageId =
   | "support.other_fallback"
   | "support.processing_apology"
   | "billing.shop_unavailable"
+  | "billing.shop_closed"
   | "voice.too_long"
   | "voice.unclear"
   | "voice.heard_prefix";

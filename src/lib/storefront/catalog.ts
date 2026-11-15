@@ -41,6 +41,8 @@ export type PublicStorefront = {
   acceptingOrders: boolean;
   /** False when TradeFlow billing is not trialing/active — shop exists, catalog hidden. */
   takingOrders: boolean;
+  /** True when the seller closed the shop (grace or pending purge). */
+  shopClosed: boolean;
   /** True when the seller has written a returns policy — never the policy text itself. */
   hasReturnsPolicy: boolean;
   products: PublicStorefrontProduct[];
@@ -90,7 +92,7 @@ export const fetchPublicStorefront = cache(
     const { data: business, error: businessError } = await supabase
       .from("businesses")
       .select(
-        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text, stripe_subscription_status",
+        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text, stripe_subscription_status, closed_at",
       )
       .eq("slug", trimmed)
       .is("deleted_at", null)
@@ -103,8 +105,27 @@ export const fetchPublicStorefront = cache(
     }
     if (!business) return null;
 
+    const shopClosed = Boolean(business.closed_at);
     const phone =
       (business.whatsapp_phone_e164 as string | null)?.trim() || null;
+
+    // Closed shops: no catalogue — only the closed page.
+    if (shopClosed) {
+      return {
+        businessId: business.id as string,
+        slug: trimmed,
+        name: business.name as string,
+        bio: null,
+        logoUrl: (business.logo_url as string | null) ?? null,
+        bannerUrl: null,
+        accentColor: parseAccentHex(business.storefront_accent_color),
+        acceptingOrders: false,
+        takingOrders: false,
+        shopClosed: true,
+        hasReturnsPolicy: false,
+        products: [],
+      };
+    }
 
     const { data: productRows, error: productError } = await supabase
       .from("products")
@@ -169,7 +190,9 @@ export const fetchPublicStorefront = cache(
       takingOrders: canAcceptOrders({
         stripe_subscription_status:
           (business.stripe_subscription_status as string | null) ?? null,
+        closed_at: (business.closed_at as string | null) ?? null,
       }),
+      shopClosed: false,
       hasReturnsPolicy: Boolean(
         (business.returns_policy_text as string | null)?.trim(),
       ),

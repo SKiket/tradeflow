@@ -3,6 +3,7 @@ import { DEFAULT_RETURN_WINDOW_DAYS } from "@/lib/orders/return-window";
 import { storefrontUrl } from "@/lib/storefront/url";
 
 import { SettingsForm, type SettingsFormValues } from "./settings-form";
+import { YourDataSection } from "./your-data-section";
 import { requireSeller } from "../require-seller";
 
 type SettingsPageProps = {
@@ -15,7 +16,7 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
   const { data, error } = await supabase
     .from("businesses")
     .select(
-      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, return_window_days, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color",
+      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, return_window_days, ai_tone, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color, closed_at, purge_after",
     )
     .eq("id", businessId)
     .maybeSingle();
@@ -92,6 +93,11 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
         </p>
       </div>
       <SettingsForm business={business} />
+      <YourDataSection
+        shopName={data.name as string}
+        closedAt={(data.closed_at as string | null) ?? null}
+        purgeAfter={(data.purge_after as string | null) ?? null}
+      />
     </div>
   );
 }

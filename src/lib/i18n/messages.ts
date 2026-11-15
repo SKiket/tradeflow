@@ -230,6 +230,10 @@ export const MESSAGES: Record<MessageId, Record<SupportedLang, string>> = {
     en: "This shop isn't currently taking new orders. If you already have an order with us, we'll still fulfil it. Please try again later.",
     fr: "Cette boutique n'accepte pas de nouvelles commandes pour le moment. Si vous avez déjà une commande chez nous, nous l'honorerons quand même. Veuillez réessayer plus tard.",
   },
+  "billing.shop_closed": {
+    en: "This shop has closed.",
+    fr: "Cette boutique a fermé.",
+  },
   "voice.too_long": {
     en: "That voice note is a bit long for me — could you send a shorter one or type your order?",
     fr: "Ce message vocal est un peu long pour moi — pouvez-vous en envoyer un plus court ou taper votre commande ?",

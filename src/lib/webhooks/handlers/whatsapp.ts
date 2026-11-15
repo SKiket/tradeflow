@@ -285,13 +285,16 @@ async function processPersistedInbound(
 
       const { data: billingRow } = await supabase
         .from("businesses")
-        .select("stripe_subscription_status")
+        .select("stripe_subscription_status, closed_at")
         .eq("id", result.message.businessId)
         .maybeSingle();
+      const shopClosed = Boolean(billingRow?.closed_at);
       if (
+        shopClosed ||
         !canAcceptOrders({
           stripe_subscription_status:
             (billingRow?.stripe_subscription_status as string | null) ?? null,
+          closed_at: (billingRow?.closed_at as string | null) ?? null,
         })
       ) {
         try {
@@ -299,14 +302,28 @@ async function processPersistedInbound(
             supabase,
             result.message.customerId,
           );
-          await sendWhatsAppMessage({
-            businessId: result.message.businessId,
-            toPhoneE164: result.message.customerPhone,
-            text: t("billing.shop_unavailable", lang),
-            threadId: result.message.threadId,
-            customerId: result.message.customerId,
-            supabase,
-          });
+          if (shopClosed) {
+            const { maybeSendShopClosedReply } = await import(
+              "@/lib/privacy/shop-closed-reply"
+            );
+            await maybeSendShopClosedReply({
+              supabase,
+              businessId: result.message.businessId,
+              customerId: result.message.customerId,
+              customerPhoneE164: result.message.customerPhone,
+              threadId: result.message.threadId,
+              lang,
+            });
+          } else {
+            await sendWhatsAppMessage({
+              businessId: result.message.businessId,
+              toPhoneE164: result.message.customerPhone,
+              text: t("billing.shop_unavailable", lang),
+              threadId: result.message.threadId,
+              customerId: result.message.customerId,
+              supabase,
+            });
+          }
         } catch (sendError) {
           console.error("[whatsapp] shop-unavailable send failed", {
             messageId: result.messageId,
@@ -314,11 +331,16 @@ async function processPersistedInbound(
               sendError instanceof Error ? sendError.message : String(sendError),
           });
         }
-        console.info("[whatsapp] billing gate — skipped order_parse", {
-          messageId: result.messageId,
-          businessId: result.message.businessId,
-          status: billingRow?.stripe_subscription_status ?? null,
-        });
+        console.info(
+          shopClosed
+            ? "[whatsapp] shop closed — skipped order_parse"
+            : "[whatsapp] billing gate — skipped order_parse",
+          {
+            messageId: result.messageId,
+            businessId: result.message.businessId,
+            status: billingRow?.stripe_subscription_status ?? null,
+          },
+        );
         return {
           status: 200,
           body: {

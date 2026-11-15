@@ -85,8 +85,20 @@ async function cleanup() {
     .in("slug", slugs);
   if (businesses?.length) {
     const ids = businesses.map((b) => b.id);
+    await admin.from("deletion_requests").delete().in("business_id", ids);
+    await admin.from("order_refunds").delete().in("business_id", ids);
+    await admin.from("order_items").delete().in("business_id", ids);
+    await admin.from("order_status_history").delete().in("business_id", ids);
+    await admin.from("orders").delete().in("business_id", ids);
+    await admin.from("messages").delete().in("business_id", ids);
+    await admin.from("pending_replays").delete().in("business_id", ids);
+    await admin.from("customers").delete().in("business_id", ids);
+    await admin.from("product_images").delete().in("business_id", ids);
     await admin.from("product_variants").delete().in("business_id", ids);
     await admin.from("products").delete().in("business_id", ids);
+    await admin.from("analytics_cache").delete().in("business_id", ids);
+    await admin.from("broadcasts").delete().in("business_id", ids);
+    await admin.from("message_templates").delete().in("business_id", ids);
     await admin.from("businesses").delete().in("id", ids);
   }
 }
@@ -252,6 +264,58 @@ async function main() {
     (templatesRead.data?.length ?? 0) === 0 &&
     (templatesInsert.error != null || templatesInsert.data == null);
 
+  // deletion_requests: sellers can read own business rows; cannot insert
+  const { data: delReqSeed } = await admin
+    .from("deletion_requests")
+    .insert({
+      business_id: tenantA.businessId,
+      subject_type: "customer",
+      subject_id: tenantA.businessId,
+      requested_by: "operator",
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      counts: { probe: true },
+    })
+    .select("id")
+    .single();
+
+  const delOwn = await clientA
+    .from("deletion_requests")
+    .select("id, counts")
+    .eq("business_id", tenantA.businessId);
+  const delCross = await clientA
+    .from("deletion_requests")
+    .select("id")
+    .eq("business_id", tenantB.businessId);
+  const delInsert = await clientA.from("deletion_requests").insert({
+    business_id: tenantA.businessId,
+    subject_type: "customer",
+    subject_id: tenantA.businessId,
+    requested_by: "seller",
+    status: "pending",
+    counts: {},
+  });
+  logResult("Query: Tenant A reads own deletion_requests", {
+    rowCount: delOwn.data?.length ?? 0,
+    error: delOwn.error?.message ?? null,
+  });
+  logResult("Query: Tenant A reads Tenant B deletion_requests (expect 0)", {
+    rowCount: delCross.data?.length ?? 0,
+    error: delCross.error?.message ?? null,
+  });
+  logResult("Query: Tenant A INSERT deletion_requests (expect denied)", {
+    error: delInsert.error?.message ?? null,
+  });
+
+  if (delReqSeed?.id) {
+    await admin.from("deletion_requests").delete().eq("id", delReqSeed.id);
+  }
+
+  const deletionRequestsIsolated =
+    (delOwn.data?.length ?? 0) >= 1 &&
+    (delCross.data?.length ?? 0) === 0 &&
+    !!delInsert.error;
+
   const passed =
     (ownProducts.data?.length ?? 0) >= 1 &&
     (crossTenant.data?.length ?? 0) === 0 &&
@@ -259,7 +323,8 @@ async function main() {
     !insertOwn.error &&
     !updateOwn.error &&
     !!insertCross.error &&
-    templatesIsolated;
+    templatesIsolated &&
+    deletionRequestsIsolated;
 
   console.log("\n========================================");
   console.log(passed ? "RLS VERIFICATION: PASSED" : "RLS VERIFICATION: FAILED");

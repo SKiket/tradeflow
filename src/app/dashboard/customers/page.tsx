@@ -57,7 +57,8 @@ export default async function CustomersPage({
     supabase
       .from("customers")
       .select("id, name, phone_e164, tags, created_at")
-      .eq("business_id", businessId),
+      .eq("business_id", businessId)
+      .is("deleted_at", null),
     supabase
       .from("orders")
       .select("customer_id, status, total_pence, refunded_amount_pence, created_at")

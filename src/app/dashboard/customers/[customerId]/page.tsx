@@ -8,6 +8,7 @@ import { formatDateTime, formatPence } from "@/lib/orders/display";
 import { OrdersTable, type OrderListRow } from "../../orders/orders-table";
 import { requireSeller } from "../../require-seller";
 import { CustomerProfileForm } from "./customer-profile-form";
+import { EraseCustomerButton } from "./erase-customer-button";
 
 interface CustomerDetailPageProps {
   params: Promise<{ customerId: string }>;
@@ -21,12 +22,14 @@ export default async function CustomerDetailPage({
 
   const { data: customer } = await supabase
     .from("customers")
-    .select("id, name, phone_e164, notes, tags, broadcast_opt_in")
+    .select("id, name, phone_e164, notes, tags, broadcast_opt_in, deleted_at")
     .eq("id", customerId)
     .eq("business_id", businessId)
     .maybeSingle();
 
   if (!customer) notFound();
+
+  const isErased = Boolean(customer.deleted_at);
 
   const { data: orderRows, error: ordersError } = await supabase
     .from("orders")
@@ -104,12 +107,35 @@ export default async function CustomerDetailPage({
         </dl>
       </div>
 
-      <CustomerProfileForm
-        customerId={customer.id as string}
-        notes={(customer.notes as string | null) ?? ""}
-        tags={Array.isArray(customer.tags) ? (customer.tags as string[]) : []}
-        broadcastOptIn={customer.broadcast_opt_in !== false}
-      />
+      {isErased ? (
+        <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">
+          This customer has been erased. Messages were deleted; orders are kept
+          anonymised for tax records.
+        </p>
+      ) : (
+        <>
+          <CustomerProfileForm
+            customerId={customer.id as string}
+            notes={(customer.notes as string | null) ?? ""}
+            tags={
+              Array.isArray(customer.tags) ? (customer.tags as string[]) : []
+            }
+            broadcastOptIn={customer.broadcast_opt_in !== false}
+          />
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Your data rights
+            </h2>
+            <EraseCustomerButton
+              customerId={customer.id as string}
+              customerLabel={
+                (customer.name as string | null) ||
+                (customer.phone_e164 as string)
+              }
+            />
+          </section>
+        </>
+      )}
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">

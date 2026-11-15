@@ -26,11 +26,14 @@ export function isSellerSubscriptionStatus(
 
 /**
  * Binary gate for NEW order creation. Only an active trial or paid
- * subscription may take new storefront / WhatsApp orders.
+ * subscription may take new storefront / WhatsApp orders. Closed shops
+ * (seller-initiated closure) never accept new orders.
  */
 export function canAcceptOrders(business: {
   stripe_subscription_status?: string | null;
+  closed_at?: string | null;
 } | null | undefined): boolean {
+  if (business?.closed_at) return false;
   const status = business?.stripe_subscription_status;
   return status === "trialing" || status === "active";
 }
@@ -44,6 +47,12 @@ export const SHOP_UNAVAILABLE_STOREFRONT_HEADLINE =
 
 export const SHOP_UNAVAILABLE_STOREFRONT_DETAIL =
   "New orders are paused while the seller updates their TradeFlow billing. Existing orders will still be fulfilled.";
+
+/** Seller closed the shop (grace or tombstone). Prefer t("billing.shop_closed", lang). */
+export const SHOP_CLOSED_STOREFRONT_HEADLINE = "This shop has closed";
+
+export const SHOP_CLOSED_STOREFRONT_DETAIL =
+  "This shop is no longer selling on TradeFlow.";
 
 export type OrdersPausedBanner = {
   title: string;

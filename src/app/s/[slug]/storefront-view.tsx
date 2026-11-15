@@ -13,6 +13,8 @@ import {
   type StockStatus,
 } from "@/lib/storefront/catalog";
 import {
+  SHOP_CLOSED_STOREFRONT_DETAIL,
+  SHOP_CLOSED_STOREFRONT_HEADLINE,
   SHOP_UNAVAILABLE_STOREFRONT_DETAIL,
   SHOP_UNAVAILABLE_STOREFRONT_HEADLINE,
 } from "@/lib/stripe/billing-gate";
@@ -42,17 +44,21 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
   }, [cart.lines, storefront]);
 
   if (!storefront.takingOrders) {
+    const headline = storefront.shopClosed
+      ? SHOP_CLOSED_STOREFRONT_HEADLINE
+      : SHOP_UNAVAILABLE_STOREFRONT_HEADLINE;
+    const detail = storefront.shopClosed
+      ? SHOP_CLOSED_STOREFRONT_DETAIL
+      : SHOP_UNAVAILABLE_STOREFRONT_DETAIL;
     return (
       <div className="mx-auto min-h-full max-w-lg">
         <StorefrontHeader storefront={storefront} />
         <StorefrontHero storefront={storefront} hideBrowse />
         <main className="px-4 pb-8 pt-6">
           <div className="rounded-[16px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] px-4 py-12 text-center">
-            <p className="text-base font-semibold">
-              {SHOP_UNAVAILABLE_STOREFRONT_HEADLINE}
-            </p>
+            <p className="text-base font-semibold">{headline}</p>
             <p className="mt-2 text-sm text-[var(--tf-text-secondary)]">
-              {SHOP_UNAVAILABLE_STOREFRONT_DETAIL}
+              {detail}
             </p>
           </div>
         </main>
