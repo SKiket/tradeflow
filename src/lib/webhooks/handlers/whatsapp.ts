@@ -1,5 +1,9 @@
 import { classifyReply } from "@/lib/ai/tasks/reply-classify";
 import { parseOrder } from "@/lib/ai/tasks/order-parse";
+import {
+  allowSimulationHooks,
+  warnSimHookIgnoredInProduction,
+} from "@/lib/api/runtime-env";
 import { twilioWhatsAppAdapter } from "@/lib/channels/adapters/twilio-whatsapp";
 import { normaliseAndPersist } from "@/lib/channels/normaliser";
 import { isAudioOnlyInbound } from "@/lib/channels/twilio-media";
@@ -525,7 +529,11 @@ async function processPersistedInbound(
         // transcripts use the same path as typed text.
         {
           if (process.env.INBOUND_SIMULATE_ERROR === "ai_timeout") {
-            throw new Error("AI gateway timeout");
+            if (!allowSimulationHooks()) {
+              warnSimHookIgnoredInProduction("INBOUND_SIMULATE_ERROR");
+            } else {
+              throw new Error("AI gateway timeout");
+            }
           }
 
           const preferredLanguage = await getCustomerPreferredLanguage(
@@ -564,7 +572,11 @@ async function processPersistedInbound(
               : null;
 
           if (process.env.INBOUND_SIMULATE_ERROR === "db_after_parse") {
-            throw new Error("database error after parse");
+            if (!allowSimulationHooks()) {
+              warnSimHookIgnoredInProduction("INBOUND_SIMULATE_ERROR");
+            } else {
+              throw new Error("database error after parse");
+            }
           }
 
           const { error: updateError } = await supabase

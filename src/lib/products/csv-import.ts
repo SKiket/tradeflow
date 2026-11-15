@@ -118,9 +118,15 @@ function parseCsvRows(text: string): string[][] {
   return rows;
 }
 
+/** Undo Excel formula-injection guard added by csv-export. */
+function stripFormulaGuard(value: string): string {
+  if (/^'[=+\-@]/.test(value)) return value.slice(1);
+  return value;
+}
+
 function cell(row: string[], index: number | undefined): string {
   if (index == null) return "";
-  return (row[index] ?? "").trim();
+  return stripFormulaGuard((row[index] ?? "").trim());
 }
 
 function emptyRow(row: string[]): boolean {

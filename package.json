@@ -12,6 +12,7 @@
     "@anthropic-ai/sdk": "^0.110.0",
     "@base-ui/react": "^1.6.0",
     "@google/generative-ai": "^0.24.1",
+    "@sentry/nextjs": "^11.12.0",
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.110.0",
     "class-variance-authority": "^0.7.1",

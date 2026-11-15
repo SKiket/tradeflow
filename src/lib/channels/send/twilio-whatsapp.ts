@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
+  allowSimulationHooks,
+  warnSimHookIgnoredInProduction,
+} from "@/lib/api/runtime-env";
+import {
   isRateLimitFailure,
   isRetryableTwilioFailure,
   isStateDependentRetryContext,
@@ -765,21 +769,29 @@ async function postTwilioMessage(
 
   const simulatedCode = process.env.TWILIO_SIMULATE_ERROR?.trim();
   if (simulatedCode) {
-    const code = Number(simulatedCode) || simulatedCode;
-    throw new WhatsAppSendError(
-      code === 63038 || simulatedCode === "63038"
-        ? "Account exceeded the 50 daily messages limit"
-        : `Simulated Twilio error ${simulatedCode}`,
-      {
-        twilioStatus: simulatedCode === "63038" || code === 63038 ? 429 : 400,
-        twilioCode: code,
-      },
-    );
+    if (!allowSimulationHooks()) {
+      warnSimHookIgnoredInProduction("TWILIO_SIMULATE_ERROR");
+    } else {
+      const code = Number(simulatedCode) || simulatedCode;
+      throw new WhatsAppSendError(
+        code === 63038 || simulatedCode === "63038"
+          ? "Account exceeded the 50 daily messages limit"
+          : `Simulated Twilio error ${simulatedCode}`,
+        {
+          twilioStatus: simulatedCode === "63038" || code === 63038 ? 429 : 400,
+          twilioCode: code,
+        },
+      );
+    }
   }
 
   if (process.env.TWILIO_DRY_RUN === "true") {
-    const sid = `DRYRUN_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    return { sid, status: "queued" };
+    if (!allowSimulationHooks()) {
+      warnSimHookIgnoredInProduction("TWILIO_DRY_RUN");
+    } else {
+      const sid = `DRYRUN_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      return { sid, status: "queued" };
+    }
   }
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;

@@ -1,3 +1,8 @@
+import {
+  allowSimulationHooks,
+  warnSimHookIgnoredInProduction,
+} from "@/lib/api/runtime-env";
+
 /** Reserved UK test numbers (Ofcom 07700 900xxx) — never burn Twilio quota. */
 const TEST_NUMBER_RE = /^\+447700900\d{3}$/;
 
@@ -44,7 +49,15 @@ export function isReservedTestNumber(phoneE164: string): boolean {
 }
 
 export function shouldSkipRealTwilioSend(phoneE164: string): boolean {
-  if (process.env.FORCE_REAL_SEND === "true") return false;
+  // Reserved UK test numbers are always simulated (fictional — never a real handset).
+  // FORCE_REAL_SEND can override that locally / in verification only.
+  if (process.env.FORCE_REAL_SEND === "true") {
+    if (!allowSimulationHooks()) {
+      warnSimHookIgnoredInProduction("FORCE_REAL_SEND");
+      return isReservedTestNumber(phoneE164);
+    }
+    return false;
+  }
   return isReservedTestNumber(phoneE164);
 }
 

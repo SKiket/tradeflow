@@ -70,6 +70,12 @@ export default async function ProductsPage() {
           >
             Import CSV
           </Link>
+          <a
+            href="/api/dashboard/products/export"
+            className="inline-flex h-8 items-center rounded-lg border px-3 text-sm font-medium hover:bg-muted"
+          >
+            Export products (CSV)
+          </a>
           <Link
             href="/dashboard/products/new"
             className="inline-flex h-8 items-center rounded-lg bg-tradeflow-cta px-3 text-sm font-medium text-tradeflow-cta-text hover:bg-tradeflow-cta-hover"

@@ -30,18 +30,25 @@ function presentedCronSecret(request: NextRequest): string | null {
  * Accepts the secret as `x-cron-secret` / `Authorization: Bearer …` header
  * or `?secret=` query param (pg_net can pass either).
  *
- * Checks CRON_SHARED_SECRET first, then the same value in Supabase vault
- * (`cron_shared_secret`) so pg_cron can authenticate against production
- * even if the Vercel env var has not been set yet.
+ * Fails closed when CRON_SHARED_SECRET is unset. When set, matches the env
+ * value first; vault (`cron_secret_matches`) remains a secondary check so
+ * pg_cron can authenticate with the same configured secret.
  */
 export async function authorizeCronRequest(
   request: NextRequest,
 ): Promise<boolean> {
+  const expected = process.env.CRON_SHARED_SECRET?.trim();
+  if (!expected) {
+    console.error(
+      "[cron] CRON_SHARED_SECRET is unset — rejecting request (fail closed)",
+    );
+    return false;
+  }
+
   const presented = presentedCronSecret(request);
   if (!presented) return false;
 
-  const expected = process.env.CRON_SHARED_SECRET;
-  if (expected && secretsEqual(presented, expected)) {
+  if (secretsEqual(presented, expected)) {
     return true;
   }
 
