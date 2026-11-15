@@ -5,7 +5,7 @@ import {
 } from "@/lib/webhooks/verify/config";
 import {
   parseFormBody,
-  verifyShippoSignature,
+  verifyShippoWebhookToken,
   verifyTwilioSignature,
 } from "@/lib/webhooks/verify/signatures";
 import { verifyStripeSignature } from "@/lib/webhooks/verify/stripe";
@@ -50,19 +50,13 @@ export async function verifyWebhookSignature(
     case "shippo": {
       const secret = process.env.SHIPPO_WEBHOOK_SECRET;
       if (!isWebhookSecretConfigured(secret)) {
-        console.warn("STUB: no Shippo webhook secret configured yet");
-        return {
-          valid: true,
-          mode: "stub",
-          stubReason: "SHIPPO_WEBHOOK_SECRET not configured",
-        };
+        console.error(
+          "[webhook-auth] SHIPPO_WEBHOOK_SECRET is not configured — rejecting (fail closed)",
+        );
+        return { valid: false, mode: "real" };
       }
-      const valid = verifyShippoSignature(
-        secret,
-        rawBody,
-        headers.get("shippo-auth-signature") ??
-          headers.get("Shippo-Auth-Signature"),
-      );
+      // URL token only — never log the token or query string.
+      const valid = verifyShippoWebhookToken(url, secret);
       return { valid, mode: "real" };
     }
     default:

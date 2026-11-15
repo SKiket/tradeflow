@@ -313,13 +313,22 @@ export async function dispatchOrder(
   };
 }
 
+export interface DeliverOrderOptions {
+  /** Event time from carrier; defaults to now. */
+  deliveredAt?: Date;
+}
+
 /**
  * Mark a DISPATCHED order DELIVERED and notify the buyer.
- * Rejects PAID orders that were never dispatched.
+ * Shared by the manual seller action and the Shippo track_updated webhook.
+ * Rejects PAID orders that were never dispatched. Never revives
+ * CANCELLED / REFUNDED / other non-DISPATCHED statuses. Idempotent: a
+ * second call on an already-DELIVERED order does not re-notify.
  */
 export async function deliverOrder(
   supabase: SupabaseClient,
   orderId: string,
+  options?: DeliverOrderOptions,
 ): Promise<DeliverOrderOutcome> {
   const { data: order, error } = await supabase
     .from("orders")
@@ -353,9 +362,14 @@ export async function deliverOrder(
     return { action: "invalid_status", orderId, status: row.status };
   }
 
+  const deliveredAtIso = (options?.deliveredAt ?? new Date()).toISOString();
+
   const { data: updated, error: updateError } = await supabase
     .from("orders")
-    .update({ status: ORDER_STATUS.DELIVERED })
+    .update({
+      status: ORDER_STATUS.DELIVERED,
+      delivered_at: deliveredAtIso,
+    })
     .eq("id", orderId)
     .eq("status", ORDER_STATUS.DISPATCHED)
     .select("id")
@@ -393,6 +407,7 @@ export async function deliverOrder(
     business_id: row.business_id,
     from_status: ORDER_STATUS.DISPATCHED,
     to_status: ORDER_STATUS.DELIVERED,
+    changed_at: deliveredAtIso,
   });
 
   const itemLines = await formatItemLines(supabase, orderId);

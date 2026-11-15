@@ -107,6 +107,55 @@ export async function notifySellerOfAutoApprovedReturn(params: {
   });
 }
 
+export type SellerDeliveryIssueKind = "returned" | "failed";
+
+/** Fixed phrases only — never free text from the carrier. */
+export function deliveryIssuePhrase(
+  kind: SellerDeliveryIssueKind,
+  lang: "en" | "fr" = "en",
+): string {
+  if (kind === "returned") {
+    return lang === "fr" ? "retour à l'expéditeur" : "returned to sender";
+  }
+  return lang === "fr" ? "échec de livraison" : "delivery failed";
+}
+
+/**
+ * WhatsApp the seller when Shippo reports RETURNED or FAILURE.
+ * {{2}} is always one of the fixed phrases above.
+ */
+export async function notifySellerOfDeliveryIssue(params: {
+  businessId: string;
+  orderRef: string;
+  issue: SellerDeliveryIssueKind;
+  supabase: SupabaseClient;
+}): Promise<SellerNotifyResult> {
+  const rawLang = await getBusinessSellerLanguage(
+    params.supabase,
+    params.businessId,
+  );
+  const sellerLang = rawLang === "fr" ? "fr" : "en";
+  const phrase = deliveryIssuePhrase(params.issue, sellerLang);
+  const text =
+    sellerLang === "fr"
+      ? `Il y a un problème de livraison pour la commande ${params.orderRef} : le transporteur signale ${phrase}. Ouvrez votre tableau de bord TradeFlow pour plus de détails.`
+      : `There is a delivery problem with order ${params.orderRef}: the carrier reports ${phrase}. Open your TradeFlow dashboard for details.`;
+
+  return notifySeller({
+    businessId: params.businessId,
+    text,
+    supabase: params.supabase,
+    label: "seller delivery issue",
+    template: {
+      key: "seller_delivery_issue",
+      variables: {
+        orderRef: params.orderRef,
+        issue: phrase,
+      },
+    },
+  });
+}
+
 /**
  * WhatsApp the seller when a buyer requests a return.
  */

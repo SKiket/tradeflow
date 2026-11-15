@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { handleShippoEvent } from "@/lib/webhooks/handlers/shippo";
 import { handleStripeEvent } from "@/lib/webhooks/handlers/stripe";
 import {
   deriveIdempotencyKey,
@@ -73,6 +74,25 @@ export async function POST(request: NextRequest) {
       console.error("[stripe-webhook] Handler error", message);
       // Acknowledge so Stripe retries via a later event rather than flooding
       // the endpoint; never surface a 500 for a validly-signed event.
+      return NextResponse.json(
+        { ok: true, handled: false, reason: "handler_error" },
+        { status: 200 },
+      );
+    }
+  }
+
+  // Prefer POST /api/webhooks/shippo?token=…; ingress still accepts shippo
+  // when X-Source=shippo and ?token= matches (same fail-closed verify).
+  if (sourceHeader === "shippo") {
+    if (isDuplicate) {
+      return NextResponse.json({ ok: true, duplicate: true }, { status: 200 });
+    }
+    try {
+      const result = await handleShippoEvent(rawBody);
+      return NextResponse.json(result.body, { status: result.status });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[shippo-webhook] Handler error", message);
       return NextResponse.json(
         { ok: true, handled: false, reason: "handler_error" },
         { status: 200 },

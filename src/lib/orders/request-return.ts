@@ -552,25 +552,37 @@ async function shouldAutoApproveCoolingOff(
 ): Promise<boolean> {
   if (params.reason !== "changed_mind") return false;
 
-  const [{ data: business }, { data: delivered }] = await Promise.all([
+  const [{ data: business }, { data: order }] = await Promise.all([
     supabase
       .from("businesses")
       .select("return_window_days")
       .eq("id", params.businessId)
       .maybeSingle(),
     supabase
+      .from("orders")
+      .select("delivered_at")
+      .eq("id", params.orderId)
+      .maybeSingle(),
+  ]);
+
+  let deliveredAtIso = (order?.delivered_at as string | null) ?? null;
+
+  // Legacy fallback: rows delivered before orders.delivered_at existed.
+  if (!deliveredAtIso) {
+    const { data: delivered } = await supabase
       .from("order_status_history")
       .select("changed_at")
       .eq("order_id", params.orderId)
       .eq("to_status", ORDER_STATUS.DELIVERED)
       .order("changed_at", { ascending: false })
       .limit(1)
-      .maybeSingle(),
-  ]);
+      .maybeSingle();
+    deliveredAtIso = (delivered?.changed_at as string | null) ?? null;
+  }
 
-  if (!delivered?.changed_at) return false;
+  if (!deliveredAtIso) return false;
   const windowDays = parseReturnWindowDays(business?.return_window_days);
-  return isWithinReturnWindow(new Date(delivered.changed_at as string), windowDays);
+  return isWithinReturnWindow(new Date(deliveredAtIso), windowDays);
 }
 
 async function declineBuyerMessage(

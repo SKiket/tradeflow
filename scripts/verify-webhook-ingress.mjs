@@ -231,18 +231,16 @@ async function main() {
     );
   }
 
-  // Shippo stub path (no HMAC secret configured yet)
-  const shippo = await postWebhook({
+  // Shippo fail-closed: missing/wrong token → 401 (dedicated route preferred)
+  const shippoNoToken = await postWebhook({
     source: "shippo",
     body: JSON.stringify({ event: "track_updated" }),
     contentType: "application/json",
   });
   record(
-    "Test 3c: Shippo stub path → 200, verification=stub",
-    shippo.status === 200 &&
-      shippo.json.verification === "stub" &&
-      shippo.json.stubReason?.includes("SHIPPO"),
-    JSON.stringify(shippo.json),
+    "Test 3c: Shippo without token → 401 (fail closed)",
+    shippoNoToken.status === 401,
+    `status=${shippoNoToken.status} body=${JSON.stringify(shippoNoToken.json)}`,
   );
 
   console.log("\n========================================");
@@ -252,7 +250,7 @@ async function main() {
   console.log("\nVerification status:");
   console.log("  REAL:  twilio-whatsapp, twilio-sms");
   console.log("  REAL:  stripe (STRIPE_WEBHOOK_SECRET)");
-  console.log("  STUB:  shippo (no SHIPPO_WEBHOOK_SECRET)");
+  console.log("  REAL:  shippo URL token (SHIPPO_WEBHOOK_SECRET, fail closed)");
 
   process.exit(allPassed ? 0 : 1);
 }

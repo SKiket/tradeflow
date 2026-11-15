@@ -43,10 +43,26 @@ export function verifyTwilioSignature(
 }
 
 /**
- * Shippo Shippo-Auth-Signature verification (HMAC-SHA256 hex).
- * Header format: t=<unix>,v1=<hex>
- * Signed string: `${timestamp}.${rawBody}`
- * @see https://docs.goshippo.com/docs/Tracking/WebhookSecurity
+ * Shippo webhook auth: long random token in the URL query (?token=...),
+ * compared in constant time. Never log the token.
+ */
+export function verifyShippoWebhookToken(
+  requestUrl: string,
+  secret: string,
+): boolean {
+  let token: string | null = null;
+  try {
+    token = new URL(requestUrl).searchParams.get("token");
+  } catch {
+    return false;
+  }
+  if (!token) return false;
+  return safeEqual(token, secret);
+}
+
+/**
+ * Legacy Shippo-Auth-Signature HMAC (unused — Shippo track webhooks use URL token).
+ * Kept for reference / older docs; prefer verifyShippoWebhookToken.
  */
 export function verifyShippoSignature(
   secret: string,

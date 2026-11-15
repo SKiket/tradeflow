@@ -39,7 +39,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
+      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
     .eq("business_id", businessId)
@@ -89,6 +89,13 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   });
 
   const trackingUrl = orderTrackingUrl(order.order_ref as string);
+  const trackingStatus = (order.tracking_status as string | null) ?? null;
+  const deliveryIssue =
+    trackingStatus === "RETURNED"
+      ? "returned to sender"
+      : trackingStatus === "FAILURE"
+        ? "delivery failed"
+        : null;
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -111,6 +118,14 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
             </span>
           ) : null}
         </div>
+        {deliveryIssue ? (
+          <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+            Delivery problem — carrier reports {deliveryIssue}
+            {order.tracking_updated_at
+              ? ` · updated ${formatDateTime(order.tracking_updated_at as string)}`
+              : ""}
+          </p>
+        ) : null}
         <p className="mt-1 text-sm text-muted-foreground">
           Placed {formatDateTime(order.created_at as string)}
           {order.channel ? ` · ${order.channel}` : ""}

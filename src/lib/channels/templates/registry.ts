@@ -19,7 +19,8 @@ export type TemplateKey =
   | "seller_new_order"
   | "seller_refund_failed"
   | "seller_low_stock"
-  | "seller_needs_attention";
+  | "seller_needs_attention"
+  | "seller_delivery_issue";
 
 export interface TemplateVariableDef {
   /** Logical name used by callers (mapped to {{n}} by position). */
@@ -182,6 +183,21 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
     bodies: {
       en: "A buyer ({{1}}) needs your attention on order {{2}}. Open your TradeFlow inbox to reply.",
       fr: "Un acheteur ({{1}}) a besoin de votre attention concernant la commande {{2}}. Ouvrez votre boîte de réception TradeFlow pour répondre.",
+    },
+  },
+  {
+    key: "seller_delivery_issue",
+    category: "utility",
+    variables: [
+      { name: "orderRef", sample: "TF-ABC123" },
+      {
+        name: "issue",
+        sample: "returned to sender",
+      },
+    ],
+    bodies: {
+      en: "There is a delivery problem with order {{1}}: the carrier reports {{2}}. Open your TradeFlow dashboard for details.",
+      fr: "Il y a un problème de livraison pour la commande {{1}} : le transporteur signale {{2}}. Ouvrez votre tableau de bord TradeFlow pour plus de détails.",
     },
   },
 ] as const;
