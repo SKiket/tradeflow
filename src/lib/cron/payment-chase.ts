@@ -286,13 +286,14 @@ async function sendReminder(
       threadId: order.thread_id,
       customerId: customer.id,
       supabase,
+      templateLanguage: customer.preferred_language,
       template: {
         key: "payment_reminder",
         variables: {
           orderRef: order.order_ref,
           url:
             checkoutUrl ??
-            "reply to this chat to complete payment",
+            t("chase.reminder_url_fallback", customer.preferred_language),
         },
       },
     });

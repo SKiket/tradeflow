@@ -218,6 +218,7 @@ export async function confirmDraftOrder(
     threadId: params.threadId,
     customerId: params.customerId,
     supabase,
+    templateLanguage: lang,
   });
 
   console.info("[orders] Payment link sent", {
@@ -316,6 +317,7 @@ export async function cancelPendingDraft(
     threadId: params.threadId,
     customerId: params.customerId,
     supabase,
+    templateLanguage: lang,
   });
 
   return {

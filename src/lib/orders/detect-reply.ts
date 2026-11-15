@@ -70,6 +70,12 @@ export function isNegativeReply(text: string): boolean {
   const normalized = normalizeReply(text);
   if (!normalized) return false;
   if (NEGATIVE_PHRASES.has(normalized)) return true;
+
+  // Longer "no/non, …" messages are usually corrections ("Non, 1 tasse plutôt"),
+  // not cancels — let order_parse handle them.
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length >= 4) return false;
+
   return (
     normalized.startsWith("no ") ||
     normalized.startsWith("no,") ||

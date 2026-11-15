@@ -24,6 +24,7 @@ export type MessageId =
   | "chase.reminder_12h_no_url"
   | "chase.reminder_23h_with_url"
   | "chase.reminder_23h_no_url"
+  | "chase.reminder_url_fallback"
   | "fulfil.payment_received"
   | "fulfil.payment_failed"
   | "dispatch.dispatched"

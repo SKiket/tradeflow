@@ -397,6 +397,7 @@ export async function createDraftOrderFromParse(
       supabase,
       audience: "buyer",
       scheduleOutboundRetry: false,
+      templateLanguage: lang,
       template: {
         key: "order_confirmation_needed",
         variables: {

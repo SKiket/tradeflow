@@ -6,6 +6,7 @@ import { withReplyPrefix } from "@/lib/channels/voice-note";
 import { t } from "@/lib/i18n";
 import {
   getCustomerPreferredLanguage,
+  heuristicLanguage,
   maybeUpdatePreferredLanguage,
 } from "@/lib/i18n/language";
 import {
@@ -70,6 +71,14 @@ export async function handleQuestionReply(
   params: HandleSupportParams,
 ): Promise<SupportInboundOutcome> {
   const supabase = params.supabase ?? createAdminClient();
+
+  // Detect/store conversation language before the AI reply is built.
+  await maybeUpdatePreferredLanguage({
+    supabase,
+    customerId: params.customerId,
+    messageText: params.messageText,
+    detectedLanguage: heuristicLanguage(params.messageText),
+  });
 
   const preferredLanguage = await getCustomerPreferredLanguage(
     supabase,

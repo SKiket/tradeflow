@@ -16,6 +16,7 @@ import {
 } from "@/lib/support/handle-inbound";
 import {
   getCustomerPreferredLanguage,
+  heuristicLanguage,
   maybeUpdatePreferredLanguage,
 } from "@/lib/i18n/language";
 
@@ -109,6 +110,14 @@ export async function replayInboundMessage(params: {
     };
   }
 
+  // Conversation language at send/replay time — heuristic first, then AI.
+  await maybeUpdatePreferredLanguage({
+    supabase: params.supabase,
+    customerId: msg.customer_id as string,
+    messageText,
+    detectedLanguage: heuristicLanguage(messageText),
+  });
+
   const preferredLanguage = await getCustomerPreferredLanguage(
     params.supabase,
     msg.customer_id as string,
@@ -125,17 +134,19 @@ export async function replayInboundMessage(params: {
       preferredLanguage,
       supabase: params.supabase,
     });
-    await maybeUpdatePreferredLanguage({
-      supabase: params.supabase,
-      customerId: msg.customer_id as string,
-      messageText,
-      detectedLanguage: parseResult.language,
-    });
     await params.supabase
       .from("messages")
       .update({ ai_parse_result: parseResult })
       .eq("id", msg.id);
   }
+
+  // Always refresh language from the parse (stored or fresh) before drafts.
+  await maybeUpdatePreferredLanguage({
+    supabase: params.supabase,
+    customerId: msg.customer_id as string,
+    messageText,
+    detectedLanguage: parseResult.language,
+  });
 
   if (parseResult.intent === "order") {
     const outcome = await createDraftOrderFromParse({

@@ -28,6 +28,7 @@ import { AI_PAUSED_PARSE, isAiPaused } from "@/lib/inbox/ai-pause";
 import { t } from "@/lib/i18n";
 import {
   getCustomerPreferredLanguage,
+  heuristicLanguage,
   maybeUpdatePreferredLanguage,
 } from "@/lib/i18n/language";
 import { canAcceptOrders } from "@/lib/stripe/billing-gate";
@@ -513,6 +514,16 @@ async function processPersistedInbound(
           },
         };
       }
+
+      // Conversation language BEFORE any buyer reply: clear lexical signal
+      // updates preferred_language so draft-reply / first draft use the right lang.
+      // Ambiguous short messages (oui/ok/2) inherit. AI refine runs after parse.
+      await maybeUpdatePreferredLanguage({
+        supabase,
+        customerId: result.message.customerId,
+        messageText,
+        detectedLanguage: heuristicLanguage(messageText),
+      });
 
       // Intercept yes/no on PENDING_CONFIRMATION, and cancel on
       // AWAITING_PAYMENT, BEFORE order_parse so corrections still parse.

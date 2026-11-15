@@ -94,6 +94,10 @@ export const MESSAGES: Record<MessageId, Record<SupportedLang, string>> = {
     en: "Final reminder — your order {orderRef} will be cancelled in about an hour if we don't receive payment. Reply here if you'd still like to complete it.",
     fr: "Dernier rappel — votre commande {orderRef} sera annulée dans environ une heure si nous ne recevons pas le paiement. Répondez ici si vous souhaitez toujours la finaliser.",
   },
+  "chase.reminder_url_fallback": {
+    en: "reply to this chat to complete payment",
+    fr: "répondez à ce message pour finaliser le paiement",
+  },
   "fulfil.payment_received": {
     en: "Payment received! Your order {orderRef} is confirmed.\nTotal: {total}.\n\nTrack your order: {url}\nWe'll be in touch about dispatch. Thanks for your order!",
     fr: "Paiement reçu ! Votre commande {orderRef} est confirmée.\nTotal : {total}.\n\nSuivez votre commande : {url}\nNous vous recontacterons pour l'expédition. Merci pour votre commande !",
