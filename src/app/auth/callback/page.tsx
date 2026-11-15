@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 
+import { LegalLinks } from "@/components/brand/legal-links";
 import { createClient } from "@/lib/supabase/client";
 
 /**
@@ -71,8 +72,12 @@ export default function AuthCallbackPage() {
   }, []);
 
   return (
-    <main className="flex flex-1 items-center justify-center p-6">
+    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
       <p className="text-sm text-muted-foreground">Signing you in…</p>
+      <LegalLinks
+        className="text-center text-xs text-muted-foreground"
+        linkClassName="underline-offset-2 hover:underline"
+      />
     </main>
   );
 }
