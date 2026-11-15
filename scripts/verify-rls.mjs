@@ -316,6 +316,22 @@ async function main() {
     (delCross.data?.length ?? 0) === 0 &&
     !!delInsert.error;
 
+  // Step 19b: anon must not execute invoke_app_cron (cron/postgres only)
+  const anonClient = createClient(url, anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const cronRpc = await anonClient.rpc("invoke_app_cron", {
+    p_path: "/api/cron/payment-chase",
+  });
+  logResult("Query: anon RPC invoke_app_cron (expect permission denied)", {
+    query: "SELECT invoke_app_cron('/api/cron/payment-chase') AS anon",
+    error: cronRpc.error?.message ?? null,
+    data: cronRpc.data ?? null,
+  });
+  const cronRpcDenied =
+    cronRpc.error != null &&
+    /permission denied|not authorized|42501/i.test(cronRpc.error.message);
+
   const passed =
     (ownProducts.data?.length ?? 0) >= 1 &&
     (crossTenant.data?.length ?? 0) === 0 &&
@@ -324,7 +340,8 @@ async function main() {
     !updateOwn.error &&
     !!insertCross.error &&
     templatesIsolated &&
-    deletionRequestsIsolated;
+    deletionRequestsIsolated &&
+    cronRpcDenied;
 
   console.log("\n========================================");
   console.log(passed ? "RLS VERIFICATION: PASSED" : "RLS VERIFICATION: FAILED");

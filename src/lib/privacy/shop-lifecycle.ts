@@ -6,6 +6,7 @@ import {
   type EraseCustomerCounts,
 } from "@/lib/privacy/erase-customer";
 import {
+  PURGE_MAX_SHOPS_PER_RUN,
   RETAINED_RECORD_YEARS,
   SHOP_CLOSE_GRACE_DAYS,
 } from "@/lib/privacy/constants";
@@ -425,19 +426,35 @@ export async function purgeDueShops(
   supabase: SupabaseClient,
   params?: { dryRun?: boolean },
 ): Promise<{
-  scanned: number;
+  dueTotal: number;
+  processed: number;
+  remaining: number;
   purged: number;
   skipped: number;
   failed: number;
+  /** @deprecated use dueTotal — kept for callers expecting scanned */
+  scanned: number;
   summaries: Array<{ businessId: string; result: string }>;
 }> {
   const now = new Date().toISOString();
+  const { count: dueTotalCount } = await supabase
+    .from("businesses")
+    .select("id", { count: "exact", head: true })
+    .not("closed_at", "is", null)
+    .lte("purge_after", now)
+    .is("deleted_at", null);
+
+  const dueTotal = dueTotalCount ?? 0;
+
+  // Oldest due first (earliest purge_after), capped per run.
   const { data: due } = await supabase
     .from("businesses")
     .select("id")
     .not("closed_at", "is", null)
     .lte("purge_after", now)
-    .is("deleted_at", null);
+    .is("deleted_at", null)
+    .order("purge_after", { ascending: true })
+    .limit(PURGE_MAX_SHOPS_PER_RUN);
 
   const summaries: Array<{ businessId: string; result: string }> = [];
   let purged = 0;
@@ -469,11 +486,17 @@ export async function purgeDueShops(
     });
   }
 
+  const processed = (due ?? []).length;
+  const remaining = Math.max(0, dueTotal - processed);
+
   return {
-    scanned: (due ?? []).length,
+    dueTotal,
+    processed,
+    remaining,
     purged,
     skipped,
     failed,
+    scanned: dueTotal,
     summaries,
   };
 }

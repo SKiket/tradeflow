@@ -25,7 +25,9 @@ export async function POST(request: NextRequest) {
     const summary = await purgeDueShops(supabase, { dryRun });
     console.info("[cron/shop-purge] complete", {
       dryRun,
-      scanned: summary.scanned,
+      dueTotal: summary.dueTotal,
+      processed: summary.processed,
+      remaining: summary.remaining,
       purged: summary.purged,
       skipped: summary.skipped,
       failed: summary.failed,

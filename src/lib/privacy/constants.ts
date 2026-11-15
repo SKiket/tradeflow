@@ -6,3 +6,6 @@ export const SHOP_CLOSE_GRACE_DAYS = 30;
 
 /** Cooldown for "shop has closed" WhatsApp replies (same window as apology). */
 export const SHOP_CLOSED_REPLY_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** Max closed shops processed per shop-purge cron run (oldest due first). */
+export const PURGE_MAX_SHOPS_PER_RUN = 5;
