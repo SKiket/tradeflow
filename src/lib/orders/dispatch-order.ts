@@ -69,6 +69,10 @@ async function formatItemLines(
 async function sendBuyerUpdate(params: {
   order: OrderRow;
   text: string;
+  template?: {
+    key: string;
+    variables: Record<string, string>;
+  };
 }): Promise<string> {
   const admin = createAdminClient();
   const { data: customer } = await admin
@@ -88,6 +92,7 @@ async function sendBuyerUpdate(params: {
     threadId: params.order.thread_id,
     customerId: params.order.customer_id,
     supabase: admin,
+    template: params.template,
   });
   return sent.messageId;
 }
@@ -260,7 +265,19 @@ export async function dispatchOrder(
   );
   let outboundMessageId = "";
   try {
-    outboundMessageId = await sendBuyerUpdate({ order: row, text: message });
+    outboundMessageId = await sendBuyerUpdate({
+      order: row,
+      text: message,
+      template: {
+        key: "order_dispatched",
+        variables: {
+          orderRef: row.order_ref,
+          carrier: carrier || "carrier",
+          trackingNumber,
+          url: orderTrackingUrl(row.order_ref),
+        },
+      },
+    });
   } catch (error) {
     const sendError = error instanceof Error ? error.message : String(error);
     console.error("[dispatch] buyer WhatsApp failed after DISPATCHED", {
@@ -384,7 +401,17 @@ export async function deliverOrder(
 
   let outboundMessageId = "";
   try {
-    outboundMessageId = await sendBuyerUpdate({ order: row, text: message });
+    outboundMessageId = await sendBuyerUpdate({
+      order: row,
+      text: message,
+      template: {
+        key: "order_delivered",
+        variables: {
+          orderRef: row.order_ref,
+          url: orderTrackingUrl(row.order_ref),
+        },
+      },
+    });
   } catch (error) {
     const sendError = error instanceof Error ? error.message : String(error);
     console.error("[deliver] buyer WhatsApp failed after DELIVERED", {

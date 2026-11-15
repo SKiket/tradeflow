@@ -414,6 +414,8 @@ export async function cancelAwaitingPaymentOrder(params: {
   threadId?: string;
   /** Override the buyer WhatsApp copy (payment-chase uses a timeout notice). */
   buyerMessage?: string;
+  /** Outside-window template (e.g. payment-chase auto-cancel). */
+  template?: { key: string; variables: Record<string, string> };
 }): Promise<CancelAwaitingPaymentOutcome> {
   const { supabase, businessId, orderId } = params;
 
@@ -534,6 +536,7 @@ export async function cancelAwaitingPaymentOrder(params: {
         threadId: params.threadId,
         customerId: params.customerId,
         supabase,
+        template: params.template,
       });
       outboundMessageId = sent.messageId;
     } catch (notifyError) {

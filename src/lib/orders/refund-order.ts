@@ -332,6 +332,13 @@ async function notifyBuyerRefundSucceeded(params: {
     threadId: params.order.thread_id,
     customerId: params.order.customer_id,
     supabase: admin,
+    template: {
+      key: "refund_processed",
+      variables: {
+        amount: formatPence(params.amountPence),
+        orderRef: params.order.order_ref,
+      },
+    },
   });
 }
 

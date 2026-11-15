@@ -105,6 +105,9 @@ export function plainDeliveryReason(params: {
   if (code === "63038" || /daily messages limit/i.test(msg)) {
     return "Daily message limit reached";
   }
+  if (code === "outside_window_no_template") {
+    return "WhatsApp window closed — no approved template";
+  }
   if (code === "63016" || /outside.*window|freeform/i.test(msg)) {
     return "WhatsApp messaging window closed";
   }

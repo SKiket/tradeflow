@@ -19,7 +19,21 @@ import {
   WhatsAppNotConfiguredError,
   WhatsAppSendError,
 } from "@/lib/channels/send/errors";
+import { isInServiceWindow } from "@/lib/channels/service-window";
+import {
+  buildContentVariablesForKey,
+  isTemplatesEnabled,
+  lookupApprovedTemplate,
+} from "@/lib/channels/templates/lookup";
+import type { TemplateKey } from "@/lib/channels/templates/registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+
+export type SendMode = "freeform" | "template";
+
+export interface WhatsAppTemplateParam {
+  key: TemplateKey | string;
+  variables: Record<string, string>;
+}
 
 export interface SendWhatsAppMessageParams {
   businessId: string;
@@ -44,6 +58,11 @@ export interface SendWhatsAppMessageParams {
    * recovery). Defaults to true for plain notices.
    */
   scheduleOutboundRetry?: boolean;
+  /**
+   * Optional Meta/Twilio template for outside the 24h service window.
+   * Ignored when TEMPLATES_ENABLED is not "true" or when still in-window.
+   */
+  template?: WhatsAppTemplateParam | null;
 }
 
 export interface SendWhatsAppMessageResult {
@@ -54,8 +73,47 @@ export interface SendWhatsAppMessageResult {
   customerId: string;
   fromPhoneE164: string;
   deliveryStatus: DeliveryStatus;
-  /** True when no Twilio HTTP call was made (test-range skip). */
+  /** True when no Twilio HTTP call was made (test-range skip or dry-run). */
   simulated: boolean;
+  sendMode: SendMode;
+  templateKey: string | null;
+}
+
+/** Last Twilio request — used by dry-run / test mocks. */
+export type TwilioSendRequest =
+  | {
+      kind: "freeform";
+      from: string;
+      to: string;
+      body: string;
+    }
+  | {
+      kind: "template";
+      from: string;
+      to: string;
+      contentSid: string;
+      contentVariables: Record<string, string>;
+    };
+
+let lastTwilioRequest: TwilioSendRequest | null = null;
+
+export function getLastTwilioRequest(): TwilioSendRequest | null {
+  return lastTwilioRequest;
+}
+
+export function clearLastTwilioRequest(): void {
+  lastTwilioRequest = null;
+}
+
+type TwilioPoster = (
+  req: TwilioSendRequest,
+) => Promise<{ sid: string; status: string }>;
+
+let twilioPosterOverride: TwilioPoster | null = null;
+
+/** Test-only: replace the Twilio HTTP call. Pass null to restore. */
+export function setTwilioPosterForTests(poster: TwilioPoster | null): void {
+  twilioPosterOverride = poster;
 }
 
 function normaliseE164(phone: string): string {
@@ -71,12 +129,11 @@ function toWhatsAppAddress(phoneE164: string): string {
 }
 
 /**
- * Send a free-form WhatsApp text message via Twilio and persist it as an
- * outbound row. Every attempt is recorded — including Twilio rejections
- * that create no Message SID (e.g. 63038) — with delivery_status.
+ * Send a WhatsApp message via Twilio and persist it as an outbound row.
  *
- * Reserved UK test numbers (+447700900xxx) are recorded as simulated
- * unless FORCE_REAL_SEND=true.
+ * When TEMPLATES_ENABLED=true and the buyer is outside the 24h service
+ * window, uses an approved Content template instead of free-form Body.
+ * Flag off → free-form only (unchanged behaviour).
  *
  * @throws {WhatsAppNotConfiguredError} when the business has no WhatsApp number
  * @throws {WhatsAppSendError} when Twilio rejects the send (after persisting failed row)
@@ -93,6 +150,7 @@ export async function sendWhatsAppMessage(
   const supabase = params.supabase ?? createAdminClient();
   const audience: DeliveryAudience = params.audience ?? "buyer";
   const retryContext = params.retryContext ?? null;
+  const templateParam = params.template ?? null;
 
   const { data: business, error: businessError } = await supabase
     .from("businesses")
@@ -114,12 +172,13 @@ export async function sendWhatsAppMessage(
   }
 
   const fromPhoneE164 = business.whatsapp_phone_e164;
-  const customerId = await resolveCustomerId(
+  const customer = await resolveCustomer(
     supabase,
     params.businessId,
     toPhoneE164,
     params.customerId,
   );
+  const customerId = customer.id;
   const threadId = await resolveThreadId(
     supabase,
     params.businessId,
@@ -129,14 +188,18 @@ export async function sendWhatsAppMessage(
 
   const priorMeta = params.existingMessageId
     ? await readOutboundMeta(supabase, params.existingMessageId)
-    : { attempts: 0, queuedAt: null as string | null, retryContext: null as RetryContext | null };
+    : {
+        attempts: 0,
+        queuedAt: null as string | null,
+        retryContext: null as RetryContext | null,
+      };
   const priorAttempts = priorMeta.attempts;
   const effectiveRetryContext = retryContext ?? priorMeta.retryContext;
 
   function withRetryContext(
     base: Record<string, unknown>,
   ): Record<string, unknown> {
-    const stamped = {
+    const stamped: Record<string, unknown> = {
       ...base,
       queued_at:
         priorMeta.queuedAt ??
@@ -144,11 +207,91 @@ export async function sendWhatsAppMessage(
           ? base.queued_at
           : new Date().toISOString()),
     };
+    if (templateParam) {
+      stamped.template = {
+        key: templateParam.key,
+        variables: templateParam.variables,
+      };
+    }
     if (!effectiveRetryContext) return stamped;
     return { ...stamped, retry_context: effectiveRetryContext };
   }
 
+  const templatesOn = isTemplatesEnabled();
+  const inWindow = isInServiceWindow({
+    last_customer_message_at: customer.last_customer_message_at,
+  });
+
+  let sendMode: SendMode = "freeform";
+  let templateKey: string | null = templateParam?.key ?? null;
+  let contentSid: string | null = null;
+  let contentVariables: Record<string, string> | null = null;
+
+  if (templatesOn && !inWindow) {
+    if (!templateParam?.key) {
+      await failOutsideWindowNoTemplate({
+        supabase,
+        existingMessageId: params.existingMessageId,
+        businessId: params.businessId,
+        customerId,
+        threadId,
+        text,
+        audience,
+        priorAttempts,
+        withRetryContext,
+        templateKey: null,
+      });
+    }
+
+    const approved = await lookupApprovedTemplate({
+      supabase,
+      key: templateParam!.key,
+      language: customer.preferred_language,
+      businessId: params.businessId,
+    });
+
+    if (!approved) {
+      await failOutsideWindowNoTemplate({
+        supabase,
+        existingMessageId: params.existingMessageId,
+        businessId: params.businessId,
+        customerId,
+        threadId,
+        text,
+        audience,
+        priorAttempts,
+        withRetryContext,
+        templateKey: templateParam!.key,
+      });
+    }
+
+    sendMode = "template";
+    templateKey = approved!.template_key;
+    contentSid = approved!.twilio_content_sid;
+    contentVariables = buildContentVariablesForKey(
+      templateParam!.key as TemplateKey,
+      templateParam!.variables,
+    );
+  }
+
+  const twilioRequest: TwilioSendRequest =
+    sendMode === "template" && contentSid && contentVariables
+      ? {
+          kind: "template",
+          from: toWhatsAppAddress(fromPhoneE164),
+          to: toWhatsAppAddress(toPhoneE164),
+          contentSid,
+          contentVariables,
+        }
+      : {
+          kind: "freeform",
+          from: toWhatsAppAddress(fromPhoneE164),
+          to: toWhatsAppAddress(toPhoneE164),
+          body: text,
+        };
+
   if (shouldSkipRealTwilioSend(toPhoneE164)) {
+    lastTwilioRequest = null;
     const messageId = await persistOutbound(supabase, {
       existingMessageId: params.existingMessageId,
       businessId: params.businessId,
@@ -158,18 +301,30 @@ export async function sendWhatsAppMessage(
       audience,
       deliveryStatus: "simulated",
       attempts: priorAttempts + 1,
+      sendMode,
+      templateKey,
       rawPayload: withRetryContext({
         provider: "twilio",
         simulated: true,
         reason: "reserved_test_number",
         from: fromPhoneE164,
         to: toPhoneE164,
+        send_mode: sendMode,
+        template_key: templateKey,
+        ...(sendMode === "template"
+          ? {
+              content_sid: contentSid,
+              content_variables: contentVariables,
+            }
+          : {}),
       }),
     });
     console.info("[whatsapp-send] Simulated send (test number)", {
       messageId,
       to: toPhoneE164,
       businessId: params.businessId,
+      sendMode,
+      templateKey,
     });
     return {
       sid: `SIMULATED_${messageId}`,
@@ -180,16 +335,14 @@ export async function sendWhatsAppMessage(
       fromPhoneE164,
       deliveryStatus: "simulated",
       simulated: true,
+      sendMode,
+      templateKey,
     };
   }
 
   let twilio: { sid: string; status: string };
   try {
-    twilio = await postTwilioMessage({
-      from: toWhatsAppAddress(fromPhoneE164),
-      to: toWhatsAppAddress(toPhoneE164),
-      body: text,
-    });
+    twilio = await postTwilioMessage(twilioRequest);
   } catch (error) {
     const sendError =
       error instanceof WhatsAppSendError
@@ -202,8 +355,6 @@ export async function sendWhatsAppMessage(
       twilioCode: sendError.twilioCode,
       twilioStatus: sendError.twilioStatus,
     });
-    // Draft confirmations / payment links recover via pending_replay — never
-    // re-send stale outbound text.
     const stateDependent = isStateDependentRetryContext(effectiveRetryContext);
     const allowTextRetry = params.scheduleOutboundRetry !== false;
     const retryable =
@@ -236,6 +387,8 @@ export async function sendWhatsAppMessage(
       audience,
       deliveryStatus: "failed",
       attempts,
+      sendMode,
+      templateKey,
       errorCode:
         sendError.twilioCode != null ? String(sendError.twilioCode) : null,
       errorText: plain,
@@ -248,6 +401,8 @@ export async function sendWhatsAppMessage(
         error_message: sendError.message,
         http_status: sendError.twilioStatus ?? null,
         rate_limited: rateLimited,
+        send_mode: sendMode,
+        template_key: templateKey,
       }),
     });
 
@@ -258,6 +413,7 @@ export async function sendWhatsAppMessage(
       twilioCode: sendError.twilioCode,
       attempts,
       nextRetryAt: nextRetry,
+      sendMode,
       error: sendError.message,
     });
 
@@ -276,6 +432,8 @@ export async function sendWhatsAppMessage(
     audience,
     deliveryStatus: "sent",
     attempts: priorAttempts + 1,
+    sendMode,
+    templateKey,
     nextRetryAt: null,
     errorCode: null,
     errorText: null,
@@ -285,6 +443,14 @@ export async function sendWhatsAppMessage(
       status: twilio.status,
       from: fromPhoneE164,
       to: toPhoneE164,
+      send_mode: sendMode,
+      template_key: templateKey,
+      ...(sendMode === "template"
+        ? {
+            content_sid: contentSid,
+            content_variables: contentVariables,
+          }
+        : {}),
     }),
   });
 
@@ -295,6 +461,8 @@ export async function sendWhatsAppMessage(
     businessId: params.businessId,
     threadId,
     to: toPhoneE164,
+    sendMode,
+    templateKey,
   });
 
   return {
@@ -305,8 +473,64 @@ export async function sendWhatsAppMessage(
     customerId,
     fromPhoneE164,
     deliveryStatus: "sent",
-    simulated: false,
+    simulated: twilio.sid.startsWith("DRYRUN_"),
+    sendMode,
+    templateKey,
   };
+}
+
+async function failOutsideWindowNoTemplate(params: {
+  supabase: SupabaseClient;
+  existingMessageId?: string | null;
+  businessId: string;
+  customerId: string;
+  threadId: string;
+  text: string;
+  audience: DeliveryAudience;
+  priorAttempts: number;
+  withRetryContext: (base: Record<string, unknown>) => Record<string, unknown>;
+  templateKey: string | null;
+}): Promise<never> {
+  const reasonCode = "outside_window_no_template";
+  const plain = plainDeliveryReason({
+    errorCode: reasonCode,
+    errorMessage: reasonCode,
+  });
+  const messageId = await persistOutbound(params.supabase, {
+    existingMessageId: params.existingMessageId,
+    businessId: params.businessId,
+    customerId: params.customerId,
+    threadId: params.threadId,
+    text: params.text,
+    audience: params.audience,
+    deliveryStatus: "failed",
+    attempts: params.priorAttempts + 1,
+    sendMode: null,
+    templateKey: params.templateKey,
+    errorCode: reasonCode,
+    errorText: plain,
+    nextRetryAt: null,
+    rawPayload: params.withRetryContext({
+      provider: "twilio",
+      from: null,
+      to: null,
+      error_code: reasonCode,
+      error_message: "Outside WhatsApp service window and no approved template",
+      send_mode: null,
+      template_key: params.templateKey,
+    }),
+  });
+
+  console.error("[whatsapp-send] Outside window, no approved template", {
+    messageId,
+    businessId: params.businessId,
+    templateKey: params.templateKey,
+  });
+
+  throw new WhatsAppSendError(
+    "Outside WhatsApp service window and no approved template",
+    { twilioCode: reasonCode },
+  );
 }
 
 async function readOutboundMeta(
@@ -354,6 +578,8 @@ async function persistOutbound(
     errorCode?: string | null;
     errorText?: string | null;
     nextRetryAt?: string | null;
+    sendMode?: SendMode | null;
+    templateKey?: string | null;
     rawPayload: Record<string, unknown>;
   },
 ): Promise<string> {
@@ -372,6 +598,8 @@ async function persistOutbound(
     delivery_attempts: params.attempts,
     next_retry_at: params.nextRetryAt ?? null,
     delivery_audience: params.audience,
+    send_mode: params.sendMode ?? null,
+    template_key: params.templateKey ?? null,
   };
 
   if (params.existingMessageId) {
@@ -398,7 +626,6 @@ async function persistOutbound(
     .single();
 
   if (error || !data) {
-    // Twilio may already have accepted — log; callers still get SID when sent.
     console.error("[whatsapp-send] DB persist failed", {
       error: error?.message ?? "no row returned",
       deliveryStatus: params.deliveryStatus,
@@ -408,17 +635,38 @@ async function persistOutbound(
   return data.id as string;
 }
 
-async function resolveCustomerId(
+async function resolveCustomer(
   supabase: SupabaseClient,
   businessId: string,
   phoneE164: string,
   provided: string | null | undefined,
-): Promise<string> {
-  if (provided) return provided;
+): Promise<{
+  id: string;
+  preferred_language: string | null;
+  last_customer_message_at: string | null;
+}> {
+  if (provided) {
+    const { data, error } = await supabase
+      .from("customers")
+      .select("id, preferred_language, last_customer_message_at")
+      .eq("id", provided)
+      .maybeSingle();
+    if (error) {
+      throw new WhatsAppSendError(`Customer lookup failed: ${error.message}`);
+    }
+    if (data) {
+      return {
+        id: data.id as string,
+        preferred_language: (data.preferred_language as string | null) ?? null,
+        last_customer_message_at:
+          (data.last_customer_message_at as string | null) ?? null,
+      };
+    }
+  }
 
   const { data: existing, error } = await supabase
     .from("customers")
-    .select("id")
+    .select("id, preferred_language, last_customer_message_at")
     .eq("business_id", businessId)
     .eq("phone_e164", phoneE164)
     .is("deleted_at", null)
@@ -427,7 +675,14 @@ async function resolveCustomerId(
   if (error) {
     throw new WhatsAppSendError(`Customer lookup failed: ${error.message}`);
   }
-  if (existing) return existing.id;
+  if (existing) {
+    return {
+      id: existing.id as string,
+      preferred_language: (existing.preferred_language as string | null) ?? null,
+      last_customer_message_at:
+        (existing.last_customer_message_at as string | null) ?? null,
+    };
+  }
 
   const { data: created, error: insertError } = await supabase
     .from("customers")
@@ -436,18 +691,32 @@ async function resolveCustomerId(
       phone_e164: phoneE164,
       channel_identifiers: { whatsapp: phoneE164 },
     })
-    .select("id")
+    .select("id, preferred_language, last_customer_message_at")
     .single();
 
-  if (created) return created.id;
+  if (created) {
+    return {
+      id: created.id as string,
+      preferred_language: (created.preferred_language as string | null) ?? null,
+      last_customer_message_at:
+        (created.last_customer_message_at as string | null) ?? null,
+    };
+  }
 
   const { data: raced } = await supabase
     .from("customers")
-    .select("id")
+    .select("id, preferred_language, last_customer_message_at")
     .eq("business_id", businessId)
     .eq("phone_e164", phoneE164)
     .maybeSingle();
-  if (raced) return raced.id;
+  if (raced) {
+    return {
+      id: raced.id as string,
+      preferred_language: (raced.preferred_language as string | null) ?? null,
+      last_customer_message_at:
+        (raced.last_customer_message_at as string | null) ?? null,
+    };
+  }
 
   throw new WhatsAppSendError(
     `Customer create failed: ${insertError?.message ?? "unknown"}`,
@@ -480,11 +749,15 @@ async function resolveThreadId(
   return randomUUID();
 }
 
-async function postTwilioMessage(params: {
-  from: string;
-  to: string;
-  body: string;
-}): Promise<{ sid: string; status: string }> {
+async function postTwilioMessage(
+  req: TwilioSendRequest,
+): Promise<{ sid: string; status: string }> {
+  lastTwilioRequest = req;
+
+  if (twilioPosterOverride) {
+    return twilioPosterOverride(req);
+  }
+
   const simulatedCode = process.env.TWILIO_SIMULATE_ERROR?.trim();
   if (simulatedCode) {
     const code = Number(simulatedCode) || simulatedCode;
@@ -499,6 +772,11 @@ async function postTwilioMessage(params: {
     );
   }
 
+  if (process.env.TWILIO_DRY_RUN === "true") {
+    const sid = `DRYRUN_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    return { sid, status: "queued" };
+  }
+
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   if (!accountSid || !authToken) {
@@ -509,10 +787,15 @@ async function postTwilioMessage(params: {
 
   const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
   const body = new URLSearchParams({
-    From: params.from,
-    To: params.to,
-    Body: params.body,
+    From: req.from,
+    To: req.to,
   });
+  if (req.kind === "template") {
+    body.set("ContentSid", req.contentSid);
+    body.set("ContentVariables", JSON.stringify(req.contentVariables));
+  } else {
+    body.set("Body", req.body);
+  }
 
   const response = await fetch(url, {
     method: "POST",

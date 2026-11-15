@@ -286,6 +286,15 @@ async function sendReminder(
       threadId: order.thread_id,
       customerId: customer.id,
       supabase,
+      template: {
+        key: "payment_reminder",
+        variables: {
+          orderRef: order.order_ref,
+          url:
+            checkoutUrl ??
+            "reply to this chat to complete payment",
+        },
+      },
     });
     console.info("[payment-chase] reminder sent", {
       orderId: order.id,
@@ -361,6 +370,10 @@ async function autoCancelOrder(
       "confirm.payment_auto_cancelled",
       customer?.preferred_language,
     ),
+    template: {
+      key: "order_auto_cancelled",
+      variables: {},
+    },
   });
 
   if (outcome.action === "error") {

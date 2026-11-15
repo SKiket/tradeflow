@@ -124,12 +124,21 @@ export async function runWhatsAppDeliveryRetry(
       continue;
     }
 
-    // Eligible: re-send the exact queued text (still matches current state).
+    // Eligible: re-send the queued text. Window + template path are
+    // re-evaluated inside sendWhatsAppMessage at retry time.
     attempted += 1;
     try {
       const retryContext =
         raw.retry_context && typeof raw.retry_context === "object"
           ? (raw.retry_context as import("@/lib/channels/send/delivery").RetryContext)
+          : null;
+      const templateRaw =
+        raw.template && typeof raw.template === "object"
+          ? (raw.template as { key?: string; variables?: Record<string, string> })
+          : null;
+      const template =
+        templateRaw?.key && templateRaw.variables
+          ? { key: templateRaw.key, variables: templateRaw.variables }
           : null;
       await sendWhatsAppMessage({
         businessId: row.business_id as string,
@@ -141,6 +150,7 @@ export async function runWhatsAppDeliveryRetry(
         audience: (row.delivery_audience as DeliveryAudience) || "buyer",
         existingMessageId: row.id as string,
         retryContext,
+        template,
       });
       succeeded += 1;
     } catch (err) {

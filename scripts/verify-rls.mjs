@@ -225,13 +225,41 @@ async function main() {
     data: insertCross.data,
   });
 
+  // Test 7: message_templates is service-role only (no tenant read/write)
+  const templatesRead = await clientA
+    .from("message_templates")
+    .select("id, template_key")
+    .limit(5);
+  const templatesInsert = await clientA.from("message_templates").insert({
+    template_key: "tenant_probe",
+    language: "en",
+    body: "probe",
+    variable_names: [],
+    category: "utility",
+  });
+  logResult("Query: Tenant A reads message_templates (expect 0 / denied)", {
+    query: "SELECT id FROM message_templates",
+    error: templatesRead.error?.message ?? null,
+    rowCount: templatesRead.data?.length ?? 0,
+  });
+  logResult("Query: Tenant A INSERT message_templates (expect denied)", {
+    query: "INSERT INTO message_templates (...)",
+    error: templatesInsert.error?.message ?? null,
+    data: templatesInsert.data,
+  });
+
+  const templatesIsolated =
+    (templatesRead.data?.length ?? 0) === 0 &&
+    (templatesInsert.error != null || templatesInsert.data == null);
+
   const passed =
     (ownProducts.data?.length ?? 0) >= 1 &&
     (crossTenant.data?.length ?? 0) === 0 &&
     (allVisible.data?.length ?? 0) >= 1 &&
     !insertOwn.error &&
     !updateOwn.error &&
-    !!insertCross.error;
+    !!insertCross.error &&
+    templatesIsolated;
 
   console.log("\n========================================");
   console.log(passed ? "RLS VERIFICATION: PASSED" : "RLS VERIFICATION: FAILED");

@@ -245,15 +245,17 @@ async function main() {
     failedMsg = (failedRows?.[0] as typeof failedMsg) ?? null;
 
     const reverted = after?.total_pence === unit * 2 && qty === 2 && Boolean(outcome.sendError);
+    // Draft confirmations use scheduleOutboundRetry:false — pending_replay
+    // owns recovery, so next_retry_at stays null on the outbound row.
     const notDelivered =
       failedMsg?.delivery_error_code === "63038" &&
       /Daily message limit/i.test(failedMsg.delivery_error_text || "") &&
-      Boolean(failedMsg.next_retry_at);
+      failedMsg.next_retry_at == null;
 
     if (reverted && notDelivered) {
       pass(
         "2. Simulate 63038",
-        `Not delivered + retry scheduled; draft reverted to 2× £${(unit * 2) / 100}`,
+        `Not delivered; pending_replay owns retry; draft reverted to 2× £${(unit * 2) / 100}`,
       );
     } else {
       fail(

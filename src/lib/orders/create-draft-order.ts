@@ -378,6 +378,12 @@ export async function createDraftOrderFromParse(
     replyPrefix,
     formatConfirmationMessage(gate.lines, totalPence, lang),
   );
+  const templateItems = gate.lines
+    .map((line) => {
+      const label = line.variantLabel ? ` (${line.variantLabel})` : "";
+      return `${line.quantity}× ${line.productName}${label}`;
+    })
+    .join(", ");
 
   let outboundMessageId = "";
   let sendError: string | undefined;
@@ -391,6 +397,13 @@ export async function createDraftOrderFromParse(
       supabase,
       audience: "buyer",
       scheduleOutboundRetry: false,
+      template: {
+        key: "order_confirmation_needed",
+        variables: {
+          items: templateItems,
+          total: formatPence(totalPence),
+        },
+      },
       retryContext: {
         kind: "draft_confirmation",
         orderId,

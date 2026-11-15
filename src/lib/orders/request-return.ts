@@ -322,11 +322,19 @@ export async function requestReturn(
       supabase,
     });
     const lang = await getCustomerPreferredLanguage(supabase, row.customer_id);
+    const slip = returnSlipUrl(row.order_ref);
     await sendBuyerWhatsApp({
       businessId: row.business_id,
       customerId: row.customer_id,
       threadId: row.thread_id,
       text: buyerReturnApprovedMessage(row.order_ref, lang),
+      template: {
+        key: "return_update",
+        variables: {
+          orderRef: row.order_ref,
+          detail: `approved — print your return slip at ${slip}`,
+        },
+      },
     });
     return {
       action: "auto_approved",
@@ -334,7 +342,7 @@ export async function requestReturn(
       orderRef: row.order_ref,
       reason: parsed,
       detail: detailText,
-      slipUrl: returnSlipUrl(row.order_ref),
+      slipUrl: slip,
     };
   }
 
@@ -437,11 +445,23 @@ export async function decideReturn(
           order.customer_id as string,
         );
 
+  const detail =
+    decision === "approve"
+      ? `approved — print your return slip at ${slipUrl}`
+      : "was not approved";
+
   await sendBuyerWhatsApp({
     businessId: order.business_id as string,
     customerId: order.customer_id as string,
     threadId: (order.thread_id as string | null) ?? null,
     text,
+    template: {
+      key: "return_update",
+      variables: {
+        orderRef: order.order_ref as string,
+        detail,
+      },
+    },
   });
 
   return decision === "approve"
@@ -576,6 +596,7 @@ async function sendBuyerWhatsApp(params: {
   customerId: string;
   threadId: string | null;
   text: string;
+  template?: { key: string; variables: Record<string, string> };
 }): Promise<void> {
   const admin = createAdminClient();
   const { data: customer } = await admin
@@ -597,6 +618,7 @@ async function sendBuyerWhatsApp(params: {
       threadId: params.threadId ?? undefined,
       customerId: params.customerId,
       supabase: admin,
+      template: params.template,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
