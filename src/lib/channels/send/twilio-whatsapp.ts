@@ -63,6 +63,11 @@ export interface SendWhatsAppMessageParams {
    * Ignored when TEMPLATES_ENABLED is not "true" or when still in-window.
    */
   template?: WhatsAppTemplateParam | null;
+  /**
+   * Override language for template lookup (e.g. seller alerts using the
+   * business language). Defaults to the resolved customer's preferred_language.
+   */
+  templateLanguage?: string | null;
 }
 
 export interface SendWhatsAppMessageResult {
@@ -246,7 +251,7 @@ export async function sendWhatsAppMessage(
     const approved = await lookupApprovedTemplate({
       supabase,
       key: templateParam!.key,
-      language: customer.preferred_language,
+      language: params.templateLanguage ?? customer.preferred_language,
       businessId: params.businessId,
     });
 

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
 import {
   availableQuantity,
   isVariantLowStock,
@@ -108,13 +109,39 @@ export async function runLowStockAlerts(
     }
 
     const text = buildAlertText(claimed);
+    const first = claimed[0]!;
+    const productLabel =
+      claimed.length === 1
+        ? productName(first)
+        : `${productName(first)} (and ${claimed.length - 1} more)`;
+    const countLabel =
+      claimed.length === 1
+        ? String(
+            availableQuantity(first.stock_quantity, first.reserved_quantity),
+          )
+        : claimed
+            .map((item) =>
+              String(
+                availableQuantity(item.stock_quantity, item.reserved_quantity),
+              ),
+            )
+            .join(", ");
     try {
+      const sellerLang = await getBusinessSellerLanguage(supabase, businessId);
       await sendWhatsAppMessage({
         businessId,
         toPhoneE164: sellerPhone,
         text,
         supabase,
         audience: "seller",
+        templateLanguage: sellerLang,
+        template: {
+          key: "seller_low_stock",
+          variables: {
+            product: productLabel,
+            count: countLabel,
+          },
+        },
       });
       businessesAlerted += 1;
       variantsAlerted += claimed.length;

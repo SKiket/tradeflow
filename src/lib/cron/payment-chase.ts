@@ -372,7 +372,7 @@ async function autoCancelOrder(
     ),
     template: {
       key: "order_auto_cancelled",
-      variables: {},
+      variables: { orderRef: order.order_ref },
     },
   });
 

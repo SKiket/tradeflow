@@ -164,7 +164,7 @@ async function clearApproved(key: string, language: string) {
 }
 
 async function main() {
-  console.log("=== Step 16 template verify (mocked Twilio) ===\n");
+  console.log("=== Step 16/16b template verify (mocked Twilio) ===\n");
 
   const businessId = await ensureBusiness();
   const captured: Array<ReturnType<typeof getLastTwilioRequest>> = [];
@@ -521,16 +521,159 @@ async function main() {
     }
   }
 
-  // Restore approved EN for cleanliness of seed state
+  // ---- 9. Seller alert outside window uses approved template ----
+  const SELLER_SID = "HXseller000000000000000000000001";
+  const SELLER_PHONE = "+447911111222";
   await upsertApprovedTemplate({
-    key: "order_delivered",
+    key: "seller_new_order",
     language: "en",
-    sid: EN_SID,
-    body: "Your order {{1}} has been delivered. Track at {{2}} anytime.",
+    sid: SELLER_SID,
+    body: "New order {{1}} from {{2}} for {{3}}. Open your TradeFlow dashboard to review it.",
   });
-  // Revert verify sid back to draft so production stays draft until real approval
+  // Seller phone customer outside window (never messaged / stale).
+  await ensureCustomer({
+    businessId,
+    phone: SELLER_PHONE,
+    lang: "en",
+    lastMessageAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+  });
+  // Point business seller phone at dry-run number for this check.
+  const { data: bizBefore } = await admin
+    .from("businesses")
+    .select("seller_whatsapp_phone_e164")
+    .eq("id", businessId)
+    .maybeSingle();
+  const priorSellerPhone = bizBefore?.seller_whatsapp_phone_e164 as
+    | string
+    | null;
+  await admin
+    .from("businesses")
+    .update({ seller_whatsapp_phone_e164: SELLER_PHONE })
+    .eq("id", businessId);
+
+  captured.length = 0;
+  const sellerSend = await sendWhatsAppMessage({
+    businessId,
+    toPhoneE164: SELLER_PHONE,
+    text: "New paid order TF-SELLER!",
+    audience: "seller",
+    templateLanguage: "en",
+    template: {
+      key: "seller_new_order",
+      variables: {
+        ref: "TF-SELLER",
+        buyer: "+447700900999",
+        total: "£12.00",
+      },
+    },
+  });
+  const c9 = captured[0];
+  if (
+    sellerSend.sendMode === "template" &&
+    c9?.kind === "template" &&
+    c9.contentSid === SELLER_SID &&
+    c9.contentVariables["1"] === "TF-SELLER" &&
+    c9.contentVariables["2"] === "+447700900999" &&
+    c9.contentVariables["3"] === "£12.00"
+  ) {
+    pass("9. Seller alert outside window: approved template + vars");
+  } else {
+    fail("9. Seller alert template", JSON.stringify({ sellerSend, c9 }));
+  }
+
+  // ---- 10. Seller alert, no approved template ----
+  await clearApproved("seller_new_order", "en");
+  captured.length = 0;
+  try {
+    await sendWhatsAppMessage({
+      businessId,
+      toPhoneE164: SELLER_PHONE,
+      text: "New paid order TF-NONE!",
+      audience: "seller",
+      template: {
+        key: "seller_new_order",
+        variables: { ref: "TF-NONE", buyer: "buyer", total: "£1.00" },
+      },
+    });
+    fail("10. Seller no template", "expected throw");
+  } catch {
+    const { data: failedSeller } = await admin
+      .from("messages")
+      .select("delivery_error_code")
+      .eq("business_id", businessId)
+      .eq("delivery_error_code", "outside_window_no_template")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (captured.length === 0 && failedSeller) {
+      pass("10. Seller no approved template → outside_window_no_template");
+    } else {
+      fail("10. Seller no template", JSON.stringify({ failedSeller, captured }));
+    }
+  }
+
+  // ---- 11. return_approved / return_declined keys map correctly ----
+  const { getTemplateDefinition } = await import(
+    "../src/lib/channels/templates/registry.ts"
+  );
+  const approvedDef = getTemplateDefinition("return_approved");
+  const declinedDef = getTemplateDefinition("return_declined");
+  const obsolete = getTemplateDefinition("return_update");
+  if (
+    approvedDef?.variables.map((v) => v.name).join(",") === "orderRef,url" &&
+    declinedDef?.variables.map((v) => v.name).join(",") === "orderRef" &&
+    !obsolete
+  ) {
+    pass("11. return_approved / return_declined replace return_update");
+  } else {
+    fail("11. return template keys", "registry mismatch");
+  }
+
+  // ---- 12. Seed must not modify approved rows ----
+  const protectedBody =
+    "PROTECTED approved body {{1}} from {{2}} for {{3}}. Do not change.";
+  await upsertApprovedTemplate({
+    key: "seller_new_order",
+    language: "en",
+    sid: SELLER_SID,
+    body: protectedBody,
+  });
+  const { spawnSync } = await import("node:child_process");
+  const seed = spawnSync(
+    "npx",
+    ["--yes", "tsx", "scripts/seed-message-templates.mts"],
+    { cwd: root, encoding: "utf8", shell: true },
+  );
+  const { data: afterSeed } = await admin
+    .from("message_templates")
+    .select("body, meta_status, twilio_content_sid")
+    .eq("template_key", "seller_new_order")
+    .eq("language", "en")
+    .is("business_id", null)
+    .maybeSingle();
+  if (
+    seed.status === 0 &&
+    afterSeed?.meta_status === "approved" &&
+    afterSeed.body === protectedBody &&
+    afterSeed.twilio_content_sid === SELLER_SID &&
+    /skipped seller_new_order\/en/.test(seed.stdout ?? "")
+  ) {
+    pass("12. Seed leaves approved rows untouched");
+  } else {
+    fail(
+      "12. Seed approved safety",
+      `status=${seed.status} row=${JSON.stringify(afterSeed)} out=${(seed.stdout ?? "").slice(-400)}`,
+    );
+  }
+
+  // Restore business seller phone + clear verify approvals
+  await admin
+    .from("businesses")
+    .update({ seller_whatsapp_phone_e164: priorSellerPhone })
+    .eq("id", businessId);
   await clearApproved("order_delivered", "en");
   await clearApproved("order_delivered", "fr");
+  await clearApproved("seller_new_order", "en");
 
   setTwilioPosterForTests(null);
 

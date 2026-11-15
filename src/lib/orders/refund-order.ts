@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type Stripe from "stripe";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
 import { t } from "@/lib/i18n";
 import { buyerFacingRefundReasonDisplay } from "@/lib/i18n/buyer-reason";
 import {
@@ -361,6 +362,8 @@ async function notifySellerRefundFailed(
     return;
   }
 
+  const sellerLang = await getBusinessSellerLanguage(admin, businessId);
+
   await sendWhatsAppMessage({
     businessId,
     toPhoneE164: business.seller_whatsapp_phone_e164,
@@ -369,6 +372,12 @@ async function notifySellerRefundFailed(
       "Please check your Stripe dashboard and retry or handle manually.",
     ].join(" "),
     supabase: admin,
+    audience: "seller",
+    templateLanguage: sellerLang,
+    template: {
+      key: "seller_refund_failed",
+      variables: { ref: orderRef },
+    },
   });
 }
 

@@ -2,7 +2,7 @@
  * Code-side WhatsApp utility template definitions.
  * Bodies use Meta numbered variables {{1}}, {{2}}, … — never first/last token,
  * never adjacent. Values must not contain newlines or tabs at send time.
- * Wording mirrors lib/i18n/messages.ts free-form copy.
+ * Wording mirrors lib/i18n/messages.ts free-form copy where applicable.
  */
 
 export type TemplateLanguage = "en" | "fr";
@@ -13,8 +13,13 @@ export type TemplateKey =
   | "refund_processed"
   | "payment_reminder"
   | "order_auto_cancelled"
-  | "return_update"
-  | "order_confirmation_needed";
+  | "return_approved"
+  | "return_declined"
+  | "order_confirmation_needed"
+  | "seller_new_order"
+  | "seller_refund_failed"
+  | "seller_low_stock"
+  | "seller_needs_attention";
 
 export interface TemplateVariableDef {
   /** Logical name used by callers (mapped to {{n}} by position). */
@@ -38,11 +43,14 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
       { name: "orderRef", sample: "TF-ABC123" },
       { name: "carrier", sample: "Royal Mail" },
       { name: "trackingNumber", sample: "AB123456789GB" },
-      { name: "url", sample: "https://tradeflow.app/t/TF-ABC123" },
+      {
+        name: "url",
+        sample: "https://tradeflow-tau-blush.vercel.app/t/TF-ABC123",
+      },
     ],
     bodies: {
-      en: "Your order {{1}} has been dispatched via {{2}}. Tracking number: {{3}}. Track your order at {{4}} — it is on its way!",
-      fr: "Votre commande {{1}} a été expédiée via {{2}}. Numéro de suivi : {{3}}. Suivez votre commande sur {{4}} — elle est en route !",
+      en: "Your order {{1}} has been dispatched via {{2}}. Tracking number: {{3}}. You can follow it at {{4}}. It is on its way.",
+      fr: "Votre commande {{1}} a été expédiée via {{2}}. Numéro de suivi : {{3}}. Vous pouvez la suivre sur {{4}}. Elle est en route.",
     },
   },
   {
@@ -50,11 +58,14 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
     category: "utility",
     variables: [
       { name: "orderRef", sample: "TF-ABC123" },
-      { name: "url", sample: "https://tradeflow.app/t/TF-ABC123" },
+      {
+        name: "url",
+        sample: "https://tradeflow-tau-blush.vercel.app/t/TF-ABC123",
+      },
     ],
     bodies: {
-      en: "Your order {{1}} has been delivered. Enjoy — thanks for shopping with us! Track or manage your order at {{2}} anytime.",
-      fr: "Votre commande {{1}} a été livrée. Profitez-en — merci d'avoir commandé chez nous ! Suivez ou gérez votre commande sur {{2}} à tout moment.",
+      en: "Your order {{1}} has been delivered. Tracking details are available at {{2}}. Thank you for your order.",
+      fr: "Votre commande {{1}} a été livrée. Le suivi est disponible sur {{2}}. Merci pour votre commande.",
     },
   },
   {
@@ -66,7 +77,7 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
     ],
     bodies: {
       en: "A refund of {{1}} has been processed for order {{2}}. The refund should appear in your account within a few business days.",
-      fr: "Un remboursement de {{1}} a été effectué pour la commande {{2}}. Le remboursement devrait apparaître sur votre compte sous quelques jours ouvrés.",
+      fr: "Un remboursement de {{1}} a été effectué pour la commande {{2}}. Il devrait apparaître sur votre compte dans quelques jours ouvrés.",
     },
   },
   {
@@ -84,25 +95,35 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
   {
     key: "order_auto_cancelled",
     category: "utility",
-    variables: [],
+    variables: [{ name: "orderRef", sample: "TF-ABC123" }],
     bodies: {
-      en: "Your order has been cancelled because we did not receive payment in time. The payment link is no longer valid. Message us anytime if you would like to order again.",
-      fr: "Votre commande a été annulée car nous n'avons pas reçu le paiement à temps. Le lien de paiement n'est plus valable. Écrivez-nous quand vous voulez pour commander à nouveau.",
+      en: "Your order {{1}} has been cancelled because payment was not received in time, and its payment link is no longer valid. Reply here if you would like to place a new order.",
+      fr: "Votre commande {{1}} a été annulée car le paiement n'a pas été reçu à temps, et son lien de paiement n'est plus valable. Répondez ici si vous souhaitez passer une nouvelle commande.",
     },
   },
   {
-    key: "return_update",
+    key: "return_approved",
     category: "utility",
     variables: [
       { name: "orderRef", sample: "TF-ABC123" },
       {
-        name: "detail",
-        sample: "approved — print your return slip at https://tradeflow.app/t/TF-ABC123/return",
+        name: "url",
+        sample:
+          "https://tradeflow-tau-blush.vercel.app/t/TF-ABC123/return-slip",
       },
     ],
     bodies: {
-      en: "Update on your return for order {{1}}: {{2}}. Reply here if you need any further help.",
-      fr: "Mise à jour concernant votre retour pour la commande {{1}} : {{2}}. Répondez ici si vous avez besoin d'aide.",
+      en: "Your return request for order {{1}} has been approved. You can find your return instructions at {{2}}. Reply here if you need help.",
+      fr: "Votre demande de retour pour la commande {{1}} a été approuvée. Vous trouverez les instructions de retour sur {{2}}. Répondez ici si vous avez besoin d'aide.",
+    },
+  },
+  {
+    key: "return_declined",
+    category: "utility",
+    variables: [{ name: "orderRef", sample: "TF-ABC123" }],
+    bodies: {
+      en: "Your return request for order {{1}} could not be approved. Reply here and the seller will explain and help with next steps.",
+      fr: "Votre demande de retour pour la commande {{1}} n'a pas pu être approuvée. Répondez ici et le vendeur vous expliquera la suite.",
     },
   },
   {
@@ -117,7 +138,56 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
       fr: "Voici le brouillon de votre commande : {{1}}. Total : {{2}}. Répondez OUI pour confirmer et payer, ou dites-nous ce qu'il faut modifier.",
     },
   },
+  {
+    key: "seller_new_order",
+    category: "utility",
+    variables: [
+      { name: "ref", sample: "TF-ABC123" },
+      { name: "buyer", sample: "+447700900123" },
+      { name: "total", sample: "£34.50" },
+    ],
+    bodies: {
+      en: "New order {{1}} from {{2}} for {{3}}. Open your TradeFlow dashboard to review it.",
+      fr: "Nouvelle commande {{1}} de {{2}} pour {{3}}. Ouvrez votre tableau de bord TradeFlow pour la consulter.",
+    },
+  },
+  {
+    key: "seller_refund_failed",
+    category: "utility",
+    variables: [{ name: "ref", sample: "TF-ABC123" }],
+    bodies: {
+      en: "A refund for order {{1}} could not be completed. Please check the order in your TradeFlow dashboard.",
+      fr: "Un remboursement pour la commande {{1}} n'a pas pu être effectué. Veuillez vérifier la commande dans votre tableau de bord TradeFlow.",
+    },
+  },
+  {
+    key: "seller_low_stock",
+    category: "utility",
+    variables: [
+      { name: "product", sample: "Classic Blue Mug (Standard)" },
+      { name: "count", sample: "2" },
+    ],
+    bodies: {
+      en: "Stock is low for {{1}}: {{2}} left. Update your inventory in your TradeFlow dashboard.",
+      fr: "Le stock est bas pour {{1}} : il reste {{2}}. Mettez à jour votre inventaire dans votre tableau de bord TradeFlow.",
+    },
+  },
+  {
+    key: "seller_needs_attention",
+    category: "utility",
+    variables: [
+      { name: "buyer", sample: "+447700900123" },
+      { name: "ref", sample: "TF-ABC123" },
+    ],
+    bodies: {
+      en: "A buyer ({{1}}) needs your attention on order {{2}}. Open your TradeFlow inbox to reply.",
+      fr: "Un acheteur ({{1}}) a besoin de votre attention concernant la commande {{2}}. Ouvrez votre boîte de réception TradeFlow pour répondre.",
+    },
+  },
 ] as const;
+
+/** Keys removed from the registry; draft DB rows may be deleted by the seed. */
+export const OBSOLETE_TEMPLATE_KEYS = ["return_update"] as const;
 
 export function getTemplateDefinition(
   key: string,

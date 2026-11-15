@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
 
 export interface SellerNotifyResult {
   attempted: boolean;
@@ -35,6 +36,13 @@ export async function notifySellerOfQuestion(params: {
     text,
     supabase: params.supabase,
     label: "seller question escalate",
+    template: {
+      key: "seller_needs_attention",
+      variables: {
+        buyer: params.customerPhoneE164,
+        ref: "support question",
+      },
+    },
   });
 }
 
@@ -64,6 +72,13 @@ export async function notifySellerOfUnmatchedOrder(params: {
     text,
     supabase: params.supabase,
     label: "seller unmatched order",
+    template: {
+      key: "seller_needs_attention",
+      variables: {
+        buyer: params.customerPhoneE164,
+        ref: "unmatched order",
+      },
+    },
   });
 }
 
@@ -82,6 +97,13 @@ export async function notifySellerOfAutoApprovedReturn(params: {
     text,
     supabase: params.supabase,
     label: "seller return auto-approved",
+    template: {
+      key: "seller_needs_attention",
+      variables: {
+        buyer: "buyer",
+        ref: params.orderRef,
+      },
+    },
   });
 }
 
@@ -108,6 +130,13 @@ export async function notifySellerOfReturnRequest(params: {
     text: lines.join("\n"),
     supabase: params.supabase,
     label: "seller return request",
+    template: {
+      key: "seller_needs_attention",
+      variables: {
+        buyer: "buyer",
+        ref: params.orderRef,
+      },
+    },
   });
 }
 
@@ -116,6 +145,7 @@ async function notifySeller(params: {
   text: string;
   supabase: SupabaseClient;
   label: string;
+  template?: { key: string; variables: Record<string, string> };
 }): Promise<SellerNotifyResult> {
   const { data: business, error } = await params.supabase
     .from("businesses")
@@ -145,12 +175,18 @@ async function notifySeller(params: {
   }
 
   try {
+    const sellerLang = await getBusinessSellerLanguage(
+      params.supabase,
+      params.businessId,
+    );
     const sent = await sendWhatsAppMessage({
       businessId: params.businessId,
       toPhoneE164: sellerPhone,
       text: params.text,
       supabase: params.supabase,
       audience: "seller",
+      templateLanguage: sellerLang,
+      template: params.template,
     });
     return {
       attempted: true,

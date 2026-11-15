@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
+import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
 import { t } from "@/lib/i18n";
 import {
   persistOrderShippingAddress,
@@ -184,11 +185,22 @@ export async function fulfilPaidOrder(
       `Total: ${formatPence(row.total_pence)}`,
     ].join("\n");
 
+    const sellerLang = await getBusinessSellerLanguage(supabase, row.business_id);
     const sent = await sendWhatsAppMessage({
       businessId: row.business_id,
       toPhoneE164: sellerPhone,
       text: sellerText,
       supabase,
+      audience: "seller",
+      templateLanguage: sellerLang,
+      template: {
+        key: "seller_new_order",
+        variables: {
+          ref: row.order_ref,
+          buyer: buyerPhone ?? "buyer",
+          total: formatPence(row.total_pence),
+        },
+      },
     });
     sellerMessageId = sent.messageId;
   }

@@ -329,10 +329,10 @@ export async function requestReturn(
       threadId: row.thread_id,
       text: buyerReturnApprovedMessage(row.order_ref, lang),
       template: {
-        key: "return_update",
+        key: "return_approved",
         variables: {
           orderRef: row.order_ref,
-          detail: `approved — print your return slip at ${slip}`,
+          url: slip,
         },
       },
     });
@@ -445,23 +445,26 @@ export async function decideReturn(
           order.customer_id as string,
         );
 
-  const detail =
-    decision === "approve"
-      ? `approved — print your return slip at ${slipUrl}`
-      : "was not approved";
-
   await sendBuyerWhatsApp({
     businessId: order.business_id as string,
     customerId: order.customer_id as string,
     threadId: (order.thread_id as string | null) ?? null,
     text,
-    template: {
-      key: "return_update",
-      variables: {
-        orderRef: order.order_ref as string,
-        detail,
-      },
-    },
+    template:
+      decision === "approve"
+        ? {
+            key: "return_approved",
+            variables: {
+              orderRef: order.order_ref as string,
+              url: slipUrl,
+            },
+          }
+        : {
+            key: "return_declined",
+            variables: {
+              orderRef: order.order_ref as string,
+            },
+          },
   });
 
   return decision === "approve"
