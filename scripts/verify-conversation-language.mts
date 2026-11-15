@@ -18,7 +18,11 @@ import {
   isSubstantiveMessage,
   maybeUpdatePreferredLanguage,
 } from "../src/lib/i18n/language.ts";
-import { isNegativeReply } from "../src/lib/orders/detect-reply.ts";
+import {
+  classifyNegativeOpener,
+  isNegativeReply,
+  productTermsFromCatalog,
+} from "../src/lib/orders/detect-reply.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 for (const line of readFileSync(resolve(root, ".env.local"), "utf8").split("\n")) {
@@ -131,19 +135,120 @@ async function main() {
     fail("heuristics + clear/ambiguous signals");
   }
 
-  // Correction vs cancel
+  // Cancel vs correction by content (not word count) — FR + EN
+  const catalogTerms = productTermsFromCatalog([
+    { name: "Classic Blue Mug", variants: [{ label: "Standard" }] },
+    { name: "Croissant Box", variants: [{ label: "Box of 6" }] },
+  ]);
+  const cases: Array<{
+    text: string;
+    expect: "cancel" | "correction";
+    lang: "en" | "fr";
+  }> = [
+    { text: "Non, 1 tasse plutôt", expect: "correction", lang: "fr" },
+    {
+      text: "Non, je ne veux plus la commande",
+      expect: "cancel",
+      lang: "fr",
+    },
+    { text: "Non merci, annule tout", expect: "cancel", lang: "fr" },
+    {
+      text: "Non, pas du tout, merci beaucoup",
+      expect: "cancel",
+      lang: "fr",
+    },
+    {
+      text: "No, make it 1 mug instead",
+      expect: "correction",
+      lang: "en",
+    },
+    {
+      text: "No thanks, I don't want it anymore",
+      expect: "cancel",
+      lang: "en",
+    },
+    { text: "Non", expect: "cancel", lang: "fr" },
+    { text: "No", expect: "cancel", lang: "en" },
+    { text: "Non 2 tasses", expect: "correction", lang: "fr" },
+    {
+      text: "Non, peut-être plus tard",
+      expect: "cancel",
+      lang: "fr",
+    },
+  ];
+
+  let cancelCorrectionOk = true;
+  for (const c of cases) {
+    const kind = classifyNegativeOpener(c.text, { productTerms: catalogTerms });
+    const asNeg = isNegativeReply(c.text, { productTerms: catalogTerms });
+    const kindOk =
+      kind === c.expect &&
+      (c.expect === "cancel" ? asNeg === true : asNeg === false);
+    const reply =
+      c.expect === "cancel"
+        ? t("confirm.draft_cancelled", c.lang)
+        : t("draft.confirmation", c.lang, {
+            items: "• 1× Classic Blue Mug",
+            total: "£12.00",
+          });
+    const langOk =
+      c.expect === "cancel"
+        ? c.lang === "fr"
+          ? /Pas de souci|brouillon|commande/i.test(reply)
+          : /No problem|cancelled|order/i.test(reply)
+        : c.lang === "fr"
+          ? /Voici le brouillon|Répondez OUI/i.test(reply)
+          : /Here's your draft order|Reply YES/i.test(reply);
+    // Ambiguous cancel must invite them to order again
+    const inviteOk =
+      c.text !== "Non, peut-être plus tard" ||
+      /Écrivez-nous quand vous voulez pour commander|Message us anytime if you'd like to order/i.test(
+        reply,
+      );
+    if (!kindOk || !langOk || !inviteOk) {
+      cancelCorrectionOk = false;
+      fail(
+        `cancel/correction: ${JSON.stringify(c.text)}`,
+        `kind=${kind} expect=${c.expect} asNeg=${asNeg} langOk=${langOk} reply=${reply.slice(0, 80)}`,
+      );
+    }
+  }
+  if (cancelCorrectionOk) {
+    pass("cancel vs correction by content (FR+EN cases + reply language)");
+  }
+
+  // English sentence + French product name must stay English
   if (
-    isNegativeReply("non") &&
-    isNegativeReply("non merci") &&
-    !isNegativeReply("Non, 1 tasse plutôt")
+    heuristicLanguage("I want 2 Croissant Box") === "en" &&
+    heuristicLanguage("I want 2 Croissant Box please") === "en"
   ) {
-    pass("negative: short cancel vs French correction");
+    pass('heuristic: "I want 2 Croissant Box" stays English');
   } else {
-    fail("negative: short cancel vs French correction");
+    fail(
+      'heuristic: "I want 2 Croissant Box" stays English',
+      String(heuristicLanguage("I want 2 Croissant Box")),
+    );
   }
 
   const phone = `+4477009003${String(10 + (Date.now() % 80)).padStart(2, "0")}`;
   const { id: customerId } = await ensureCustomer(phone);
+
+  // Stored EN + English sentence with French product name → stay EN
+  await admin
+    .from("customers")
+    .update({ preferred_language: "en" })
+    .eq("id", customerId);
+  const croissantLang = await maybeUpdatePreferredLanguage({
+    supabase: admin,
+    customerId,
+    messageText: "I want 2 Croissant Box",
+    detectedLanguage: heuristicLanguage("I want 2 Croissant Box"),
+  });
+  if (croissantLang === "en") {
+    pass("EN conversation + Croissant Box product name stays English");
+  } else {
+    fail("EN conversation + Croissant Box", croissantLang);
+  }
 
   // 1. New buyer, first French message (long)
   await admin

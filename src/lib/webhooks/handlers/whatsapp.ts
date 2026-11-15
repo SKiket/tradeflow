@@ -16,7 +16,12 @@ import {
   findPendingDraftForThread,
 } from "@/lib/orders/confirm-draft-order";
 import { createDraftOrderFromParse } from "@/lib/orders/create-draft-order";
-import { isAffirmativeReply, isNegativeReply } from "@/lib/orders/detect-reply";
+import {
+  classifyNegativeOpener,
+  isAffirmativeReply,
+  productTermsFromCatalog,
+} from "@/lib/orders/detect-reply";
+import { fetchActiveCatalog } from "@/lib/products/catalog";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   handleOtherFallback,
@@ -45,15 +50,23 @@ type ReplyOutcome =
   | { handled: true; outcome: Record<string, unknown> }
   | { handled: false };
 
-async function classifyInboundReply(text: string): Promise<{
+async function classifyInboundReply(
+  text: string,
+  productTerms?: string[] | null,
+): Promise<{
   classification: "affirmative" | "negative" | "other";
   usedAi: boolean;
 }> {
   if (isAffirmativeReply(text)) {
     return { classification: "affirmative", usedAi: false };
   }
-  if (isNegativeReply(text)) {
+  const negativeKind = classifyNegativeOpener(text, { productTerms });
+  if (negativeKind === "cancel") {
     return { classification: "negative", usedAi: false };
+  }
+  if (negativeKind === "correction") {
+    // Fall through to order_parse — do not let AI re-label as cancel.
+    return { classification: "other", usedAi: false };
   }
   const result = await classifyReply(text);
   return { classification: result.classification, usedAi: true };
@@ -82,8 +95,23 @@ async function tryHandleDraftReply(params: {
   );
 
   if (draft) {
+    let productTerms: string[] = [];
+    try {
+      const catalog = await fetchActiveCatalog(
+        params.supabase,
+        params.businessId,
+      );
+      productTerms = productTermsFromCatalog(catalog);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("[whatsapp] catalog load for reply classify failed", {
+        businessId: params.businessId,
+        error: message,
+      });
+    }
     const { classification, usedAi } = await classifyInboundReply(
       params.messageText.trim(),
+      productTerms,
     );
 
     if (classification === "affirmative") {
@@ -131,8 +159,19 @@ async function tryHandleDraftReply(params: {
     return { handled: false };
   }
 
+  let awaitingProductTerms: string[] = [];
+  try {
+    const catalog = await fetchActiveCatalog(
+      params.supabase,
+      params.businessId,
+    );
+    awaitingProductTerms = productTermsFromCatalog(catalog);
+  } catch {
+    /* fall through without catalogue terms */
+  }
   const { classification, usedAi } = await classifyInboundReply(
     params.messageText.trim(),
+    awaitingProductTerms,
   );
 
   if (classification === "negative") {

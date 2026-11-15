@@ -62,44 +62,73 @@ export function isAmbiguousLanguageMessage(text: string): boolean {
   if (/^\d+([.,]\d+)?$/.test(normalized)) return true;
 
   // Emoji / punctuation only
-  const withoutEmoji = trimmed.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\s\p{P}]/gu, "");
+  const withoutEmoji = trimmed.replace(
+    /[\p{Emoji_Presentation}\p{Extended_Pictographic}\s\p{P}]/gu,
+    "",
+  );
   if (!withoutEmoji) return true;
 
   return false;
 }
 
 /**
+ * Drop Title-Case product-like spans so a French product name inside an
+ * English sentence does not flip the conversation language.
+ * e.g. "I want 2 Croissant Box" → "I want 2"
+ */
+export function stripLikelyProductSpans(text: string): string {
+  return text.replace(
+    /\b(?:[A-ZÀ-Ü][\w'’.-]*(?:\s+[A-ZÀ-Ü][\w'’.-]*)+)\b/g,
+    " ",
+  );
+}
+
+/**
  * Lightweight lexical hint when AI has not yet returned a language code.
- * Used so the first reply (and draft-reply path) can follow the buyer
- * before order_parse completes.
+ * Scores sentence function words after stripping product-like Title Case
+ * spans, so catalogue names in another language do not cause false switches.
  */
 export function heuristicLanguage(text: string): string | null {
   if (isAmbiguousLanguageMessage(text)) return null;
-  const lower = text.toLowerCase();
 
-  if (
-    /[àâäéèêëïîôùûüçœ]/i.test(lower) ||
-    /\b(je|j'|tu|vous|nous|mon|ma|mes|ton|ta|tes|le|la|les|un|une|des|du|au|aux|tasse|tasses|voudrais|veut|bonjour|merci|plutôt|plutot|commande|bleue|bleues|deux|trois|quatre|avec|sans|pour|s'il|svp|plait|plaît)\b/i.test(
-      lower,
-    )
-  ) {
+  const stripped = stripLikelyProductSpans(text);
+  const lower = stripped.toLowerCase();
+
+  const frHits = (
+    lower.match(
+      /\b(je|j'|tu|vous|nous|mon|ma|mes|ton|ta|tes|le|la|les|un|une|des|du|au|aux|voudrais|veut|bonjour|merci|plutôt|plutot|commande|avec|sans|pour|s'il|svp|plait|plaît|tasse|tasses|bleue|bleues|deux|trois|quatre)\b/g,
+    ) ?? []
+  ).length;
+  const frAccent = /[àâäéèêëïîôùûüçœ]/i.test(stripped) ? 1 : 0;
+
+  const esHits = (
+    lower.match(
+      /\b(hola|quiero|gracias|por\s+favor|taza|tazas|dos|una|unos|pedido)\b/g,
+    ) ?? []
+  ).length;
+  const esAccent = /[áéíóúñ¿¡]/i.test(stripped) ? 1 : 0;
+
+  const enHits = (
+    lower.match(
+      /\b(i|i'd|i'm|want|please|mug|mugs|order|thanks|thank you|hello|hi|with|without|blue|two|three|four|make|instead)\b/g,
+    ) ?? []
+  ).length;
+
+  const frScore = frHits + frAccent;
+  const esScore = esHits + esAccent;
+  const enScore = enHits;
+
+  // Prefer the matrix language of the sentence (function words), not product nouns.
+  if (enScore > 0 && enScore >= frScore && enScore >= esScore) {
+    return "en";
+  }
+  if (frScore > 0 && frScore >= esScore) {
     return "fr";
   }
-
-  if (
-    /[áéíóúñ¿¡]/i.test(lower) ||
-    /\b(hola|quiero|gracias|por\s+favor|taza|tazas|dos|una|unos|pedido)\b/i.test(
-      lower,
-    )
-  ) {
+  if (esScore > 0) {
     return "es";
   }
-
-  if (
-    /\b(i|i'd|i'm|want|please|mug|mugs|order|thanks|thank you|hello|hi|with|without|blue|two|three|four)\b/i.test(
-      lower,
-    )
-  ) {
+  if (enScore > 0) {
     return "en";
   }
 
@@ -147,8 +176,6 @@ export function isConfidentLanguageSignal(params: {
   if (typeof params.confidence === "number" && params.confidence >= 0.8) {
     return true;
   }
-  // Clear heuristic or AI language on a non-ambiguous message is enough
-  // (e.g. "Deux tasses" / "2 tasses" with language=fr).
   return Boolean(
     normaliseLanguageCode(params.detectedLanguage) ??
       heuristicLanguage(params.text),
@@ -207,12 +234,9 @@ export async function maybeUpdatePreferredLanguage(params: {
   }
 
   if (!clear) {
-    // Ambiguous: inherit conversation language. If none stored yet, keep null→en
-    // for fixed messages only — do not write English over a future clear signal.
     return resolveLang(current ?? detected);
   }
 
-  // Clear signal matching current (or first write already done)
   if (clear && detected && current == null) {
     await params.supabase
       .from("customers")
