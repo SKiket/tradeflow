@@ -24,34 +24,7 @@ function presentedCronSecret(request: NextRequest): string | null {
   return presented && presented.length > 0 ? presented : null;
 }
 
-/**
- * Shared-secret gate for scheduled cron routes.
- *
- * Accepts the secret as `x-cron-secret` / `Authorization: Bearer …` header
- * or `?secret=` query param (pg_net can pass either).
- *
- * Fails closed when CRON_SHARED_SECRET is unset. When set, matches the env
- * value first; vault (`cron_secret_matches`) remains a secondary check so
- * pg_cron can authenticate with the same configured secret.
- */
-export async function authorizeCronRequest(
-  request: NextRequest,
-): Promise<boolean> {
-  const expected = process.env.CRON_SHARED_SECRET?.trim();
-  if (!expected) {
-    console.error(
-      "[cron] CRON_SHARED_SECRET is unset — rejecting request (fail closed)",
-    );
-    return false;
-  }
-
-  const presented = presentedCronSecret(request);
-  if (!presented) return false;
-
-  if (secretsEqual(presented, expected)) {
-    return true;
-  }
-
+async function vaultMatches(presented: string): Promise<boolean> {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.rpc("cron_secret_matches", {
@@ -67,4 +40,43 @@ export async function authorizeCronRequest(
     console.error("[cron] vault secret check threw", message);
     return false;
   }
+}
+
+/**
+ * Shared-secret gate for scheduled cron routes.
+ *
+ * Accepts the secret as `x-cron-secret` / `Authorization: Bearer …` header
+ * or `?secret=` query param (pg_net can pass either).
+ *
+ * Matches CRON_SHARED_SECRET env when set, and always falls back to the
+ * Supabase vault (`cron_secret_matches`) so pg_cron / verify scripts work
+ * even when the Vercel env var is missing or out of sync.
+ * Fails closed only when neither env nor vault accepts the presented secret.
+ */
+export async function authorizeCronRequest(
+  request: NextRequest,
+): Promise<boolean> {
+  const presented = presentedCronSecret(request);
+  if (!presented) return false;
+
+  const expected = process.env.CRON_SHARED_SECRET?.trim();
+  if (expected && secretsEqual(presented, expected)) {
+    return true;
+  }
+
+  if (await vaultMatches(presented)) {
+    if (!expected) {
+      console.warn(
+        "[cron] authorised via vault — CRON_SHARED_SECRET unset on this host; set it to match vault",
+      );
+    }
+    return true;
+  }
+
+  if (!expected) {
+    console.error(
+      "[cron] CRON_SHARED_SECRET unset and vault did not match — rejecting",
+    );
+  }
+  return false;
 }

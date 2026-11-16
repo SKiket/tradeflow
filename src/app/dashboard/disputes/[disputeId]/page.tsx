@@ -4,7 +4,9 @@ import { ArrowLeft } from "lucide-react";
 
 import {
   disputeReasonLabel,
+  getDisputeCounterFeePence,
   getDisputeFeePence,
+  getDisputeReceivedFeePence,
   isOpenDisputeStatus,
 } from "@/lib/disputes/constants";
 import { isInServiceWindow } from "@/lib/channels/service-window";
@@ -47,7 +49,7 @@ export default async function DisputeDetailPage({ params }: PageProps) {
   const { data: dispute } = await supabase
     .from("disputes")
     .select(
-      "id, order_id, amount_pence, currency, reason, status, evidence_due_by, evidence_status, evidence_submitted_at, submitted_by, outcome, stripe_fee_pence, fee_pence, recovered_pence, unrecovered_pence, recovered_via_reversal_pence, recovered_via_account_debit_pence, recovered_via_invoice_pence, recovery_status, seller_notes, funds_withdrawn_at, funds_reinstated_at, accepted_at, created_at, closed_at, orders(id, order_ref, customer_id)",
+      "id, order_id, amount_pence, currency, reason, status, evidence_due_by, evidence_status, evidence_submitted_at, submitted_by, outcome, stripe_fee_pence, fee_pence, received_fee_pence, counter_fee_pence, recovered_pence, unrecovered_pence, recovered_via_reversal_pence, recovered_via_account_debit_pence, recovered_via_invoice_pence, recovery_status, seller_notes, funds_withdrawn_at, funds_reinstated_at, accepted_at, created_at, closed_at, orders(id, order_ref, customer_id)",
     )
     .eq("id", disputeId)
     .eq("business_id", businessId)
@@ -75,6 +77,12 @@ export default async function DisputeDetailPage({ params }: PageProps) {
     (dispute.fee_pence as number | null) ??
     (dispute.stripe_fee_pence as number | null) ??
     getDisputeFeePence();
+  const receivedFeePence =
+    (dispute.received_fee_pence as number | null) ??
+    getDisputeReceivedFeePence();
+  const counterFeePence =
+    (dispute.counter_fee_pence as number | null) ??
+    getDisputeCounterFeePence();
 
   let prefill = PREFILL.en(order?.order_ref ?? "your order");
   let inWindow = false;
@@ -168,7 +176,8 @@ export default async function DisputeDetailPage({ params }: PageProps) {
         <DisputeResolution
           disputeId={dispute.id as string}
           amountPence={dispute.amount_pence as number}
-          feePence={feePence}
+          receivedFeePence={receivedFeePence}
+          counterFeePence={counterFeePence}
           deadlineLabel={
             dispute.evidence_due_by
               ? formatDateTime(dispute.evidence_due_by as string)

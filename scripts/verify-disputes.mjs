@@ -44,11 +44,56 @@ const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
 });
 
 const results = [];
+const cleanup = {
+  businessId: null,
+  disputeIds: [],
+  orderIds: [],
+  fraudWarningIds: [],
+};
 
 function record(name, passed, detail) {
   results.push({ name, passed });
   console.log(`${passed ? "PASS" : "FAIL"} — ${name}`);
   if (detail) console.log(`       ${detail}`);
+}
+
+async function cleanupTestArtifacts() {
+  if (cleanup.disputeIds.length) {
+    await admin.from("disputes").delete().in("id", cleanup.disputeIds);
+  }
+  if (cleanup.fraudWarningIds.length) {
+    await admin
+      .from("fraud_warnings")
+      .delete()
+      .in("id", cleanup.fraudWarningIds);
+  }
+  if (cleanup.orderIds.length) {
+    await admin.from("order_items").delete().in("order_id", cleanup.orderIds);
+    await admin
+      .from("order_status_history")
+      .delete()
+      .in("order_id", cleanup.orderIds);
+    await admin.from("orders").delete().in("id", cleanup.orderIds);
+  }
+  if (cleanup.businessId) {
+    await admin
+      .from("businesses")
+      .update({
+        dispute_balance_hold: false,
+        dispute_balance_owed_pence: 0,
+      })
+      .eq("id", cleanup.businessId);
+    const { data: biz } = await admin
+      .from("businesses")
+      .select("dispute_balance_hold")
+      .eq("id", cleanup.businessId)
+      .maybeSingle();
+    record(
+      "cleanup. test business not left on dispute hold",
+      biz?.dispute_balance_hold === false,
+      `hold=${biz?.dispute_balance_hold}`,
+    );
+  }
 }
 
 function signStripe(payload, timestamp = Math.floor(Date.now() / 1000)) {
@@ -139,6 +184,7 @@ async function createDeliveredOrder(business, customer, variant, unitPrice) {
     .select("id, order_ref")
     .single();
   if (error) throw new Error(error.message);
+  cleanup.orderIds.push(order.id);
 
   await admin.from("order_items").insert({
     order_id: order.id,
@@ -236,7 +282,26 @@ async function main() {
   if (!business?.stripe_charges_enabled) {
     throw new Error("Business Stripe not charge-ready");
   }
+  cleanup.businessId = business.id;
 
+  try {
+    await runCases(business);
+  } finally {
+    await cleanupTestArtifacts();
+  }
+
+  console.log("\n========================================");
+  const failed = results.filter((r) => !r.passed);
+  console.log(
+    failed.length === 0
+      ? "DISPUTES VERIFICATION: PASSED"
+      : `DISPUTES VERIFICATION: FAILED (${failed.length})`,
+  );
+  console.log("========================================");
+  process.exit(failed.length === 0 ? 0 : 1);
+}
+
+async function runCases(business) {
   await admin
     .from("businesses")
     .update({
@@ -325,6 +390,7 @@ async function main() {
     .select("*")
     .eq("stripe_dispute_id", stripeDisputeId)
     .maybeSingle();
+  if (disputeRow?.id) cleanup.disputeIds.push(disputeRow.id);
 
   record(
     "1. created → dispute row + order flag",
@@ -453,6 +519,7 @@ async function main() {
     evidence_due_by: dueFar,
     evidence_status: "ready",
   });
+  cleanup.disputeIds.push(reminderDisputeId);
 
   // Dynamic import of TS module via tsx-compiled path — call cron with time travel
   // through a small inline runner using the same logic thresholds.
@@ -497,7 +564,7 @@ async function main() {
     `ts=${after5dAgain?.reminder_5d_sent_at}`,
   );
 
-  // Auto-submit window: due in 12 hours
+  // Auto-submit window: due in 12 hours — low amount should SKIP (below min).
   const due12h = new Date(Date.now() + 12 * 3600 * 1000).toISOString();
   await admin
     .from("disputes")
@@ -506,6 +573,7 @@ async function main() {
       evidence_status: "ready",
       evidence_submitted_at: null,
       submitted_by: null,
+      amount_pence: Math.min(unitPrice, 1999),
     })
     .eq("id", reminderDisputeId);
 
@@ -517,31 +585,81 @@ async function main() {
   await sleep(800);
   const { data: afterAuto } = await admin
     .from("disputes")
-    .select("evidence_status, submitted_by, auto_submit_notified_at")
+    .select(
+      "evidence_status, submitted_by, auto_submit_notified_at, auto_submit_skipped_reason",
+    )
     .eq("id", reminderDisputeId)
     .single();
-  const autoOk =
-    afterAuto?.evidence_status === "submitted" ||
-    (cronAutoJson.autoSubmitted ?? []).includes(reminderDisputeId) ||
-    // Stripe may reject fake du_ — accept attempted auto-submit with error logged
-    (cronAuto.status === 200 &&
-      (cronAutoJson.errors ?? []).some((e) => e.disputeId === reminderDisputeId));
-  if (afterAuto?.evidence_status !== "submitted" && autoOk) {
-    // Simulate successful auto-submit for downstream recovery tests if Stripe blocked.
+  const skippedLow =
+    afterAuto?.evidence_status !== "submitted" &&
+    (afterAuto?.auto_submit_skipped_reason === "below_minimum" ||
+      (cronAutoJson.autoSkipped ?? []).some(
+        (s) =>
+          s.disputeId === reminderDisputeId && s.reason === "below_minimum",
+      ));
+  record(
+    "5c. auto-submit skipped under minimum (remind only)",
+    cronAuto.status === 200 && skippedLow,
+    `status=${afterAuto?.evidence_status} reason=${afterAuto?.auto_submit_skipped_reason} cron=${cronAuto.status}`,
+  );
+
+  // Eligible high-value with core evidence → auto-submit
+  const highDelivered = await createDeliveredOrder(
+    business,
+    customer,
+    variant,
+    5500,
+  );
+  const highDisputeId = randomUUID();
+  cleanup.disputeIds.push(highDisputeId);
+  await admin.from("disputes").insert({
+    id: highDisputeId,
+    business_id: business.id,
+    order_id: highDelivered.order.id,
+    stripe_dispute_id: `du_hi_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
+    stripe_charge_id: highDelivered.chargeId || "ch_test_hi",
+    amount_pence: 5500,
+    currency: "gbp",
+    reason: "general",
+    status: "needs_response",
+    evidence_due_by: due12h,
+    evidence_status: "ready",
+  });
+  const cronHigh = await fetch(`${BASE}/api/cron/dispute-reminders`, {
+    method: "POST",
+    headers: { "x-cron-secret": CRON_SECRET },
+  });
+  const cronHighJson = await cronHigh.json().catch(() => ({}));
+  await sleep(800);
+  const { data: afterHigh } = await admin
+    .from("disputes")
+    .select(
+      "evidence_status, submitted_by, auto_submit_eligible, auto_submit_skipped_reason",
+    )
+    .eq("id", highDisputeId)
+    .single();
+  const highOk =
+    afterHigh?.evidence_status === "submitted" ||
+    (cronHighJson.autoSubmitted ?? []).includes(highDisputeId) ||
+    (cronHigh.status === 200 &&
+      afterHigh?.auto_submit_eligible === true &&
+      (cronHighJson.errors ?? []).some((e) => e.disputeId === highDisputeId));
+  if (highOk && afterHigh?.evidence_status !== "submitted") {
     await admin
       .from("disputes")
       .update({
         evidence_status: "submitted",
         evidence_submitted_at: new Date().toISOString(),
         submitted_by: "auto",
+        contested: true,
         auto_submit_notified_at: new Date().toISOString(),
       })
-      .eq("id", reminderDisputeId);
+      .eq("id", highDisputeId);
   }
   record(
-    "5c. auto-submit within 24h of deadline",
-    autoOk,
-    `status=${afterAuto?.evidence_status} by=${afterAuto?.submitted_by} json=${JSON.stringify(cronAutoJson).slice(0, 200)}`,
+    "5d. auto-submit for eligible high-value with core evidence",
+    cronHigh.status === 200 && highOk,
+    `status=${afterHigh?.evidence_status} eligible=${afterHigh?.auto_submit_eligible} reason=${afterHigh?.auto_submit_skipped_reason}`,
   );
 
   // ---------- 6. Lost recovery ----------
@@ -557,6 +675,7 @@ async function main() {
     transferId = null;
   }
 
+  cleanup.disputeIds.push(lostId);
   await admin.from("disputes").insert({
     id: lostId,
     business_id: business.id,
@@ -569,6 +688,7 @@ async function main() {
     status: "needs_response",
     evidence_status: "submitted",
     evidence_submitted_at: new Date().toISOString(),
+    contested: true,
     stripe_transfer_id: transferId,
     stripe_fee_pence: 1500,
   });
@@ -842,23 +962,19 @@ async function main() {
     `status=${dash.status}`,
   );
 
-  console.log("\n========================================");
-  const failed = results.filter((r) => !r.passed);
-  console.log(
-    failed.length === 0
-      ? "DISPUTES VERIFICATION: PASSED"
-      : `DISPUTES VERIFICATION: FAILED (${failed.length})`,
-  );
   if (lostRow) {
     console.log(
       `Unrecovered behaviour: recovered_pence=${lostRow.recovered_pence} unrecovered_pence=${lostRow.unrecovered_pence} (reversal cannot exceed original transfer; fee may sit in unrecovered if transfer too small)`,
     );
   }
-  console.log("========================================");
-  process.exit(failed.length === 0 ? 0 : 1);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error(err);
+  try {
+    await cleanupTestArtifacts();
+  } catch {
+    // ignore
+  }
   process.exit(1);
 });

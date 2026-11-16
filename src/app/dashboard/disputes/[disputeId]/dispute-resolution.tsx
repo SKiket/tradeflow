@@ -10,7 +10,8 @@ import { formatPence } from "@/lib/orders/display";
 export function DisputeResolution({
   disputeId,
   amountPence,
-  feePence,
+  receivedFeePence,
+  counterFeePence,
   deadlineLabel,
   canAct,
   accepted,
@@ -20,7 +21,8 @@ export function DisputeResolution({
 }: {
   disputeId: string;
   amountPence: number;
-  feePence: number;
+  receivedFeePence: number;
+  counterFeePence: number;
   deadlineLabel: string;
   canAct: boolean;
   accepted: boolean;
@@ -40,14 +42,18 @@ export function DisputeResolution({
 
   const locked = accepted || evidenceSubmitted || !canAct;
 
-  const comparison = useMemo(
-    () => ({
+  const comparison = useMemo(() => {
+    const acceptTotal = amountPence + receivedFeePence;
+    const contestLoseTotal = amountPence + receivedFeePence + counterFeePence;
+    return {
       amount: formatPence(amountPence),
-      fee: formatPence(feePence),
-      total: formatPence(amountPence + feePence),
-    }),
-    [amountPence, feePence],
-  );
+      received: formatPence(receivedFeePence),
+      counter: formatPence(counterFeePence),
+      acceptTotal: formatPence(acceptTotal),
+      contestLoseTotal: formatPence(contestLoseTotal),
+      acceptMayCostLess: amountPence < receivedFeePence + counterFeePence,
+    };
+  }, [amountPence, receivedFeePence, counterFeePence]);
 
   async function accept() {
     setError(null);
@@ -121,25 +127,26 @@ export function DisputeResolution({
       <div>
         <p className="font-medium">Accept or contest</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Deadline: {deadlineLabel}. Disputed amount {comparison.amount}. Stripe
-          dispute-received fee {comparison.fee} (UK: this received fee is not
-          returned if you win; a separate countered fee may apply when you
-          submit evidence and is returned if you win).
+          Deadline: {deadlineLabel}. Disputed amount {comparison.amount}.
         </p>
       </div>
 
       <ul className="space-y-2 text-sm">
         <li>
-          <span className="font-medium">Contest with evidence:</span> if won,
-          you keep the sale; the disputed amount is returned. Under UK Stripe
-          rules the £20 received fee is not refunded; any countered fee is
-          returned if you win. If lost, you lose {comparison.amount} and pay{" "}
-          {comparison.fee}.
+          <span className="font-medium">Accept the dispute:</span> you lose{" "}
+          {comparison.amount} and pay the {comparison.received} received fee
+          (total {comparison.acceptTotal}). Accepting is final.
         </li>
         <li>
-          <span className="font-medium">Accept the dispute:</span> you lose{" "}
-          {comparison.amount} and pay {comparison.fee} now (total{" "}
-          {comparison.total}). Accepting is final.
+          <span className="font-medium">Contest with evidence and lose:</span>{" "}
+          you lose {comparison.amount} plus the {comparison.received} received
+          fee and a {comparison.counter} counter fee (total{" "}
+          {comparison.contestLoseTotal}).
+        </li>
+        <li>
+          <span className="font-medium">Contest with evidence and win:</span>{" "}
+          you keep the sale and owe £0. TradeFlow absorbs the received fee; any
+          counter fee Stripe charged is returned on a win.
         </li>
         <li>
           <span className="font-medium">Ask the buyer to withdraw:</span> message
@@ -148,6 +155,13 @@ export function DisputeResolution({
           bank, you can refund them afterwards if you wish.
         </li>
       </ul>
+
+      {comparison.acceptMayCostLess ? (
+        <p className="text-sm text-amber-900">
+          This order is under {formatPence(receivedFeePence + counterFeePence)}.
+          Accepting may cost less than contesting and losing.
+        </p>
+      ) : null}
 
       {locked ? (
         <p className="text-sm text-muted-foreground">
@@ -172,7 +186,7 @@ export function DisputeResolution({
             <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
               <p>
                 Confirm: you will lose {comparison.amount} and pay{" "}
-                {comparison.fee}. This cannot be undone.
+                {comparison.received}. This cannot be undone.
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button

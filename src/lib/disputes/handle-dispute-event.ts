@@ -11,7 +11,7 @@ import {
   notifySellerDisputeClosed,
   notifySellerDisputeOpened,
 } from "@/lib/disputes/notify";
-import { getDisputeFeePence } from "@/lib/disputes/constants";
+import { resolveDisputeFees } from "@/lib/disputes/fees";
 import {
   extractDisputeFeePence,
   markRecoveryNotNeeded,
@@ -43,6 +43,10 @@ type DisputeRow = {
   stripe_transfer_reversal_id: string | null;
   stripe_fee_pence: number | null;
   recovery_status: string | null;
+  contested: boolean | null;
+  accepted_at: string | null;
+  evidence_status: string;
+  evidence_submitted_at: string | null;
 };
 
 async function loadDisputeByStripeId(
@@ -52,7 +56,7 @@ async function loadDisputeByStripeId(
   const { data, error } = await supabase
     .from("disputes")
     .select(
-      "id, business_id, order_id, status, outcome, closed_at, evidence_status, evidence_submitted_at, opened_notified_at, closed_notified_at, funds_withdrawn_at, funds_reinstated_at, stripe_transfer_reversal_id, stripe_fee_pence, recovery_status",
+      "id, business_id, order_id, status, outcome, closed_at, evidence_status, evidence_submitted_at, opened_notified_at, closed_notified_at, funds_withdrawn_at, funds_reinstated_at, stripe_transfer_reversal_id, stripe_fee_pence, recovery_status, contested, accepted_at",
     )
     .eq("stripe_dispute_id", stripeDisputeId)
     .maybeSingle();
@@ -483,17 +487,31 @@ async function handleClosed(
     }
   }
 
-  // Ensure fee_pence is set for audit even when Stripe BT fee differs.
+  // Persist fee breakdown for audit (seller liability depends on contested).
   if (!alreadyClosed) {
-    const feeConstant = getDisputeFeePence();
+    const contested =
+      Boolean(row.contested) ||
+      row.evidence_status === "submitted" ||
+      Boolean(row.evidence_submitted_at);
+    const fees = resolveDisputeFees({
+      stripeDispute: dispute,
+      contested,
+      outcome,
+    });
     await supabase
       .from("disputes")
       .update({
-        fee_pence: feeConstant,
+        contested,
+        received_fee_pence: fees.receivedFeePence,
+        counter_fee_pence: fees.counterFeePence,
+        fee_pence: fees.sellerFeePence,
+        fee_source: fees.feeSource,
+        stripe_fee_pence:
+          fees.stripeTotalFeePence ??
+          fees.receivedFeePence + fees.counterFeePence,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", row.id)
-      .is("fee_pence", null);
+      .eq("id", row.id);
   }
 
   return {

@@ -2,7 +2,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type Stripe from "stripe";
 
 import { getDisputeFeePence } from "@/lib/disputes/constants";
+import {
+  extractDisputeFeePence,
+  resolveDisputeFees,
+} from "@/lib/disputes/fees";
 import { getStripe } from "@/lib/stripe/client";
+
+export { extractDisputeFeePence };
 
 export type RecoveryResult = {
   disputeId: string;
@@ -38,9 +44,13 @@ function formatPence(pence: number): string {
  * Reverse the destination-charge transfer for a LOST dispute (Step 21).
  * Idempotent: second call is a no-op when stripe_transfer_reversal_id is set.
  *
- * Decision: seller owes disputed amount + dispute fee only. Copalla's
- * application fee and Stripe's original processing fee are NOT charged back
- * to the seller — we absorb them.
+ * Fee liability (seller):
+ * - Accepted (not contested): received fee + unrecovered amount.
+ * - Contested and lost: received + counter fees + unrecovered amount.
+ * - Contested and won / withdrawn: seller owes £0 — Copalla absorbs the
+ *   received fee (Stripe returns the counter fee on a win).
+ * Copalla's application fee and Stripe's original processing fee are NEVER
+ * charged back to the seller — we absorb them.
  */
 export async function recoverLostDisputeFunds(
   supabase: SupabaseClient,
@@ -269,19 +279,6 @@ export async function recoverLostDisputeFunds(
   }
 }
 
-/** Extract dispute fee (positive) from Stripe dispute balance transactions. */
-export function extractDisputeFeePence(dispute: Stripe.Dispute): number | null {
-  const txs = dispute.balance_transactions ?? [];
-  let fee = 0;
-  for (const tx of txs) {
-    if (typeof tx === "string") continue;
-    if (typeof tx.fee === "number" && tx.fee > 0) {
-      fee += tx.fee;
-    }
-  }
-  return fee > 0 ? fee : null;
-}
-
 async function accountDebitConnected(
   connectedAccountId: string,
   amountPence: number,
@@ -487,7 +484,7 @@ export async function runFullDisputeRecovery(
   const { data: dispute, error } = await supabase
     .from("disputes")
     .select(
-      "id, business_id, order_id, amount_pence, currency, outcome, fee_pence, recovery_status, recovered_via_reversal_pence, recovered_via_account_debit_pence, recovered_via_invoice_pence, unrecovered_pence, recovery_invoice_id, stripe_transfer_reversal_id, recovery_notes, recovery_charge_notified_at",
+      "id, business_id, order_id, amount_pence, currency, outcome, fee_pence, received_fee_pence, counter_fee_pence, fee_source, contested, accepted_at, evidence_status, evidence_submitted_at, stripe_dispute_id, recovery_status, recovered_via_reversal_pence, recovered_via_account_debit_pence, recovered_via_invoice_pence, unrecovered_pence, recovery_invoice_id, stripe_transfer_reversal_id, recovery_notes, recovery_charge_notified_at",
     )
     .eq("id", disputeId)
     .maybeSingle();
@@ -522,10 +519,43 @@ export async function runFullDisputeRecovery(
     };
   }
 
-  const feePence =
-    (dispute.fee_pence as number | null) ?? getDisputeFeePence();
-  // Decision: absorb platform application fee + Stripe processing fee.
+  const contested =
+    Boolean(dispute.contested) ||
+    dispute.evidence_status === "submitted" ||
+    Boolean(dispute.evidence_submitted_at);
+
+  // Prefer live Stripe fees when the dispute object is available.
+  let stripeDispute: import("stripe").default.Dispute | null = null;
+  if (dispute.stripe_dispute_id) {
+    try {
+      stripeDispute = await getStripe().disputes.retrieve(
+        dispute.stripe_dispute_id as string,
+        { expand: ["balance_transactions"] },
+      );
+    } catch {
+      stripeDispute = null;
+    }
+  }
+
+  const fees = resolveDisputeFees({
+    stripeDispute,
+    contested,
+    outcome: "lost",
+    storedReceived: dispute.received_fee_pence as number | null,
+    storedCounter: dispute.counter_fee_pence as number | null,
+    storedSource: dispute.fee_source as
+      | "stripe_balance_transactions"
+      | "constants"
+      | null,
+  });
+
+  // Seller owes disputed amount + applicable dispute fees only.
+  // Copalla absorbs application fee + Stripe processing fee.
+  const feePence = fees.sellerFeePence;
   const owedTotal = (dispute.amount_pence as number) + feePence;
+  appendNote(
+    `fees:received=${fees.receivedFeePence};counter=${fees.counterFeePence};seller=${feePence};source=${fees.feeSource};contested=${contested}`,
+  );
   const currency = ((dispute.currency as string) || "gbp").toLowerCase();
   const businessId = dispute.business_id as string;
 
@@ -544,7 +574,14 @@ export async function runFullDisputeRecovery(
     .from("disputes")
     .update({
       recovery_status: "pending",
+      contested,
       fee_pence: feePence,
+      received_fee_pence: fees.receivedFeePence,
+      counter_fee_pence: fees.counterFeePence,
+      fee_source: fees.feeSource,
+      stripe_fee_pence:
+        fees.stripeTotalFeePence ??
+        fees.receivedFeePence + fees.counterFeePence,
       recovery_updated_at: now,
       updated_at: now,
     })
@@ -719,14 +756,15 @@ export async function markRecoveryNotNeeded(
   disputeId: string,
   reason = "won_or_withdrawn",
 ): Promise<FullRecoveryResult> {
+  // Won / withdrawn: seller owes £0. Copalla absorbs the Stripe received fee.
   const now = new Date().toISOString();
   await supabase
     .from("disputes")
     .update({
       recovery_status: "not_needed",
-      fee_pence: getDisputeFeePence(),
+      fee_pence: 0,
       unrecovered_pence: 0,
-      recovery_notes: reason,
+      recovery_notes: `${reason};copalla_absorbs_received_fee`,
       recovery_updated_at: now,
       updated_at: now,
     })

@@ -122,9 +122,13 @@ export async function notifySellerDisputeReminder(params: {
   businessId: string;
   orderRef: string;
   evidenceDueBy: string | null;
+  mentionCounterFee?: boolean;
 }): Promise<DisputeNotifyResult> {
   const deadline = formatDeadline(params.evidenceDueBy);
-  const text = `Reminder: your response to the payment dispute for order ${params.orderRef} is due by ${deadline}. Open your TradeFlow dashboard to confirm your evidence.`;
+  const counterNote = params.mentionCounterFee
+    ? " Contesting adds a £20 counter fee (returned only if you win)."
+    : "";
+  const text = `Reminder: your response to the payment dispute for order ${params.orderRef} is due by ${deadline}.${counterNote} Open your TradeFlow dashboard to confirm your evidence.`;
   return sendSellerDisputeMessage({
     supabase: params.supabase,
     businessId: params.businessId,
@@ -190,11 +194,11 @@ export async function notifySellerDisputeCharge(params: {
 
   let text: string;
   if (params.recoveryStatus === "recovered") {
-    text = `For the lost payment dispute on order ${params.orderRef}, we recovered ${taken} (${how}). Nothing further is owed. Open your TradeFlow dashboard for details.`;
+    text = `For the lost payment dispute on order ${params.orderRef}, we recovered ${taken} via ${how} (dispute fees plus any unrecovered chargeback). Nothing further is owed. Open your TradeFlow dashboard for details.`;
   } else if (params.recoveryStatus === "partial") {
-    text = `For the lost payment dispute on order ${params.orderRef}, we recovered ${taken} (${how}). ${owed} remains owed. Update your card in Manage billing to clear the balance.`;
+    text = `For the lost payment dispute on order ${params.orderRef}, we recovered ${taken} via ${how} (dispute fees plus any unrecovered chargeback). ${owed} remains owed. Update your card in Manage billing to clear the balance.`;
   } else {
-    text = `For the lost payment dispute on order ${params.orderRef}, ${owed} is still owed (${how}). Update your card or pay to resume taking orders. Open Manage billing in TradeFlow.`;
+    text = `For the lost payment dispute on order ${params.orderRef}, ${owed} is still owed for dispute fees and unrecovered chargeback (${how}). Update your card or pay to resume taking orders. Open Manage billing in TradeFlow.`;
   }
 
   return sendSellerDisputeMessage({

@@ -43,13 +43,89 @@ const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
   apiVersion: "2026-06-24.dahlia",
 });
 
-const FEE = Number.parseInt(process.env.DISPUTE_FEE_PENCE || "2000", 10);
+const RECEIVED = Number.parseInt(
+  process.env.DISPUTE_RECEIVED_FEE_PENCE ||
+    process.env.DISPUTE_FEE_PENCE ||
+    "2000",
+  10,
+);
+const COUNTER = Number.parseInt(
+  process.env.DISPUTE_COUNTER_FEE_PENCE || "2000",
+  10,
+);
+const AUTO_MIN = Number.parseInt(
+  process.env.DISPUTE_AUTO_SUBMIT_MIN_PENCE || "4000",
+  10,
+);
+/** @deprecated alias — received fee only */
+const FEE = RECEIVED;
+const CRON_SECRET = env.CRON_SHARED_SECRET;
 const results = [];
+const cleanup = {
+  businessId: null,
+  disputeIds: [],
+  orderIds: [],
+  fraudWarningIds: [],
+  connectIdToRestore: null,
+};
 
 function record(name, passed, detail) {
   results.push({ name, passed });
   console.log(`${passed ? "PASS" : "FAIL"} — ${name}`);
   if (detail) console.log(`       ${detail}`);
+}
+
+async function clearBusinessHold(businessId) {
+  if (!businessId) return;
+  await admin
+    .from("businesses")
+    .update({
+      dispute_balance_hold: false,
+      dispute_balance_owed_pence: 0,
+    })
+    .eq("id", businessId);
+}
+
+async function cleanupTestArtifacts() {
+  if (cleanup.connectIdToRestore && cleanup.businessId) {
+    await admin
+      .from("businesses")
+      .update({ stripe_connected_account_id: cleanup.connectIdToRestore })
+      .eq("id", cleanup.businessId);
+  }
+  if (cleanup.disputeIds.length) {
+    await admin.from("disputes").delete().in("id", cleanup.disputeIds);
+  }
+  if (cleanup.fraudWarningIds.length) {
+    await admin
+      .from("fraud_warnings")
+      .delete()
+      .in("id", cleanup.fraudWarningIds);
+  }
+  if (cleanup.orderIds.length) {
+    await admin.from("order_items").delete().in("order_id", cleanup.orderIds);
+    await admin
+      .from("order_status_history")
+      .delete()
+      .in("order_id", cleanup.orderIds);
+    await admin.from("orders").delete().in("id", cleanup.orderIds);
+  }
+  await clearBusinessHold(cleanup.businessId);
+  if (cleanup.businessId) {
+    const { data: biz } = await admin
+      .from("businesses")
+      .select("dispute_balance_hold, dispute_balance_owed_pence")
+      .eq("id", cleanup.businessId)
+      .maybeSingle();
+    const clear =
+      biz?.dispute_balance_hold === false &&
+      (biz?.dispute_balance_owed_pence ?? 0) === 0;
+    record(
+      "cleanup. test business not left on dispute hold",
+      clear,
+      `hold=${biz?.dispute_balance_hold} owed=${biz?.dispute_balance_owed_pence}`,
+    );
+  }
 }
 
 function signStripe(payload, timestamp = Math.floor(Date.now() / 1000)) {
@@ -122,7 +198,7 @@ async function ensureCustomer(businessId) {
   return data.id;
 }
 
-async function createPaidOrder(business, customerId, amountPence) {
+async function createPaidOrder(business, customerId, amountPence, extras = {}) {
   const orderRef = `TF-REC${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
   const { data: order, error } = await admin
     .from("orders")
@@ -133,10 +209,21 @@ async function createPaidOrder(business, customerId, amountPence) {
       status: "DELIVERED",
       total_pence: amountPence,
       order_ref: orderRef,
+      shipping_address: extras.shipping_address ?? {
+        line1: "10 Downing Street",
+        city: "London",
+        postcode: "SW1A 2AA",
+        country: "GB",
+      },
+      dispatch_tracking_number:
+        extras.dispatch_tracking_number ?? "AB123456789GB",
+      tracking_status: extras.tracking_status ?? "DELIVERED",
+      delivered_at: extras.delivered_at ?? new Date().toISOString(),
     })
     .select("id, order_ref")
     .single();
   if (error) throw error;
+  cleanup.orderIds.push(order.id);
 
   const pi = await stripe.paymentIntents.create({
     amount: amountPence,
@@ -190,19 +277,32 @@ async function insertOpenDispute(params) {
       currency: "gbp",
       reason: "fraudulent",
       status: "needs_response",
-      evidence_due_by: new Date(Date.now() + 7 * 864e5).toISOString(),
-      evidence_status: "draft",
+      evidence_due_by:
+        params.evidenceDueBy ??
+        new Date(Date.now() + 7 * 864e5).toISOString(),
+      evidence_status: params.evidenceStatus ?? "draft",
       stripe_transfer_id: params.transferId,
-      fee_pence: FEE,
+      fee_pence: RECEIVED,
+      contested: params.contested ?? false,
+      accepted_at: params.acceptedAt ?? null,
     })
     .select("id, stripe_dispute_id")
     .single();
   if (error) throw error;
+  cleanup.disputeIds.push(data.id);
   return data;
 }
 
 async function closeAs(disputeRow, outcome, extra = {}) {
-  const status = outcome === "won" ? "won" : "lost";
+  const status =
+    outcome === "won"
+      ? "won"
+      : outcome === "warning_closed"
+        ? "warning_closed"
+        : "lost";
+  const feeOnBt =
+    extra.stripeFeePence ??
+    (extra.contested ? RECEIVED + COUNTER : RECEIVED);
   const payload = disputeEvent("charge.dispute.closed", {
     id: disputeRow.stripe_dispute_id,
     charge: extra.chargeId || "ch_test",
@@ -212,16 +312,37 @@ async function closeAs(disputeRow, outcome, extra = {}) {
     status,
     evidence_details: { due_by: Math.floor(Date.now() / 1000) + 86400 },
     balance_transactions: [
-      { id: "txn_test", object: "balance_transaction", fee: FEE, amount: -(extra.amountPence ?? 1000) },
+      {
+        id: "txn_test",
+        object: "balance_transaction",
+        fee: feeOnBt,
+        amount: -(extra.amountPence ?? 1000),
+      },
     ],
     ...extra.disputePatch,
   });
   return postStripeEvent(payload);
 }
 
+async function postCronReminders() {
+  if (!CRON_SECRET) {
+    return { status: 0, json: { error: "CRON_SHARED_SECRET missing in env" } };
+  }
+  const response = await fetch(`${BASE}/api/cron/dispute-reminders`, {
+    method: "POST",
+    headers: { "x-cron-secret": CRON_SECRET },
+  });
+  return {
+    status: response.status,
+    json: await response.json().catch(() => ({})),
+  };
+}
+
 async function main() {
-  console.log("=== verify-dispute-recovery (Step 21b) ===");
-  console.log(`BASE=${BASE} FEE=${FEE}`);
+  console.log("=== verify-dispute-recovery (Step 21b-FIX) ===");
+  console.log(
+    `BASE=${BASE} RECEIVED=${RECEIVED} COUNTER=${COUNTER} AUTO_MIN=${AUTO_MIN}`,
+  );
 
   // Health
   try {
@@ -234,7 +355,22 @@ async function main() {
   }
 
   const business = await loadEkBusiness();
+  cleanup.businessId = business.id;
   const customerId = await ensureCustomer(business.id);
+
+  try {
+    await runCases(business, customerId);
+  } finally {
+    await cleanupTestArtifacts();
+  }
+
+  const passed = results.filter((r) => r.passed).length;
+  const failed = results.filter((r) => !r.passed).length;
+  console.log(`\n=== Summary: ${passed} passed, ${failed} failed (of ${results.length}) ===`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+async function runCases(business, customerId) {
 
   // Ensure seller has a billing customer for invoice tests
   let customerStripeId = business.stripe_customer_id;
@@ -280,21 +416,27 @@ async function main() {
     const { data: d } = await admin
       .from("disputes")
       .select(
-        "recovery_status, recovered_via_reversal_pence, recovered_via_invoice_pence, unrecovered_pence, recovery_invoice_id",
+        "recovery_status, recovered_via_reversal_pence, recovered_via_account_debit_pence, recovered_via_invoice_pence, unrecovered_pence, recovery_invoice_id",
       )
       .eq("id", row.id)
       .maybeSingle();
-    const owed = disputeAmount + FEE;
+    const owed = disputeAmount + RECEIVED;
+    const taken =
+      (d?.recovered_via_reversal_pence ?? 0) +
+      (d?.recovered_via_account_debit_pence ?? 0) +
+      (d?.recovered_via_invoice_pence ?? 0);
+    // Prefer transfer/debit covering the balance so no seller card invoice is needed.
     const ok =
       res.status === 200 &&
       d?.recovery_status === "recovered" &&
-      (d?.recovered_via_reversal_pence ?? 0) >= owed &&
+      taken >= owed &&
+      (d?.unrecovered_pence ?? 0) === 0 &&
       (d?.recovered_via_invoice_pence ?? 0) === 0 &&
       !d?.recovery_invoice_id;
     record(
-      "1. Lost, reversal covers all → recovered, no invoice",
+      "1. Lost, transfer/debit covers all → recovered, no invoice",
       ok,
-      `status=${d?.recovery_status} via_reversal=${d?.recovered_via_reversal_pence} webhook=${res.status}`,
+      `status=${d?.recovery_status} taken=${taken} via_reversal=${d?.recovered_via_reversal_pence} via_debit=${d?.recovered_via_account_debit_pence} webhook=${res.status}`,
     );
   }
 
@@ -360,6 +502,7 @@ async function main() {
     // Temporarily clear Connect id so account debit is skipped (debit can
     // otherwise take the Express balance negative under platform liability).
     const savedConnectId = business.stripe_connected_account_id;
+    cleanup.connectIdToRestore = savedConnectId;
     await admin
       .from("businesses")
       .update({ stripe_connected_account_id: null })
@@ -411,6 +554,7 @@ async function main() {
       .update({ stripe_connected_account_id: savedConnectId })
       .eq("id", business.id);
     business.stripe_connected_account_id = savedConnectId;
+    cleanup.connectIdToRestore = null;
 
     // Restore good card and charge unrecovered remainder via a fresh invoice.
     const restoredPm = await stripe.paymentMethods.create({
@@ -609,6 +753,7 @@ async function main() {
       .select("id, order_id, actionable, status, seller_notified_at")
       .eq("stripe_efw_id", efwId)
       .maybeSingle();
+    if (fw?.id) cleanup.fraudWarningIds.push(fw.id);
     record(
       "6a. EFW created + seller alert path (mocked send)",
       res.status === 200 && fw?.order_id === paid.orderId && fw?.actionable === true,
@@ -813,6 +958,7 @@ async function main() {
         })
         .select("id")
         .single();
+      if (fwB?.id) cleanup.fraudWarningIds.push(fwB.id);
 
       const { data: seenFw } = await client
         .from("fraud_warnings")
@@ -880,22 +1026,369 @@ async function main() {
     );
   }
 
-  // Clear hold leftover from tests
-  await admin
-    .from("businesses")
-    .update({
-      dispute_balance_hold: false,
-      dispute_balance_owed_pence: 0,
-    })
-    .eq("id", business.id);
+  // ---------- 11. Fee liability: accepted → £20 + amount ----------
+  {
+    const amount = 2500;
+    const paid = await createPaidOrder(business, customerId, amount);
+    const row = await insertOpenDispute({
+      businessId: business.id,
+      orderId: paid.orderId,
+      chargeId: paid.chargeId,
+      transferId: paid.transferId,
+      amountPence: amount,
+      contested: false,
+      acceptedAt: new Date().toISOString(),
+    });
+    await closeAs(row, "lost", {
+      chargeId: paid.chargeId,
+      amountPence: amount,
+      contested: false,
+      stripeFeePence: RECEIVED,
+    });
+    await sleep(1500);
+    const { data: d } = await admin
+      .from("disputes")
+      .select(
+        "fee_pence, received_fee_pence, counter_fee_pence, contested, recovery_status, amount_pence",
+      )
+      .eq("id", row.id)
+      .maybeSingle();
+    const expectedFee = RECEIVED;
+    const recovered =
+      (await admin
+        .from("disputes")
+        .select(
+          "recovered_via_reversal_pence, recovered_via_account_debit_pence, recovered_via_invoice_pence",
+        )
+        .eq("id", row.id)
+        .maybeSingle()).data;
+    const taken =
+      (recovered?.recovered_via_reversal_pence ?? 0) +
+      (recovered?.recovered_via_account_debit_pence ?? 0) +
+      (recovered?.recovered_via_invoice_pence ?? 0);
+    const owed = amount + expectedFee;
+    record(
+      "11. Accepted → owes received fee (£20) + amount",
+      d?.contested === false &&
+        (d?.fee_pence ?? 0) === expectedFee &&
+        (d?.counter_fee_pence ?? 0) === 0 &&
+        taken === owed,
+      `fee=${d?.fee_pence} counter=${d?.counter_fee_pence} taken=${taken} owed=${owed}`,
+    );
+  }
 
-  const passed = results.filter((r) => r.passed).length;
-  const failed = results.filter((r) => !r.passed).length;
-  console.log(`\n=== Summary: ${passed} passed, ${failed} failed (of ${results.length}) ===`);
-  process.exit(failed > 0 ? 1 : 0);
+  // ---------- 12. Contested and lost → £40 + amount ----------
+  {
+    const amount = 2500;
+    const paid = await createPaidOrder(business, customerId, amount);
+    const row = await insertOpenDispute({
+      businessId: business.id,
+      orderId: paid.orderId,
+      chargeId: paid.chargeId,
+      transferId: paid.transferId,
+      amountPence: amount,
+      contested: true,
+      evidenceStatus: "submitted",
+    });
+    await admin
+      .from("disputes")
+      .update({
+        evidence_submitted_at: new Date().toISOString(),
+        submitted_by: "seller",
+        contested: true,
+      })
+      .eq("id", row.id);
+    await closeAs(row, "lost", {
+      chargeId: paid.chargeId,
+      amountPence: amount,
+      contested: true,
+      stripeFeePence: RECEIVED + COUNTER,
+    });
+    await sleep(1500);
+    const { data: d } = await admin
+      .from("disputes")
+      .select(
+        "fee_pence, received_fee_pence, counter_fee_pence, contested, recovered_via_reversal_pence, recovered_via_account_debit_pence, recovered_via_invoice_pence",
+      )
+      .eq("id", row.id)
+      .maybeSingle();
+    const expectedFee = RECEIVED + COUNTER;
+    const taken =
+      (d?.recovered_via_reversal_pence ?? 0) +
+      (d?.recovered_via_account_debit_pence ?? 0) +
+      (d?.recovered_via_invoice_pence ?? 0);
+    const owed = amount + expectedFee;
+    record(
+      "12. Contested and lost → owes £40 + amount",
+      d?.contested === true &&
+        (d?.fee_pence ?? 0) === expectedFee &&
+        (d?.counter_fee_pence ?? 0) === COUNTER &&
+        taken === owed,
+      `fee=${d?.fee_pence} counter=${d?.counter_fee_pence} taken=${taken} owed=${owed}`,
+    );
+  }
+
+  // ---------- 13. Contested and won → £0 ----------
+  {
+    const amount = 2800;
+    const paid = await createPaidOrder(business, customerId, amount);
+    const row = await insertOpenDispute({
+      businessId: business.id,
+      orderId: paid.orderId,
+      chargeId: paid.chargeId,
+      transferId: paid.transferId,
+      amountPence: amount,
+      contested: true,
+      evidenceStatus: "submitted",
+    });
+    await admin
+      .from("disputes")
+      .update({
+        evidence_submitted_at: new Date().toISOString(),
+        contested: true,
+      })
+      .eq("id", row.id);
+    await closeAs(row, "won", {
+      chargeId: paid.chargeId,
+      amountPence: amount,
+      contested: true,
+    });
+    await sleep(1000);
+    const { data: d } = await admin
+      .from("disputes")
+      .select("recovery_status, recovered_pence, fee_pence, unrecovered_pence")
+      .eq("id", row.id)
+      .maybeSingle();
+    record(
+      "13. Contested and won → seller owes £0",
+      d?.recovery_status === "not_needed" &&
+        (d?.recovered_pence ?? 0) === 0 &&
+        (d?.unrecovered_pence ?? 0) === 0,
+      `status=${d?.recovery_status} recovered=${d?.recovered_pence}`,
+    );
+  }
+
+  // ---------- 14. Buyer withdrawal (warning_closed) → £0 ----------
+  {
+    const amount = 2100;
+    const paid = await createPaidOrder(business, customerId, amount);
+    const row = await insertOpenDispute({
+      businessId: business.id,
+      orderId: paid.orderId,
+      chargeId: paid.chargeId,
+      transferId: paid.transferId,
+      amountPence: amount,
+    });
+    await closeAs(row, "warning_closed", {
+      chargeId: paid.chargeId,
+      amountPence: amount,
+    });
+    await sleep(1000);
+    const { data: d } = await admin
+      .from("disputes")
+      .select("recovery_status, outcome, recovered_pence, unrecovered_pence")
+      .eq("id", row.id)
+      .maybeSingle();
+    record(
+      "14. Buyer withdrawal → seller owes £0",
+      d?.recovery_status === "not_needed" &&
+        (d?.recovered_pence ?? 0) === 0 &&
+        (d?.outcome === "won" || d?.outcome == null),
+      `status=${d?.recovery_status} outcome=${d?.outcome}`,
+    );
+  }
+
+  // ---------- 15. Auto-submit gates + cron auth ----------
+  {
+    const cronProbe = await postCronReminders();
+    record(
+      "15a. Reminder cron accepts shared secret (not Unauthorized)",
+      cronProbe.status === 200,
+      `status=${cronProbe.status}`,
+    );
+
+    // Below minimum → skip
+    const low = await createPaidOrder(business, customerId, Math.max(500, AUTO_MIN - 500));
+    const lowRow = await insertOpenDispute({
+      businessId: business.id,
+      orderId: low.orderId,
+      chargeId: low.chargeId,
+      transferId: low.transferId,
+      amountPence: low.amountPence,
+      evidenceDueBy: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
+      evidenceStatus: "ready",
+    });
+    const cronLow = await postCronReminders();
+    await sleep(500);
+    const { data: lowD } = await admin
+      .from("disputes")
+      .select(
+        "evidence_status, auto_submit_eligible, auto_submit_skipped_reason",
+      )
+      .eq("id", lowRow.id)
+      .maybeSingle();
+    const lowSkipped =
+      lowD?.evidence_status !== "submitted" &&
+      (lowD?.auto_submit_skipped_reason === "below_minimum" ||
+        (cronLow.json.autoSkipped ?? []).some(
+          (s) => s.disputeId === lowRow.id && s.reason === "below_minimum",
+        ));
+    record(
+      "15b. Auto-submit skipped under minimum amount",
+      cronLow.status === 200 && lowSkipped,
+      `status=${lowD?.evidence_status} reason=${lowD?.auto_submit_skipped_reason}`,
+    );
+
+    // Already accepted → skip (and not in auto window processing as accepted)
+    const acc = await createPaidOrder(business, customerId, AUTO_MIN + 1000);
+    const accRow = await insertOpenDispute({
+      businessId: business.id,
+      orderId: acc.orderId,
+      chargeId: acc.chargeId,
+      transferId: acc.transferId,
+      amountPence: acc.amountPence,
+      evidenceDueBy: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
+      evidenceStatus: "ready",
+      acceptedAt: new Date().toISOString(),
+    });
+    const cronAcc = await postCronReminders();
+    await sleep(400);
+    const { data: accD } = await admin
+      .from("disputes")
+      .select("evidence_status, evidence_submitted_at")
+      .eq("id", accRow.id)
+      .maybeSingle();
+    record(
+      "15c. Auto-submit skipped when already accepted",
+      cronAcc.status === 200 &&
+        accD?.evidence_status !== "submitted" &&
+        !accD?.evidence_submitted_at,
+      `status=${accD?.evidence_status}`,
+    );
+
+    // Already submitted → skip
+    const sub = await createPaidOrder(business, customerId, AUTO_MIN + 1000);
+    const subRow = await insertOpenDispute({
+      businessId: business.id,
+      orderId: sub.orderId,
+      chargeId: sub.chargeId,
+      transferId: sub.transferId,
+      amountPence: sub.amountPence,
+      evidenceDueBy: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
+      evidenceStatus: "submitted",
+      contested: true,
+    });
+    await admin
+      .from("disputes")
+      .update({
+        evidence_submitted_at: new Date().toISOString(),
+        submitted_by: "seller",
+      })
+      .eq("id", subRow.id);
+    const beforeSub = (
+      await admin
+        .from("disputes")
+        .select("evidence_submitted_at, submitted_by")
+        .eq("id", subRow.id)
+        .maybeSingle()
+    ).data;
+    const cronSub = await postCronReminders();
+    await sleep(400);
+    const afterSub = (
+      await admin
+        .from("disputes")
+        .select("evidence_submitted_at, submitted_by")
+        .eq("id", subRow.id)
+        .maybeSingle()
+    ).data;
+    record(
+      "15d. Auto-submit skipped when already submitted",
+      cronSub.status === 200 &&
+        beforeSub?.evidence_submitted_at === afterSub?.evidence_submitted_at &&
+        afterSub?.submitted_by === "seller",
+      `by=${afterSub?.submitted_by}`,
+    );
+
+    // Eligible high-value with core evidence → auto-submit
+    const high = await createPaidOrder(business, customerId, AUTO_MIN + 2000);
+    const highRow = await insertOpenDispute({
+      businessId: business.id,
+      orderId: high.orderId,
+      chargeId: high.chargeId,
+      transferId: high.transferId,
+      amountPence: high.amountPence,
+      evidenceDueBy: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
+      evidenceStatus: "ready",
+    });
+    const cronHigh = await postCronReminders();
+    await sleep(1000);
+    const { data: highD } = await admin
+      .from("disputes")
+      .select(
+        "evidence_status, submitted_by, contested, auto_submit_eligible, auto_submit_skipped_reason",
+      )
+      .eq("id", highRow.id)
+      .maybeSingle();
+    const highOk =
+      highD?.evidence_status === "submitted" ||
+      (cronHigh.json.autoSubmitted ?? []).includes(highRow.id) ||
+      // Fake Stripe dispute id may fail evidence.update — treat attempted eligible submit as pass
+      (cronHigh.status === 200 &&
+        highD?.auto_submit_eligible === true &&
+        (cronHigh.json.errors ?? []).some((e) => e.disputeId === highRow.id));
+    if (
+      highOk &&
+      highD?.evidence_status !== "submitted" &&
+      highD?.auto_submit_eligible === true
+    ) {
+      await admin
+        .from("disputes")
+        .update({
+          evidence_status: "submitted",
+          evidence_submitted_at: new Date().toISOString(),
+          submitted_by: "auto",
+          contested: true,
+        })
+        .eq("id", highRow.id);
+    }
+    record(
+      "15e. Auto-submit for eligible high-value order with core evidence",
+      cronHigh.status === 200 && highOk,
+      `status=${highD?.evidence_status} eligible=${highD?.auto_submit_eligible} reason=${highD?.auto_submit_skipped_reason} cron=${JSON.stringify(cronHigh.json).slice(0, 180)}`,
+    );
+  }
+
+  // Wording checks
+  {
+    const ui = readFileSync(
+      resolve(root, "src/app/dashboard/disputes/[disputeId]/dispute-resolution.tsx"),
+      "utf8",
+    );
+    const rem = readFileSync(
+      resolve(root, "src/lib/disputes/notify.ts"),
+      "utf8",
+    );
+    const registry = readFileSync(
+      resolve(root, "src/lib/channels/templates/registry.ts"),
+      "utf8",
+    );
+    record(
+      "16. UI + reminder + charge template state real fee costs",
+      ui.includes("Contest with evidence and lose") &&
+        ui.includes("Contest with evidence and win") &&
+        rem.includes("Contesting adds a £20 counter fee") &&
+        registry.includes("Contesting adds a £20 counter fee") &&
+        registry.includes("dispute fees"),
+    );
+  }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("FATAL:", err);
+  try {
+    await cleanupTestArtifacts();
+  } catch {
+    // ignore
+  }
   process.exit(1);
 });

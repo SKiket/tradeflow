@@ -295,6 +295,7 @@ export async function buildDisputeEvidence(
         ? {
             evidence_submitted_at: now,
             submitted_by: options?.submittedBy ?? "seller",
+            contested: true,
           }
         : {}),
       updated_at: now,

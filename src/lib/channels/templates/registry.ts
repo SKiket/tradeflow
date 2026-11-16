@@ -237,8 +237,8 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
       { name: "deadlineDate", sample: "30 Nov 2026" },
     ],
     bodies: {
-      en: "Reminder: your response to the payment dispute for order {{1}} is due by {{2}}. Open your TradeFlow dashboard to confirm your evidence.",
-      fr: "Rappel : votre réponse au litige de paiement pour la commande {{1}} est due pour le {{2}}. Ouvrez votre tableau de bord TradeFlow pour confirmer vos preuves.",
+      en: "Reminder: your response to the payment dispute for order {{1}} is due by {{2}}. Contesting adds a £20 counter fee. Open your TradeFlow dashboard to confirm your evidence.",
+      fr: "Rappel : votre réponse au litige de paiement pour la commande {{1}} est due pour le {{2}}. Contester ajoute des frais de contre-argument de 20 £. Ouvrez votre tableau de bord TradeFlow pour confirmer vos preuves.",
     },
   },
   {
@@ -251,8 +251,8 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
       { name: "owed", sample: "£0.00" },
     ],
     bodies: {
-      en: "For the lost payment dispute on order {{1}}, we recovered {{2}} via {{3}}. Remaining owed: {{4}}. Open your TradeFlow dashboard for details.",
-      fr: "Pour le litige de paiement perdu sur la commande {{1}}, nous avons récupéré {{2}} via {{3}}. Reste dû : {{4}}. Ouvrez votre tableau de bord TradeFlow pour plus de détails.",
+      en: "For the lost payment dispute on order {{1}}, we recovered {{2}} via {{3}} covering dispute fees and any unrecovered chargeback. Remaining owed: {{4}}. Open your TradeFlow dashboard for details.",
+      fr: "Pour le litige de paiement perdu sur la commande {{1}}, nous avons récupéré {{2}} via {{3}} pour les frais de litige et tout rétrofacturation non récupérée. Reste dû : {{4}}. Ouvrez votre tableau de bord TradeFlow pour plus de détails.",
     },
   },
   {
