@@ -45,8 +45,6 @@ type DisputeRow = {
   recovery_status: string | null;
   contested: boolean | null;
   accepted_at: string | null;
-  evidence_status: string;
-  evidence_submitted_at: string | null;
 };
 
 async function loadDisputeByStripeId(
