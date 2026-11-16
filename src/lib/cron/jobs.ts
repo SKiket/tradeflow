@@ -55,3 +55,19 @@ export const CRON_JOB_NAMES = Object.keys(CRON_JOBS) as CronJobName[];
 export const CRON_STALE_INTERVAL_MULTIPLIER = 3;
 
 export const CRON_CONSECUTIVE_FAILURE_THRESHOLD = 3;
+
+/** Daily jobs (interval ≥ 24h): never-ran grace before health degrades. */
+export const CRON_DAILY_NEVER_RAN_GRACE_MS = 26 * 60 * 60 * 1000;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Stale / never-ran threshold for a job (3× interval; daily never-ran = 26h). */
+export function cronNeverRanThresholdMs(intervalMs: number): number {
+  if (intervalMs >= DAY_MS) return CRON_DAILY_NEVER_RAN_GRACE_MS;
+  return intervalMs * CRON_STALE_INTERVAL_MULTIPLIER;
+}
+
+/** Overdue threshold after a successful run (always 3× interval). */
+export function cronOverdueThresholdMs(intervalMs: number): number {
+  return intervalMs * CRON_STALE_INTERVAL_MULTIPLIER;
+}

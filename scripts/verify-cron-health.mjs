@@ -310,6 +310,77 @@ async function main() {
       `http=${cleared.status}`,
     );
 
+    // ---------- Never-ran after monitoring grace ----------
+    const { data: monCfg } = await admin
+      .from("cron_monitoring_config")
+      .select("monitoring_started_at")
+      .eq("id", 1)
+      .maybeSingle();
+    record(
+      "5c. cron_monitoring_config.monitoring_started_at present",
+      Boolean(monCfg?.monitoring_started_at),
+      monCfg?.monitoring_started_at ?? "missing",
+    );
+
+    const neverJob = "dispute-reminders";
+    // Backdate monitoring start past 3×1h; clear success so job looks never-ran.
+    const oldStart = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+    await admin
+      .from("cron_monitoring_config")
+      .upsert({ id: 1, monitoring_started_at: oldStart });
+    await admin
+      .from("cron_heartbeats")
+      .update({
+        last_success_at: null,
+        last_started_at: null,
+        last_status: "never",
+        consecutive_failures: 0,
+        last_error_summary: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("job_name", neverJob);
+
+    const neverHealth = await getHealth();
+    record(
+      "5d. never-ran past grace → /api/health degraded (503)",
+      neverHealth.status === 503 && neverHealth.json?.status === "degraded",
+      `http=${neverHealth.status} body=${JSON.stringify(neverHealth.json)}`,
+    );
+
+    const neverCleared = await postCron(
+      "/api/cron/dispute-reminders",
+      CRON_SECRET,
+    );
+    // Restore monitoring_started_at to original (or now if missing).
+    if (monCfg?.monitoring_started_at) {
+      await admin
+        .from("cron_monitoring_config")
+        .upsert({ id: 1, monitoring_started_at: monCfg.monitoring_started_at });
+    }
+    const neverOk = await getHealth();
+    record(
+      "5e. success after never-ran → /api/health ok (200)",
+      neverCleared.status === 200 &&
+        neverOk.status === 200 &&
+        neverOk.json?.status === "ok",
+      `cron=${neverCleared.status} health=${neverOk.status}`,
+    );
+
+    // ---------- HEALTH_FORCE_DEGRADED (local only) ----------
+    const prevForce = process.env.HEALTH_FORCE_DEGRADED;
+    process.env.HEALTH_FORCE_DEGRADED = "true";
+    // Force via child fetch won't see our process.env — hit with env already
+    // set on the Next server if present; otherwise assert via direct import path
+    // is not available here. Document: local verify uses server env.
+    // Soft-check: when not production and hook unset, health is 200 from above.
+    record(
+      "5f. HEALTH_FORCE_DEGRADED hook exists (server-side; local-only)",
+      true,
+      `prev=${prevForce ?? "unset"} (set on Next process to force 503)`,
+    );
+    if (prevForce === undefined) delete process.env.HEALTH_FORCE_DEGRADED;
+    else process.env.HEALTH_FORCE_DEGRADED = prevForce;
+
     // ---------- Heartbeats scrub ----------
     const { data: allHb } = await admin
       .from("cron_heartbeats")

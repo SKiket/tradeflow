@@ -5,7 +5,8 @@ import {
   CRON_CONSECUTIVE_FAILURE_THRESHOLD,
   CRON_JOBS,
   CRON_JOB_NAMES,
-  CRON_STALE_INTERVAL_MULTIPLIER,
+  cronNeverRanThresholdMs,
+  cronOverdueThresholdMs,
   type CronJobName,
 } from "@/lib/cron/jobs";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -164,47 +165,86 @@ export type CronHealthRow = {
   consecutive_failures: number;
 };
 
+/**
+ * True when a job is overdue, over the failure threshold, or has never
+ * succeeded after the never-ran grace since monitoring started.
+ */
 export function isCronJobStale(
   jobName: CronJobName,
   row: CronHealthRow | null | undefined,
   nowMs: number = Date.now(),
+  monitoringStartedAtMs: number | null = null,
 ): boolean {
   const job = CRON_JOBS[jobName];
-  const thresholdMs = job.intervalMs * CRON_STALE_INTERVAL_MULTIPLIER;
-
-  if (!row) return false;
+  const overdueMs = cronOverdueThresholdMs(job.intervalMs);
+  const neverRanMs = cronNeverRanThresholdMs(job.intervalMs);
 
   if (
+    row &&
     (row.consecutive_failures ?? 0) >= CRON_CONSECUTIVE_FAILURE_THRESHOLD
   ) {
     return true;
   }
 
-  if (row.last_success_at) {
+  if (row?.last_success_at) {
     const age = nowMs - new Date(row.last_success_at).getTime();
-    if (Number.isFinite(age) && age > thresholdMs) return true;
+    if (Number.isFinite(age) && age > overdueMs) return true;
     return false;
   }
 
-  // Never succeeded: only stale once a run has started and enough time passed.
-  if (row.last_started_at) {
+  // Never succeeded (missing row, status never, or only started/failed).
+  // Clock starts at monitoring_started_at (not ignored forever).
+  if (monitoringStartedAtMs != null && Number.isFinite(monitoringStartedAtMs)) {
+    const sinceStart = nowMs - monitoringStartedAtMs;
+    if (Number.isFinite(sinceStart) && sinceStart > neverRanMs) {
+      return true;
+    }
+  }
+
+  // Fallback: a started-but-never-succeeded run past overdue threshold.
+  if (row?.last_started_at) {
     const age = nowMs - new Date(row.last_started_at).getTime();
-    if (Number.isFinite(age) && age > thresholdMs) return true;
+    if (Number.isFinite(age) && age > overdueMs) return true;
   }
 
   return false;
 }
 
-/** True when any registered job is stale or over the failure threshold. */
+/** Singleton monitoring_started_at (ms), or null if unavailable. */
+export async function getCronMonitoringStartedAtMs(
+  supabase: SupabaseClient = createAdminClient(),
+): Promise<number | null> {
+  const { data, error } = await supabase
+    .from("cron_monitoring_config")
+    .select("monitoring_started_at")
+    .eq("id", 1)
+    .maybeSingle();
+
+  if (error) {
+    console.error(
+      "[cron/heartbeat] monitoring_started_at lookup failed",
+      error.message,
+    );
+    return null;
+  }
+  if (!data?.monitoring_started_at) return null;
+  const ms = new Date(data.monitoring_started_at as string).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** True when any registered job is stale, never-ran past grace, or failing. */
 export async function anyCronJobDegraded(
   supabase: SupabaseClient = createAdminClient(),
 ): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("cron_heartbeats")
-    .select(
-      "job_name, last_started_at, last_success_at, last_status, last_error_summary, consecutive_failures",
-    )
-    .in("job_name", CRON_JOB_NAMES);
+  const [{ data, error }, monitoringStartedAtMs] = await Promise.all([
+    supabase
+      .from("cron_heartbeats")
+      .select(
+        "job_name, last_started_at, last_success_at, last_status, last_error_summary, consecutive_failures",
+      )
+      .in("job_name", CRON_JOB_NAMES),
+    getCronMonitoringStartedAtMs(supabase),
+  ]);
 
   if (error) {
     console.error("[cron/heartbeat] health lookup failed", error.message);
@@ -217,7 +257,9 @@ export async function anyCronJobDegraded(
   );
 
   for (const name of CRON_JOB_NAMES) {
-    if (isCronJobStale(name, byName.get(name))) return true;
+    if (isCronJobStale(name, byName.get(name), Date.now(), monitoringStartedAtMs)) {
+      return true;
+    }
   }
   return false;
 }
