@@ -1,8 +1,12 @@
 import type Stripe from "stripe";
 
+import {
+  applicationFeeForCheckout,
+  getActivePricing,
+} from "@/lib/pricing/config";
 import { reservationExpiryUnix } from "@/lib/orders/reservations";
-import { platformApplicationFeePence } from "@/lib/stripe/billing";
 import { getStripe } from "@/lib/stripe/client";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 function getAppBaseUrl(): string {
   if (process.env.NEXT_PUBLIC_APP_URL) {
@@ -25,6 +29,7 @@ export interface CheckoutLineItem {
  *
  * Uses Checkout — not a raw PaymentIntent — so we get a shareable URL
  * suitable for WhatsApp. Funds route to the seller's connected account.
+ * Application fee comes from active pricing_config (order % + fixed).
  */
 export async function createOrderCheckoutSession(params: {
   connectedAccountId: string;
@@ -32,7 +37,7 @@ export async function createOrderCheckoutSession(params: {
   orderRef: string;
   lineItems: CheckoutLineItem[];
   expiresAtUnix?: number;
-  /** Synced seller subscription status; only `trialing` waives the 1% fee. */
+  /** Synced seller subscription status — trial fee rule from pricing_config. */
   subscriptionStatus?: string | null;
 }): Promise<Stripe.Checkout.Session> {
   const base = getAppBaseUrl();
@@ -41,10 +46,23 @@ export async function createOrderCheckoutSession(params: {
     (sum, item) => sum + item.unitAmountPence * item.quantity,
     0,
   );
-  const applicationFeePence = platformApplicationFeePence(
-    totalPence,
-    params.subscriptionStatus,
-  );
+
+  const pricing = await getActivePricing();
+  const applicationFeePence = applicationFeeForCheckout({
+    amountPence: totalPence,
+    pricing,
+    subscriptionStatus: params.subscriptionStatus,
+  });
+
+  // Persist fee + config id for history (cash/outside-paid paths leave these null).
+  const admin = createAdminClient();
+  await admin
+    .from("orders")
+    .update({
+      application_fee_pence: applicationFeePence > 0 ? applicationFeePence : 0,
+      pricing_config_id: pricing.id,
+    })
+    .eq("id", params.orderId);
 
   const session = await stripe.checkout.sessions.create({
     mode: "payment",
@@ -62,14 +80,16 @@ export async function createOrderCheckoutSession(params: {
       metadata: {
         order_id: params.orderId,
         order_ref: params.orderRef,
+        pricing_config_id: pricing.id,
       },
-      ...(applicationFeePence !== undefined
+      ...(applicationFeePence > 0
         ? { application_fee_amount: applicationFeePence }
         : {}),
     },
     metadata: {
       order_id: params.orderId,
       order_ref: params.orderRef,
+      pricing_config_id: pricing.id,
     },
     shipping_address_collection: {
       allowed_countries: ["GB"],

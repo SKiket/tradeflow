@@ -1,5 +1,5 @@
 /**
- * Proves seller platform billing (Customer + Subscription, trial waiver, 1%
+ * Proves seller platform billing (Customer + Subscription, trial, 4.5%+20p
  * Connect application fee, webhook sync, Billing Portal) against real Stripe
  * test-mode objects.
  *
@@ -444,28 +444,30 @@ async function main() {
     `status=${trialRow?.stripe_subscription_status} sub=${trialRow?.stripe_subscription_id} trial_ends_at=${trialRow?.trial_ends_at} daysOut=${daysOut.toFixed(2)} hook=${JSON.stringify(createdHook.json)}`,
   );
 
-  // --- 2. Trialing order: no application_fee_amount ---
+  // --- 2. Trialing order: order fee STILL charged (monthly waived) ---
   const trialOrder = await placeStorefrontOrder(trial.business.id, trial.variantId);
   const { data: trialOrderRow } = await admin
     .from("orders")
-    .select("id, order_ref, total_pence, stripe_checkout_session_id")
+    .select("id, order_ref, total_pence, stripe_checkout_session_id, application_fee_pence")
     .eq("business_id", trial.business.id)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  const trialExpectedFee =
+    Math.round(((trialOrderRow?.total_pence ?? 0) * 450) / 10000) + 20;
   let trialFee = { applicationFeeAmount: "uninspected", amountTotal: null };
   if (trialOrderRow?.stripe_checkout_session_id) {
     trialFee = await inspectCheckoutFee(trialOrderRow.stripe_checkout_session_id, {
       destination: trial.accountId,
-      expectFee: false,
+      expectFee: true,
     });
   }
   record(
-    "2. Trialing storefront order Checkout/PI has NO application_fee_amount",
+    "2. Trialing storefront order still has application_fee (4.5%+20p)",
     trialOrder.status === 200 &&
       trialOrder.json.ok === true &&
-      trialFee.applicationFeeAmount == null,
-    `http=${trialOrder.status} total=${trialOrder.json.totalPence ?? trialOrderRow?.total_pence} session=${trialFee.sessionId} pi=${trialFee.paymentIntentId} fee=${trialFee.applicationFeeAmount} feeObj=${trialFee.applicationFeeId ?? "none"}`,
+      trialFee.applicationFeeAmount === trialExpectedFee,
+    `http=${trialOrder.status} total=${trialOrder.json.totalPence ?? trialOrderRow?.total_pence} session=${trialFee.sessionId} pi=${trialFee.paymentIntentId} fee=${trialFee.applicationFeeAmount} expected=${trialExpectedFee}`,
   );
 
   // --- 3. Different business flipped to active: 1% fee present ---
@@ -511,9 +513,10 @@ async function main() {
       expectFee: true,
     });
   }
-  const expectedFee = Math.round((activeOrderRow?.total_pence ?? 0) * 0.01);
+  const expectedFee =
+    Math.round(((activeOrderRow?.total_pence ?? 0) * 450) / 10000) + 20;
   record(
-    "3b. Active storefront order has application_fee_amount = 1% of total",
+    "3b. Active storefront order has application_fee_amount = 4.5%+20p",
     activeOrder.status === 200 &&
       activeOrder.json.ok === true &&
       activeFee.applicationFeeAmount === expectedFee &&

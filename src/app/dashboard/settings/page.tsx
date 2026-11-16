@@ -1,3 +1,7 @@
+import {
+  getActivePricing,
+  pricingPlanSummary,
+} from "@/lib/pricing/config";
 import { sellerBillingStatus } from "@/lib/stripe/billing";
 import { DEFAULT_RETURN_WINDOW_DAYS } from "@/lib/orders/return-window";
 import { storefrontUrl } from "@/lib/storefront/url";
@@ -77,11 +81,30 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
         : billing === "cancelled"
           ? "Checkout was cancelled. You can start the trial again whenever you’re ready."
           : null,
-    billingCopy: sellerBillingStatus({
-      customerId: (data.stripe_customer_id as string | null) ?? null,
-      status: (data.stripe_subscription_status as string | null) ?? null,
-      trialEndsAt: (data.trial_ends_at as string | null) ?? null,
-    }),
+    billingCopy: await (async () => {
+      let pricingSummary: string | null = null;
+      let monthlyFeePence: number | null = null;
+      let orderFeeDuringTrial: boolean | null = null;
+      let trialDays: number | null = null;
+      try {
+        const pricing = await getActivePricing();
+        pricingSummary = pricingPlanSummary(pricing);
+        monthlyFeePence = pricing.monthlyFeePence;
+        orderFeeDuringTrial = pricing.chargeOrderFeeDuringTrial;
+        trialDays = pricing.trialDays;
+      } catch {
+        // Fall back to defaults inside sellerBillingStatus.
+      }
+      return sellerBillingStatus({
+        customerId: (data.stripe_customer_id as string | null) ?? null,
+        status: (data.stripe_subscription_status as string | null) ?? null,
+        trialEndsAt: (data.trial_ends_at as string | null) ?? null,
+        pricingSummary,
+        monthlyFeePence,
+        orderFeeDuringTrial,
+        trialDays,
+      });
+    })(),
   };
 
   return (

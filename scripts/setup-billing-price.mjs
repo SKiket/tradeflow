@@ -1,11 +1,13 @@
 /**
  * Idempotent Stripe Product + recurring Price for TradeFlow seller billing
- * (£10/month GBP on the PLATFORM account, not a Connect account).
+ * (£19/month GBP on the PLATFORM account, not a Connect account).
  *
  * Also ensures the webhook endpoint listens for subscription events and
  * that a Billing Portal configuration exists.
  *
  * Run: node scripts/setup-billing-price.mjs
+ *
+ * Writes STRIPE_SUBSCRIPTION_PRICE_ID into .env.local (set the same in Vercel).
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -15,6 +17,7 @@ import Stripe from "stripe";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PRODUCT_METADATA_KEY = "tradeflow";
 const PRODUCT_METADATA_VALUE = "seller-subscription";
+const PRICE_AMOUNT_PENCE = 1900;
 const ENDPOINT_ID = process.env.ENDPOINT_ID ?? "we_1TsMXqDQdP6fmgysHjjYQ4uE";
 const SUBSCRIPTION_EVENTS = [
   "customer.subscription.created",
@@ -72,7 +75,7 @@ async function findProduct() {
   return null;
 }
 
-async function findMonthlyPrice(productId) {
+async function findMonthlyPrice(productId, amountPence) {
   for await (const price of stripe.prices.list({
     product: productId,
     active: true,
@@ -80,7 +83,7 @@ async function findMonthlyPrice(productId) {
   })) {
     if (
       price.currency === "gbp" &&
-      price.unit_amount === 1000 &&
+      price.unit_amount === amountPence &&
       price.recurring?.interval === "month" &&
       price.recurring?.interval_count === 1
     ) {
@@ -99,33 +102,94 @@ async function main() {
   let product = await findProduct();
   if (product) {
     console.log(`Product exists: ${product.id} (${product.name})`);
+    await stripe.products.update(product.id, {
+      description:
+        "TradeFlow seller subscription — £19/month plus 4.5% + 20p per order paid through TradeFlow.",
+    });
   } else {
     product = await stripe.products.create({
       name: "TradeFlow",
-      description: "TradeFlow seller subscription — £10/month plus 1% per order after trial.",
+      description:
+        "TradeFlow seller subscription — £19/month plus 4.5% + 20p per order paid through TradeFlow.",
       metadata: { [PRODUCT_METADATA_KEY]: PRODUCT_METADATA_VALUE },
     });
     console.log(`Product created: ${product.id}`);
   }
 
-  let price = await findMonthlyPrice(product.id);
+  // List existing active monthly prices (do not alter old subscriptions).
+  const existingPrices = [];
+  for await (const price of stripe.prices.list({
+    product: product.id,
+    active: true,
+    limit: 100,
+  })) {
+    if (price.recurring?.interval === "month") {
+      existingPrices.push(price);
+    }
+  }
+  console.log("Existing active monthly prices (unchanged for current subs):");
+  for (const p of existingPrices) {
+    console.log(
+      `  ${p.id} amount=${p.unit_amount} ${p.currency} created=${new Date(p.created * 1000).toISOString()}`,
+    );
+  }
+
+  let price = await findMonthlyPrice(product.id, PRICE_AMOUNT_PENCE);
   if (price) {
-    console.log(`Price exists: ${price.id} (${price.unit_amount} ${price.currency}/${price.recurring.interval})`);
+    console.log(
+      `£19 Price exists: ${price.id} (${price.unit_amount} ${price.currency}/${price.recurring.interval})`,
+    );
   } else {
     price = await stripe.prices.create({
       product: product.id,
       currency: "gbp",
-      unit_amount: 1000,
+      unit_amount: PRICE_AMOUNT_PENCE,
       recurring: { interval: "month" },
-      metadata: { [PRODUCT_METADATA_KEY]: PRODUCT_METADATA_VALUE },
+      metadata: {
+        [PRODUCT_METADATA_KEY]: PRODUCT_METADATA_VALUE,
+        monthly_fee_pence: String(PRICE_AMOUNT_PENCE),
+      },
     });
-    console.log(`Price created: ${price.id}`);
+    console.log(`£19 Price created: ${price.id}`);
   }
 
   upsertEnvVar("STRIPE_SUBSCRIPTION_PRICE_ID", price.id);
   console.log(`Wrote STRIPE_SUBSCRIPTION_PRICE_ID=${price.id} to .env.local`);
+  console.log(
+    "Set the same STRIPE_SUBSCRIPTION_PRICE_ID in Vercel (Production).",
+  );
 
-  const configs = await stripe.billingPortal.configurations.list({ limit: 5, active: true });
+  // List existing test subscriptions on this price / product (do not alter).
+  const subs = await stripe.subscriptions.list({
+    price: price.id,
+    status: "all",
+    limit: 20,
+  });
+  console.log(`\nSubscriptions on new £19 price (${subs.data.length}):`);
+  for (const s of subs.data) {
+    console.log(`  ${s.id} status=${s.status} customer=${s.customer}`);
+  }
+
+  // Also list any still on the old £10 price if present.
+  const oldTen = existingPrices.find((p) => p.unit_amount === 1000);
+  if (oldTen) {
+    const oldSubs = await stripe.subscriptions.list({
+      price: oldTen.id,
+      status: "all",
+      limit: 50,
+    });
+    console.log(
+      `\nExisting subscriptions still on £10 price ${oldTen.id} (not altered): ${oldSubs.data.length}`,
+    );
+    for (const s of oldSubs.data) {
+      console.log(`  ${s.id} status=${s.status} customer=${s.customer}`);
+    }
+  }
+
+  const configs = await stripe.billingPortal.configurations.list({
+    limit: 5,
+    active: true,
+  });
   if (configs.data.length === 0) {
     const config = await stripe.billingPortal.configurations.create({
       business_profile: { headline: "TradeFlow billing" },

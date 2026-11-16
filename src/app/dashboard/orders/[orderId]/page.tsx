@@ -40,7 +40,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, dispute_status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
+      "id, order_ref, status, dispute_status, total_pence, refunded_amount_pence, application_fee_pence, pricing_config_id, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
     .eq("business_id", businessId)
@@ -367,6 +367,32 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
             </table>
           </div>
         )}
+        {(() => {
+          const total = order.total_pence as number;
+          const fee =
+            typeof order.application_fee_pence === "number"
+              ? (order.application_fee_pence as number)
+              : null;
+          const paidViaTradeFlow = Boolean(order.stripe_payment_intent_id);
+          if (paidViaTradeFlow && fee != null && fee >= 0) {
+            const receive = Math.max(0, total - fee);
+            return (
+              <p className="text-sm text-muted-foreground">
+                Order total {formatPence(total)}, TradeFlow fee{" "}
+                {formatPence(fee)}, you receive {formatPence(receive)}.
+              </p>
+            );
+          }
+          if (!paidViaTradeFlow && (order.status as string) !== "AWAITING_PAYMENT") {
+            return (
+              <p className="text-sm text-muted-foreground">
+                Order total {formatPence(total)}. No TradeFlow order fee
+                (not paid through TradeFlow).
+              </p>
+            );
+          }
+          return null;
+        })()}
       </section>
 
       <section className="space-y-3">

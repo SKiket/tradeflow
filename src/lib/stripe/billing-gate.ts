@@ -152,14 +152,13 @@ export function trialEndsAtFromUnix(trialEnd: number | null | undefined): string
   return new Date(trialEnd * 1000).toISOString();
 }
 
-export const PLATFORM_FEE_RATE = 0.01;
-
+/**
+ * @deprecated Prefer getActivePricing() + computeApplicationFee().
+ * Synchronous stub kept for import compatibility; checkout uses async pricing.
+ */
 export function platformApplicationFeePence(
-  totalPence: number,
-  subscriptionStatus: string | null | undefined,
+  _totalPence: number,
+  _subscriptionStatus: string | null | undefined,
 ): number | undefined {
-  if (subscriptionStatus === "trialing") return undefined;
-  if (!Number.isFinite(totalPence) || totalPence <= 0) return undefined;
-  const fee = Math.round(totalPence * PLATFORM_FEE_RATE);
-  return fee > 0 ? fee : undefined;
+  return undefined;
 }

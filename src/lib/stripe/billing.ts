@@ -1,11 +1,12 @@
 import type Stripe from "stripe";
 
+import { getActivePricing } from "@/lib/pricing/config";
 import { getStripe } from "@/lib/stripe/client";
 
+/** Fallback when pricing_config is unreachable — prefer getActivePricing().trialDays. */
 export const SELLER_SUBSCRIPTION_TRIAL_DAYS = 30;
 
 export {
-  PLATFORM_FEE_RATE,
   SHOP_UNAVAILABLE_BUYER_MESSAGE,
   SHOP_UNAVAILABLE_STOREFRONT_DETAIL,
   SHOP_UNAVAILABLE_STOREFRONT_HEADLINE,
@@ -65,13 +66,22 @@ export async function createSellerSubscriptionCheckout(params: {
   cancelUrl?: string;
 }): Promise<Stripe.Checkout.Session> {
   const base = appBaseUrl();
+  let trialDays = SELLER_SUBSCRIPTION_TRIAL_DAYS;
+  try {
+    const pricing = await getActivePricing();
+    trialDays = pricing.trialDays;
+  } catch (error) {
+    console.warn("[billing] pricing_config unavailable for trial days", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
   return getStripe().checkout.sessions.create({
     mode: "subscription",
     customer: params.customerId,
     line_items: [{ price: subscriptionPriceId(), quantity: 1 }],
     payment_method_collection: "always",
     subscription_data: {
-      trial_period_days: SELLER_SUBSCRIPTION_TRIAL_DAYS,
+      trial_period_days: trialDays,
       metadata: { tradeflow_business_id: params.businessId },
     },
     metadata: {
@@ -107,15 +117,28 @@ export function sellerBillingStatus(params: {
   customerId: string | null;
   status: string | null;
   trialEndsAt: string | null;
+  /** Optional live pricing; when omitted, copy uses safe defaults. */
+  pricingSummary?: string | null;
+  monthlyFeePence?: number | null;
+  orderFeeDuringTrial?: boolean | null;
+  trialDays?: number | null;
 }): SellerBillingCopy {
   const status = params.status;
   const trialEndsAt = params.trialEndsAt;
+  const plan =
+    params.pricingSummary?.trim() ||
+    "£19.00/month + 4.5% + £0.20 per order";
+  const trialDays = params.trialDays ?? SELLER_SUBSCRIPTION_TRIAL_DAYS;
+  const orderFeeInTrial = params.orderFeeDuringTrial !== false;
 
   if (!params.customerId && !status) {
     return {
       headline: "Billing: Not set up",
-      detail:
-        "No TradeFlow subscription yet. Start a 30-day trial — card required, nothing charged until it ends.",
+      detail: `No TradeFlow subscription yet. Start a ${trialDays}-day trial — card required, monthly fee not charged until it ends.${
+        orderFeeInTrial
+          ? " Per-order fees still apply on card/Pay by Bank sales during the trial."
+          : ""
+      }`,
       action: "start_trial",
     };
   }
@@ -132,15 +155,16 @@ export function sellerBillingStatus(params: {
             : `Trial ends in ${days} days`;
     return {
       headline,
-      detail:
-        "The £10/month plan and the 1% per-order fee are both waived until the trial ends.",
+      detail: orderFeeInTrial
+        ? `Monthly subscription fee waived until the trial ends. Per-order fees still apply on card and Pay by Bank sales (${plan}).`
+        : `Monthly subscription and per-order fees are waived until the trial ends. After trial: ${plan}.`,
       action: "manage",
     };
   }
 
   if (status === "active") {
     return {
-      headline: "Active — £10/month + 1% per order",
+      headline: `Active — ${plan}`,
       detail: "Your TradeFlow subscription is current.",
       action: "manage",
     };

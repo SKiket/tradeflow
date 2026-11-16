@@ -27,10 +27,25 @@ const ONBOARDING_BUSINESS_KEY = "tf_onboarding_business_id";
 export function OnboardingWizard({
   initialStep = "A",
   addingAnother = false,
+  pricingCopy,
 }: {
   initialStep?: OnboardingStep;
   addingAnother?: boolean;
+  pricingCopy?: {
+    trialDays: number;
+    monthlyLabel: string;
+    orderFeeLabel: string;
+    planSummary: string;
+    chargeOrderFeeDuringTrial: boolean;
+  };
 }) {
+  const trialDays = pricingCopy?.trialDays ?? 30;
+  const monthlyLabel = pricingCopy?.monthlyLabel ?? "£19.00";
+  const orderFeeLabel = pricingCopy?.orderFeeLabel ?? "4.5% + £0.20";
+  const planSummary =
+    pricingCopy?.planSummary ?? "£19.00/month + 4.5% + £0.20 per order";
+  const chargeOrderFeeDuringTrial =
+    pricingCopy?.chargeOrderFeeDuringTrial ?? true;
   const router = useRouter();
   const [step, setStep] = useState<OnboardingStep>(initialStep);
   const [slugTouched, setSlugTouched] = useState(false);
@@ -390,14 +405,18 @@ export function OnboardingWizard({
         <div className="rounded-lg border border-border p-6 space-y-3">
           <h2 className="font-medium">Start your free trial</h2>
           <p className="text-sm text-muted-foreground">
-            30 days free. A card is required now, but you are not charged during
-            the trial — the £10/month plan and the 1% per-order fee are both
-            waived until it ends.
+            {trialDays} days free on the monthly plan. A card is required now;
+            the {monthlyLabel}/month subscription is not charged until the trial
+            ends.
+            {chargeOrderFeeDuringTrial
+              ? ` Per-order fees (${orderFeeLabel}) still apply on card and Pay by Bank sales during the trial.`
+              : " Per-order fees are also waived during the trial."}{" "}
+            Cash or outside payments carry no order fee.
           </p>
           <p className="text-xs text-muted-foreground">
-            After the trial: £10/month plus 1% of each order, taken from the
-            buyer payment via Stripe Connect. WhatsApp inbox setup comes later
-            from your dashboard.
+            After the trial: {planSummary}, taken from each TradeFlow payment via
+            Stripe Connect. WhatsApp inbox setup comes later from your
+            dashboard.
           </p>
           <Button
             type="button"

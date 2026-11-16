@@ -413,8 +413,8 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             : "No connected account ID"}
         </p>
         <p className="text-xs text-muted-foreground">
-          This is how buyers pay you. TradeFlow billing (your £10/month
-          subscription) is separate, below.
+          This is how buyers pay you. TradeFlow billing (your £19/month
+          subscription plus per-order fees) is separate, below.
         </p>
         {!business.stripe_charges_enabled ? (
           <Button
