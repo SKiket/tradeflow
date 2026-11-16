@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { isVercelProduction } from "@/lib/api/runtime-env";
+import { anyCronJobDegraded } from "@/lib/cron/heartbeat";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +36,8 @@ async function pingDatabase(): Promise<boolean> {
 }
 
 /**
- * Liveness + shallow DB readiness. No secrets, versions, or error details.
+ * Liveness + shallow DB readiness + cron heartbeat freshness.
+ * No secrets, versions, job names, or error details in the response.
  */
 export async function GET() {
   try {
@@ -46,6 +48,15 @@ export async function GET() {
         { status: 503, headers: { "Cache-Control": "no-store" } },
       );
     }
+
+    const cronDegraded = await anyCronJobDegraded();
+    if (cronDegraded) {
+      return NextResponse.json(
+        { status: "degraded" },
+        { status: 503, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
     return NextResponse.json(
       { status: "ok" },
       { status: 200, headers: { "Cache-Control": "no-store" } },

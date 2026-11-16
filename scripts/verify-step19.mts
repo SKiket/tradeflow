@@ -312,15 +312,15 @@ async function main() {
 
   await withEnvAsync({ CRON_SHARED_SECRET: undefined }, async () => {
     const fakeReq = {
-      headers: { get: () => "x" },
+      headers: { get: () => "not-the-vault-secret" },
       nextUrl: { searchParams: new URLSearchParams() },
     } as unknown as import("next/server").NextRequest;
     assert(
       !(await authorizeCronRequest(fakeReq)),
-      "shop-purge cron fail-closed when secret unset",
+      "cron rejects when env unset and vault does not match",
     );
   });
-  console.log("OK cron fail-closed when secret unset");
+  console.log("OK cron rejects when env unset and vault misses");
 
   // Cleanup test shop data (keep auth user delete)
   await admin.from("order_refunds").delete().eq("business_id", businessId);

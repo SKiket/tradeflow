@@ -1,7 +1,7 @@
-import { NextResponse, type NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 
-import { authorizeCronRequest } from "@/lib/cron/auth";
 import { runAnalyticsAggregate } from "@/lib/cron/analytics-aggregate";
+import { runCronJob } from "@/lib/cron/run";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -13,17 +13,9 @@ export const runtime = "nodejs";
  * Dashboard analytics does not read this cache.
  */
 export async function POST(request: NextRequest) {
-  if (!(await authorizeCronRequest(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  try {
+  return runCronJob(request, "analytics-aggregate", async () => {
     const result = await runAnalyticsAggregate(createAdminClient());
     console.info("[cron/analytics-aggregate] run complete", result);
-    return NextResponse.json({ ok: true, ...result });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error("[cron/analytics-aggregate] failed", { message });
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
-  }
+    return result as unknown as Record<string, unknown>;
+  });
 }

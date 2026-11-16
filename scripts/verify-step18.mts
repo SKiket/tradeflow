@@ -176,11 +176,14 @@ async function main() {
   await withEnvAsync(
     { CRON_SHARED_SECRET: undefined },
     async () => {
-      const ok = await authorizeCronRequest(fakeReq("anything"));
-      assert(!ok, "cron rejects when CRON_SHARED_SECRET unset");
+      const ok = await authorizeCronRequest(fakeReq("anything-not-in-vault"));
+      assert(
+        !ok,
+        "cron rejects when CRON_SHARED_SECRET unset and vault does not match",
+      );
     },
   );
-  console.log("OK cron fail-closed when secret unset");
+  console.log("OK cron rejects when env unset and vault misses");
 
   const secret = "step18-test-cron-secret";
   await withEnvAsync({ CRON_SHARED_SECRET: secret }, async () => {

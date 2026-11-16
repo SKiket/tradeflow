@@ -1,6 +1,6 @@
-import { NextResponse, type NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 
-import { authorizeCronRequest } from "@/lib/cron/auth";
+import { runCronJob } from "@/lib/cron/run";
 import { purgeDueShops } from "@/lib/privacy/shop-lifecycle";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -8,21 +8,15 @@ export const runtime = "nodejs";
 
 /**
  * After grace period, permanently erase closed shops.
- * Authenticated by CRON_SHARED_SECRET. Fail-closed if unset.
+ * Authenticated by CRON_SHARED_SECRET.
  * ?dry_run=true → counts only.
  */
 export async function POST(request: NextRequest) {
-  if (!(await authorizeCronRequest(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const dryRun =
-    request.nextUrl.searchParams.get("dry_run") === "true" ||
-    request.nextUrl.searchParams.get("dry-run") === "true";
-
-  try {
-    const supabase = createAdminClient();
-    const summary = await purgeDueShops(supabase, { dryRun });
+  return runCronJob(request, "shop-purge", async () => {
+    const dryRun =
+      request.nextUrl.searchParams.get("dry_run") === "true" ||
+      request.nextUrl.searchParams.get("dry-run") === "true";
+    const summary = await purgeDueShops(createAdminClient(), { dryRun });
     console.info("[cron/shop-purge] complete", {
       dryRun,
       dueTotal: summary.dueTotal,
@@ -32,10 +26,6 @@ export async function POST(request: NextRequest) {
       skipped: summary.skipped,
       failed: summary.failed,
     });
-    return NextResponse.json({ ok: true, dryRun, ...summary });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error("[cron/shop-purge] failed", message);
-    return NextResponse.json({ error: "Purge failed" }, { status: 500 });
-  }
+    return { dryRun, ...summary };
+  });
 }
