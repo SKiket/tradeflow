@@ -48,8 +48,12 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
 
   if (!order) notFound();
 
-  const [{ data: items }, { data: history }, { data: orderDisputes }] =
-    await Promise.all([
+  const [
+    { data: items },
+    { data: history },
+    { data: orderDisputes },
+    { data: fraudWarnings },
+  ] = await Promise.all([
       supabase
         .from("order_items")
         .select(
@@ -70,6 +74,14 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
         .eq("order_id", orderId)
         .eq("business_id", businessId)
         .is("closed_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1),
+      supabase
+        .from("fraud_warnings")
+        .select("id, actionable, status")
+        .eq("order_id", orderId)
+        .eq("business_id", businessId)
+        .eq("status", "open")
         .order("created_at", { ascending: false })
         .limit(1),
     ]);
@@ -148,8 +160,33 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
             >
               Review dispute
             </Link>
-            . Refunding while a dispute is open can lead to double loss.
+            . Refunding while a dispute is open is not offered — Stripe blocks
+            it and it risks paying twice.
           </p>
+        ) : null}
+        {(fraudWarnings ?? [])[0] ? (
+          <div
+            role="status"
+            className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+          >
+            {(fraudWarnings ?? [])[0]!.actionable ? (
+              <>
+                <p className="font-medium">Early fraud warning</p>
+                <p className="mt-1">
+                  The card network flagged this payment as possibly fraudulent.
+                  Refunding now usually avoids a £20 dispute fee and a lost
+                  sale. If you have already dispatched the goods and have proof
+                  of delivery, you may prefer to keep the order. Use Refund
+                  below — nothing is refunded automatically.
+                </p>
+              </>
+            ) : (
+              <p>
+                An early fraud warning was recorded for this payment
+                (information only — not marked actionable).
+              </p>
+            )}
+          </div>
         ) : null}
         {deliveryIssue ? (
           <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">

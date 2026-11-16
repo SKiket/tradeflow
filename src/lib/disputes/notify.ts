@@ -157,3 +157,77 @@ export async function notifySellerDisputeAutoSubmitted(params: {
     },
   });
 }
+
+function formatPence(pence: number): string {
+  return `£${(Math.max(0, pence) / 100).toFixed(2)}`;
+}
+
+/** Recovery state change: recovered / partial / unpaid. */
+export async function notifySellerDisputeCharge(params: {
+  supabase: SupabaseClient;
+  businessId: string;
+  orderRef: string;
+  recoveryStatus: string;
+  takenPence: number;
+  owedPence: number;
+  viaReversalPence: number;
+  viaDebitPence: number;
+  viaInvoicePence: number;
+}): Promise<DisputeNotifyResult> {
+  const howParts: string[] = [];
+  if (params.viaReversalPence > 0) {
+    howParts.push(`transfer ${formatPence(params.viaReversalPence)}`);
+  }
+  if (params.viaDebitPence > 0) {
+    howParts.push(`balance debit ${formatPence(params.viaDebitPence)}`);
+  }
+  if (params.viaInvoicePence > 0) {
+    howParts.push(`card ${formatPence(params.viaInvoicePence)}`);
+  }
+  const how = howParts.length > 0 ? howParts.join(", ") : "none yet";
+  const owed = formatPence(params.owedPence);
+  const taken = formatPence(params.takenPence);
+
+  let text: string;
+  if (params.recoveryStatus === "recovered") {
+    text = `For the lost payment dispute on order ${params.orderRef}, we recovered ${taken} (${how}). Nothing further is owed. Open your TradeFlow dashboard for details.`;
+  } else if (params.recoveryStatus === "partial") {
+    text = `For the lost payment dispute on order ${params.orderRef}, we recovered ${taken} (${how}). ${owed} remains owed. Update your card in Manage billing to clear the balance.`;
+  } else {
+    text = `For the lost payment dispute on order ${params.orderRef}, ${owed} is still owed (${how}). Update your card or pay to resume taking orders. Open Manage billing in TradeFlow.`;
+  }
+
+  return sendSellerDisputeMessage({
+    supabase: params.supabase,
+    businessId: params.businessId,
+    text,
+    label: "dispute charge recovery",
+    template: {
+      key: "seller_dispute_charge",
+      variables: {
+        orderRef: params.orderRef,
+        amount: taken,
+        method: how.slice(0, 60),
+        owed,
+      },
+    },
+  });
+}
+
+export async function notifySellerFraudWarning(params: {
+  supabase: SupabaseClient;
+  businessId: string;
+  orderRef: string;
+}): Promise<DisputeNotifyResult> {
+  const text = `A card network early fraud warning was raised for order ${params.orderRef}. Refunding now usually avoids a dispute fee. Open the order in your TradeFlow dashboard to decide.`;
+  return sendSellerDisputeMessage({
+    supabase: params.supabase,
+    businessId: params.businessId,
+    text,
+    label: "fraud warning",
+    template: {
+      key: "seller_fraud_warning",
+      variables: { orderRef: params.orderRef },
+    },
+  });
+}

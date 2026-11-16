@@ -4,12 +4,17 @@ import { ArrowLeft } from "lucide-react";
 
 import {
   disputeReasonLabel,
+  getDisputeFeePence,
   isOpenDisputeStatus,
 } from "@/lib/disputes/constants";
+import { isInServiceWindow } from "@/lib/channels/service-window";
+import { getCustomerPreferredLanguage } from "@/lib/i18n/language";
 import { formatDateTime, formatPence } from "@/lib/orders/display";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 import { requireSeller } from "../../require-seller";
 import { DisputeActions } from "./dispute-actions";
+import { DisputeResolution } from "./dispute-resolution";
 
 interface PageProps {
   params: Promise<{ disputeId: string }>;
@@ -28,6 +33,13 @@ function countdown(dueBy: string | null): string {
   return `${mins} minutes left`;
 }
 
+const PREFILL = {
+  en: (orderRef: string) =>
+    `I'm sorry about the problem with order ${orderRef}. I can offer a refund or a replacement once the dispute with your bank is withdrawn. If you are happy with that, please ask your bank to withdraw the dispute, and I will sort this out afterwards.`,
+  fr: (orderRef: string) =>
+    `Je suis désolé(e) pour le problème concernant la commande ${orderRef}. Je peux proposer un remboursement ou un remplacement une fois le litige retiré auprès de votre banque. Si cela vous convient, demandez à votre banque de retirer le litige, puis je réglerai la suite.`,
+} as const;
+
 export default async function DisputeDetailPage({ params }: PageProps) {
   const { disputeId } = await params;
   const { supabase, businessId } = await requireSeller();
@@ -35,7 +47,7 @@ export default async function DisputeDetailPage({ params }: PageProps) {
   const { data: dispute } = await supabase
     .from("disputes")
     .select(
-      "id, order_id, amount_pence, currency, reason, status, evidence_due_by, evidence_status, evidence_submitted_at, submitted_by, outcome, stripe_fee_pence, recovered_pence, unrecovered_pence, seller_notes, funds_withdrawn_at, funds_reinstated_at, created_at, closed_at, orders(id, order_ref)",
+      "id, order_id, amount_pence, currency, reason, status, evidence_due_by, evidence_status, evidence_submitted_at, submitted_by, outcome, stripe_fee_pence, fee_pence, recovered_pence, unrecovered_pence, recovered_via_reversal_pence, recovered_via_account_debit_pence, recovered_via_invoice_pence, recovery_status, seller_notes, funds_withdrawn_at, funds_reinstated_at, accepted_at, created_at, closed_at, orders(id, order_ref, customer_id)",
     )
     .eq("id", disputeId)
     .eq("business_id", businessId)
@@ -44,15 +56,44 @@ export default async function DisputeDetailPage({ params }: PageProps) {
   if (!dispute) notFound();
 
   const orders = dispute.orders as
-    | { id: string; order_ref: string }
-    | { id: string; order_ref: string }[]
+    | { id: string; order_ref: string; customer_id: string | null }
+    | { id: string; order_ref: string; customer_id: string | null }[]
     | null;
   const order = Array.isArray(orders) ? orders[0] : orders;
   const open = isOpenDisputeStatus(dispute.status as string);
+  const accepted = Boolean(dispute.accepted_at);
+  const evidenceSubmitted =
+    dispute.evidence_status === "submitted" ||
+    Boolean(dispute.evidence_submitted_at);
   const canEdit =
     open &&
+    !accepted &&
     dispute.evidence_status !== "submitted" &&
     !dispute.evidence_submitted_at;
+
+  const feePence =
+    (dispute.fee_pence as number | null) ??
+    (dispute.stripe_fee_pence as number | null) ??
+    getDisputeFeePence();
+
+  let prefill = PREFILL.en(order?.order_ref ?? "your order");
+  let inWindow = false;
+  if (order?.customer_id) {
+    const admin = createAdminClient();
+    const lang = await getCustomerPreferredLanguage(admin, order.customer_id);
+    prefill = PREFILL[lang === "fr" ? "fr" : "en"](
+      order.order_ref ?? "your order",
+    );
+    const { data: customer } = await supabase
+      .from("customers")
+      .select("last_customer_message_at")
+      .eq("id", order.customer_id)
+      .maybeSingle();
+    inWindow = isInServiceWindow({
+      last_customer_message_at:
+        (customer?.last_customer_message_at as string | null) ?? null,
+    });
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -79,6 +120,7 @@ export default async function DisputeDetailPage({ params }: PageProps) {
           <dd className="font-medium">
             {open ? "Open" : "Closed"}
             {dispute.outcome ? ` — ${dispute.outcome}` : ""}
+            {accepted ? " (accepted)" : ""}
           </dd>
         </div>
         <div>
@@ -114,7 +156,31 @@ export default async function DisputeDetailPage({ params }: PageProps) {
             </dd>
           </div>
         ) : null}
+        {dispute.recovery_status ? (
+          <div>
+            <dt className="text-muted-foreground">Recovery</dt>
+            <dd className="font-medium">{dispute.recovery_status as string}</dd>
+          </div>
+        ) : null}
       </dl>
+
+      {open ? (
+        <DisputeResolution
+          disputeId={dispute.id as string}
+          amountPence={dispute.amount_pence as number}
+          feePence={feePence}
+          deadlineLabel={
+            dispute.evidence_due_by
+              ? formatDateTime(dispute.evidence_due_by as string)
+              : "n/a"
+          }
+          canAct={open}
+          accepted={accepted}
+          evidenceSubmitted={evidenceSubmitted}
+          prefillMessage={prefill}
+          inServiceWindow={inWindow}
+        />
+      ) : null}
 
       <div className="rounded-lg border bg-muted/30 p-4 text-sm">
         <p className="font-medium">Evidence pack preview</p>
@@ -136,14 +202,24 @@ export default async function DisputeDetailPage({ params }: PageProps) {
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-950">
           <p className="font-medium">This dispute was lost</p>
           <p className="mt-1">
-            Recovered from your connected account:{" "}
+            Recovered via transfer:{" "}
+            {formatPence(
+              (dispute.recovered_via_reversal_pence as number) ?? 0,
+            )}
+            ; account debit:{" "}
+            {formatPence(
+              (dispute.recovered_via_account_debit_pence as number) ?? 0,
+            )}
+            ; card invoice:{" "}
+            {formatPence(
+              (dispute.recovered_via_invoice_pence as number) ?? 0,
+            )}
+            . Total recovered:{" "}
             {formatPence((dispute.recovered_pence as number) ?? 0)}.
             {(dispute.unrecovered_pence as number) > 0
-              ? ` Unrecovered (beyond what Stripe could reverse from the original transfer): ${formatPence(dispute.unrecovered_pence as number)}.`
+              ? ` Still owed: ${formatPence(dispute.unrecovered_pence as number)}.`
               : null}
-            {dispute.stripe_fee_pence
-              ? ` Stripe dispute fee recorded: ${formatPence(dispute.stripe_fee_pence as number)}.`
-              : null}
+            {` Dispute fee used for recovery: ${formatPence(feePence)}.`}
           </p>
         </div>
       ) : null}
@@ -156,7 +232,8 @@ export default async function DisputeDetailPage({ params }: PageProps) {
             {dispute.funds_reinstated_at
               ? ` (${formatDateTime(dispute.funds_reinstated_at as string)})`
               : ""}
-            . No recovery was taken from your payouts.
+            . No recovery was taken from your account. Note: under UK Stripe
+            pricing the dispute-received fee is not returned.
           </p>
         </div>
       ) : null}

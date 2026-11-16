@@ -92,7 +92,7 @@ export const fetchPublicStorefront = cache(
     const { data: business, error: businessError } = await supabase
       .from("businesses")
       .select(
-        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text, stripe_subscription_status, closed_at",
+        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text, stripe_subscription_status, closed_at, dispute_balance_hold",
       )
       .eq("slug", trimmed)
       .is("deleted_at", null)
@@ -191,6 +191,8 @@ export const fetchPublicStorefront = cache(
         stripe_subscription_status:
           (business.stripe_subscription_status as string | null) ?? null,
         closed_at: (business.closed_at as string | null) ?? null,
+        dispute_balance_hold:
+          (business.dispute_balance_hold as boolean | null) ?? false,
       }),
       shopClosed: false,
       hasReturnsPolicy: Boolean(

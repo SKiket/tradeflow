@@ -325,7 +325,9 @@ async function processPersistedInbound(
 
       const { data: billingRow } = await supabase
         .from("businesses")
-        .select("stripe_subscription_status, closed_at")
+        .select(
+          "stripe_subscription_status, closed_at, dispute_balance_hold",
+        )
         .eq("id", result.message.businessId)
         .maybeSingle();
       const shopClosed = Boolean(billingRow?.closed_at);
@@ -335,6 +337,8 @@ async function processPersistedInbound(
           stripe_subscription_status:
             (billingRow?.stripe_subscription_status as string | null) ?? null,
           closed_at: (billingRow?.closed_at as string | null) ?? null,
+          dispute_balance_hold:
+            (billingRow?.dispute_balance_hold as boolean | null) ?? false,
         })
       ) {
         try {
@@ -563,6 +567,49 @@ async function processPersistedInbound(
         messageText,
         detectedLanguage: heuristicLanguage(messageText),
       });
+
+      // Payment-complaint phrases (EN/FR): urgent flag + fixed reply; skip AI.
+      try {
+        const { maybeHandlePaymentComplaint } = await import(
+          "@/lib/support/handle-complaint"
+        );
+        const complaint = await maybeHandlePaymentComplaint({
+          supabase,
+          businessId: result.message.businessId,
+          customerId: result.message.customerId,
+          customerPhoneE164: result.message.customerPhone,
+          threadId: result.message.threadId,
+          messageText,
+        });
+        if (complaint.matched) {
+          console.info("[whatsapp] payment complaint handled", {
+            messageId: result.messageId,
+            orderId: complaint.orderId,
+            buyerReplied: complaint.buyerReplied,
+          });
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              handled: true,
+              messageId: result.messageId,
+              businessId: result.message.businessId,
+              customerId: result.message.customerId,
+              threadId: result.message.threadId,
+              paymentComplaint: true,
+              ...(voiceOutcome ? { voice: voiceOutcome } : {}),
+            },
+          };
+        }
+      } catch (complaintError) {
+        console.error("[whatsapp] complaint detection failed — continuing", {
+          messageId: result.messageId,
+          error:
+            complaintError instanceof Error
+              ? complaintError.message
+              : String(complaintError),
+        });
+      }
 
       // Intercept yes/no on PENDING_CONFIRMATION, and cancel on
       // AWAITING_PAYMENT, BEFORE order_parse so corrections still parse.

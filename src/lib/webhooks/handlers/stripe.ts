@@ -1,6 +1,8 @@
 import type Stripe from "stripe";
 
+import { handleEarlyFraudWarning } from "@/lib/disputes/fraud-warnings";
 import { handleDisputeEvent } from "@/lib/disputes/handle-dispute-event";
+import { handleDisputeRecoveryInvoice } from "@/lib/disputes/recover";
 import { fulfilPaidOrder, notifyBuyerPaymentFailed } from "@/lib/orders/fulfil-order";
 import { processRefundUpdated } from "@/lib/orders/refund-order";
 import { persistOrderShippingAddress, shippingAddressFromSession } from "@/lib/orders/shipping-address";
@@ -61,8 +63,14 @@ export async function handleStripeEvent(
         event.data.object as Stripe.Subscription,
         event.type,
       );
+    case "invoice.paid":
+      return handleInvoicePaid(event.data.object as Stripe.Invoice);
     case "invoice.payment_failed":
       return handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
+    case "radar.early_fraud_warning.created":
+      return handleEarlyFraudWarningWebhook(
+        event.data.object as Stripe.Radar.EarlyFraudWarning,
+      );
     case "charge.dispute.created":
     case "charge.dispute.updated":
     case "charge.dispute.closed":
@@ -419,9 +427,61 @@ function subscriptionIdFromInvoice(invoice: Stripe.Invoice): string | null {
   return null;
 }
 
+async function handleInvoicePaid(
+  invoice: Stripe.Invoice,
+): Promise<StripeHandlerResult> {
+  const supabase = createAdminClient();
+  const recovery = await handleDisputeRecoveryInvoice(
+    supabase,
+    invoice,
+    "invoice.paid",
+  );
+  if (recovery.handled) {
+    console.info("[stripe-webhook] dispute recovery invoice.paid", recovery);
+    return {
+      status: 200,
+      body: { ok: true, type: "invoice.paid", ...recovery },
+    };
+  }
+  // Subscription renewals sync via customer.subscription.* — acknowledge.
+  return {
+    status: 200,
+    body: { ok: true, handled: false, type: "invoice.paid", reason: "not_dispute_recovery" },
+  };
+}
+
+async function handleEarlyFraudWarningWebhook(
+  efw: Stripe.Radar.EarlyFraudWarning,
+): Promise<StripeHandlerResult> {
+  const supabase = createAdminClient();
+  const result = await handleEarlyFraudWarning(supabase, efw);
+  console.info("[stripe-webhook] early fraud warning", {
+    efwId: efw.id,
+    ...result,
+  });
+  return {
+    status: 200,
+    body: { ok: true, type: "radar.early_fraud_warning.created", ...result },
+  };
+}
+
 async function handleInvoicePaymentFailed(
   invoice: Stripe.Invoice,
 ): Promise<StripeHandlerResult> {
+  const supabase = createAdminClient();
+  const recovery = await handleDisputeRecoveryInvoice(
+    supabase,
+    invoice,
+    "invoice.payment_failed",
+  );
+  if (recovery.handled) {
+    console.info("[stripe-webhook] dispute recovery invoice.payment_failed", recovery);
+    return {
+      status: 200,
+      body: { ok: true, type: "invoice.payment_failed", ...recovery },
+    };
+  }
+
   const customerId =
     typeof invoice.customer === "string"
       ? invoice.customer

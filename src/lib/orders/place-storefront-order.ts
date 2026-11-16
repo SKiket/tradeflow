@@ -121,7 +121,9 @@ export async function placeStorefrontOrder(
 
   const { data: business, error: bizError } = await supabase
     .from("businesses")
-    .select("id, stripe_connected_account_id, stripe_charges_enabled, stripe_subscription_status")
+    .select(
+      "id, stripe_connected_account_id, stripe_charges_enabled, stripe_subscription_status, closed_at, dispute_balance_hold",
+    )
     .eq("id", businessId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -140,6 +142,9 @@ export async function placeStorefrontOrder(
     !canAcceptOrders({
       stripe_subscription_status:
         (business.stripe_subscription_status as string | null) ?? null,
+      closed_at: (business.closed_at as string | null) ?? null,
+      dispute_balance_hold:
+        (business.dispute_balance_hold as boolean | null) ?? false,
     })
   ) {
     throw new PlaceStorefrontOrderError(

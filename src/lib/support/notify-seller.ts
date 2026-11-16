@@ -107,6 +107,32 @@ export async function notifySellerOfAutoApprovedReturn(params: {
   });
 }
 
+/**
+ * WhatsApp the seller when a payment-complaint phrase is detected.
+ * Uses existing seller_needs_attention template.
+ */
+export async function notifySellerOfComplaint(params: {
+  businessId: string;
+  customerPhoneE164: string;
+  orderRef: string;
+  supabase: SupabaseClient;
+}): Promise<SellerNotifyResult> {
+  const text = `A buyer (${params.customerPhoneE164}) mentioned a payment complaint on ${params.orderRef}. Open your TradeFlow inbox to reply — do not argue about refunds in chat.`;
+  return notifySeller({
+    businessId: params.businessId,
+    text,
+    supabase: params.supabase,
+    label: "seller payment complaint",
+    template: {
+      key: "seller_needs_attention",
+      variables: {
+        buyer: params.customerPhoneE164,
+        ref: params.orderRef,
+      },
+    },
+  });
+}
+
 export type SellerDeliveryIssueKind = "returned" | "failed";
 
 /** Fixed phrases only — never free text from the carrier. */

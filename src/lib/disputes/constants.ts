@@ -4,6 +4,24 @@ export const DISPUTE_AUTO_SUBMIT_HOURS_BEFORE = 24;
 /** Reminder offsets (days before deadline). Each fires once per dispute. */
 export const DISPUTE_REMINDER_DAYS = [5, 2, 1] as const;
 
+/**
+ * UK Stripe dispute-received fee (pence). Overridable via DISPUTE_FEE_PENCE.
+ * Docs (stripe.com/gb/pricing): £20 received fee is never returned outside Mexico.
+ * A separate £20 countered fee applies when evidence is submitted and is returned if won.
+ * We recover the received fee from the seller on loss/accept; we do not charge on win.
+ */
+export function getDisputeFeePence(): number {
+  const raw = process.env.DISPUTE_FEE_PENCE;
+  if (raw != null && raw !== "") {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 2000;
+}
+
+/** @deprecated Prefer getDisputeFeePence() so env overrides apply. */
+export const DISPUTE_FEE_PENCE = 2000;
+
 export type DisputeEvidenceStatus =
   | "draft"
   | "ready"
@@ -13,6 +31,13 @@ export type DisputeEvidenceStatus =
 export type DisputeOutcome = "won" | "lost";
 
 export type DisputeSubmittedBy = "seller" | "auto";
+
+export type DisputeRecoveryStatus =
+  | "not_needed"
+  | "pending"
+  | "recovered"
+  | "partial"
+  | "unpaid";
 
 /** Stripe statuses that mean the dispute is still open / actionable. */
 export const OPEN_DISPUTE_STATUSES = [

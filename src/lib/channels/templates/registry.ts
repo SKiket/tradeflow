@@ -23,7 +23,9 @@ export type TemplateKey =
   | "seller_delivery_issue"
   | "seller_dispute_opened"
   | "seller_dispute_closed"
-  | "seller_dispute_reminder";
+  | "seller_dispute_reminder"
+  | "seller_dispute_charge"
+  | "seller_fraud_warning";
 
 export interface TemplateVariableDef {
   /** Logical name used by callers (mapped to {{n}} by position). */
@@ -237,6 +239,29 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
     bodies: {
       en: "Reminder: your response to the payment dispute for order {{1}} is due by {{2}}. Open your TradeFlow dashboard to confirm your evidence.",
       fr: "Rappel : votre réponse au litige de paiement pour la commande {{1}} est due pour le {{2}}. Ouvrez votre tableau de bord TradeFlow pour confirmer vos preuves.",
+    },
+  },
+  {
+    key: "seller_dispute_charge",
+    category: "utility",
+    variables: [
+      { name: "orderRef", sample: "TF-ABC123" },
+      { name: "amount", sample: "£45.00" },
+      { name: "method", sample: "transfer, card" },
+      { name: "owed", sample: "£0.00" },
+    ],
+    bodies: {
+      en: "For the lost payment dispute on order {{1}}, we recovered {{2}} via {{3}}. Remaining owed: {{4}}. Open your TradeFlow dashboard for details.",
+      fr: "Pour le litige de paiement perdu sur la commande {{1}}, nous avons récupéré {{2}} via {{3}}. Reste dû : {{4}}. Ouvrez votre tableau de bord TradeFlow pour plus de détails.",
+    },
+  },
+  {
+    key: "seller_fraud_warning",
+    category: "utility",
+    variables: [{ name: "orderRef", sample: "TF-ABC123" }],
+    bodies: {
+      en: "A card network early fraud warning was raised for order {{1}}. Refunding now usually avoids a dispute fee. Open the order in your TradeFlow dashboard to decide.",
+      fr: "Une alerte fraude précoce du réseau de cartes a été émise pour la commande {{1}}. Un remboursement maintenant évite souvent des frais de litige. Ouvrez la commande dans votre tableau de bord TradeFlow pour décider.",
     },
   },
 ] as const;

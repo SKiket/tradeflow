@@ -138,6 +138,17 @@ export async function initiateRefund(
     },
   });
 
+  // Mark open fraud warnings as refunded (seller-confirmed path only).
+  await supabase
+    .from("fraud_warnings")
+    .update({
+      status: "refunded",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("order_id", orderId)
+    .eq("business_id", row.business_id)
+    .eq("status", "open");
+
   const { error: ledgerError } = await supabase.from("order_refunds").insert({
     order_id: orderId,
     business_id: row.business_id,

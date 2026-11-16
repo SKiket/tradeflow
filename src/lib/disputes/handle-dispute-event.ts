@@ -11,9 +11,11 @@ import {
   notifySellerDisputeClosed,
   notifySellerDisputeOpened,
 } from "@/lib/disputes/notify";
+import { getDisputeFeePence } from "@/lib/disputes/constants";
 import {
   extractDisputeFeePence,
-  recoverLostDisputeFunds,
+  markRecoveryNotNeeded,
+  runFullDisputeRecovery,
 } from "@/lib/disputes/recover";
 import { resolveOrderForDispute } from "@/lib/disputes/resolve-order";
 
@@ -40,6 +42,7 @@ type DisputeRow = {
   funds_reinstated_at: string | null;
   stripe_transfer_reversal_id: string | null;
   stripe_fee_pence: number | null;
+  recovery_status: string | null;
 };
 
 async function loadDisputeByStripeId(
@@ -49,7 +52,7 @@ async function loadDisputeByStripeId(
   const { data, error } = await supabase
     .from("disputes")
     .select(
-      "id, business_id, order_id, status, outcome, closed_at, evidence_status, evidence_submitted_at, opened_notified_at, closed_notified_at, funds_withdrawn_at, funds_reinstated_at, stripe_transfer_reversal_id, stripe_fee_pence",
+      "id, business_id, order_id, status, outcome, closed_at, evidence_status, evidence_submitted_at, opened_notified_at, closed_notified_at, funds_withdrawn_at, funds_reinstated_at, stripe_transfer_reversal_id, stripe_fee_pence, recovery_status",
     )
     .eq("stripe_dispute_id", stripeDisputeId)
     .maybeSingle();
@@ -463,10 +466,34 @@ async function handleClosed(
       .is("closed_notified_at", null);
   }
 
-  // Recovery only on LOST, once.
-  if (outcome === "lost" && !row.stripe_transfer_reversal_id) {
-    // Re-read outcome after update.
-    await recoverLostDisputeFunds(supabase, row.id);
+  // Recovery: lost → full sequence; won/withdrawn → not_needed.
+  const terminalRecovery =
+    row.recovery_status === "recovered" ||
+    row.recovery_status === "not_needed" ||
+    row.recovery_status === "unpaid" ||
+    row.recovery_status === "partial";
+
+  if (outcome === "lost") {
+    if (!terminalRecovery || row.recovery_status === "pending" || !row.recovery_status) {
+      await runFullDisputeRecovery(supabase, row.id);
+    }
+  } else if (outcome === "won") {
+    if (!row.recovery_status || row.recovery_status === "pending") {
+      await markRecoveryNotNeeded(supabase, row.id, "won_or_withdrawn");
+    }
+  }
+
+  // Ensure fee_pence is set for audit even when Stripe BT fee differs.
+  if (!alreadyClosed) {
+    const feeConstant = getDisputeFeePence();
+    await supabase
+      .from("disputes")
+      .update({
+        fee_pence: feeConstant,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", row.id)
+      .is("fee_pence", null);
   }
 
   return {

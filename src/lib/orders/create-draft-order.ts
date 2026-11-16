@@ -102,7 +102,7 @@ export async function createDraftOrderFromParse(
 
   const { data: billing } = await supabase
     .from("businesses")
-    .select("stripe_subscription_status")
+    .select("stripe_subscription_status, closed_at, dispute_balance_hold")
     .eq("id", params.businessId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -110,6 +110,9 @@ export async function createDraftOrderFromParse(
     !canAcceptOrders({
       stripe_subscription_status:
         (billing?.stripe_subscription_status as string | null) ?? null,
+      closed_at: (billing?.closed_at as string | null) ?? null,
+      dispute_balance_hold:
+        (billing?.dispute_balance_hold as boolean | null) ?? false,
     })
   ) {
     return { action: "ignored", reason: "shop_unavailable" };

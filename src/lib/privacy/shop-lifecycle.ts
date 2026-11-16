@@ -255,6 +255,19 @@ export async function purgeClosedShop(
     };
   }
 
+  // Open disputes block purge (Step 19b / 21b). Dispute financial rows are
+  // retained (ON DELETE RESTRICT) and must not be deleted by the 30-day purge.
+  const openDisputeCheck = await businessHasOpenDispute(
+    supabase,
+    params.businessId,
+  );
+  if (openDisputeCheck.hasOpen) {
+    return {
+      ok: false,
+      error: `Cannot purge while a payment dispute is open (${openDisputeCheck.orderRefs.join(", ") || "open dispute"})`,
+    };
+  }
+
   const { data: customers } = await supabase
     .from("customers")
     .select("id, deleted_at, name")
