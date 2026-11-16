@@ -340,15 +340,30 @@ async function main() {
 
   // ---------- 3. Lost, card declined → unpaid + hold ----------
   {
-    // Swap to declining card
-    const badPm = await stripe.paymentMethods.create({
+    // Remove default payment method so the recovery invoice cannot charge.
+    const pms = await stripe.paymentMethods.list({
+      customer: customerStripeId,
       type: "card",
-      card: { token: "tok_chargeDeclined" },
+      limit: 10,
     });
-    await stripe.paymentMethods.attach(badPm.id, { customer: customerStripeId });
+    for (const pm of pms.data) {
+      try {
+        await stripe.paymentMethods.detach(pm.id);
+      } catch {
+        // ignore
+      }
+    }
     await stripe.customers.update(customerStripeId, {
-      invoice_settings: { default_payment_method: badPm.id },
+      invoice_settings: { default_payment_method: "" },
     });
+
+    // Temporarily clear Connect id so account debit is skipped (debit can
+    // otherwise take the Express balance negative under platform liability).
+    const savedConnectId = business.stripe_connected_account_id;
+    await admin
+      .from("businesses")
+      .update({ stripe_connected_account_id: null })
+      .eq("id", business.id);
 
     const paid = await createPaidOrder(business, customerId, 2500);
     const row = await insertOpenDispute({
@@ -362,10 +377,10 @@ async function main() {
       chargeId: paid.chargeId,
       amountPence: paid.amountPence,
     });
-    await sleep(2500);
+    await sleep(4000);
     const { data: d } = await admin
       .from("disputes")
-      .select("recovery_status, unrecovered_pence")
+      .select("recovery_status, unrecovered_pence, recovery_notes")
       .eq("id", row.id)
       .maybeSingle();
     const { data: biz } = await admin
@@ -373,6 +388,7 @@ async function main() {
       .select("dispute_balance_hold, dispute_balance_owed_pence, stripe_subscription_status")
       .eq("id", business.id)
       .maybeSingle();
+    console.log("       case3 notes:", d?.recovery_notes, "unrecovered", d?.unrecovered_pence);
 
     // Inline canAcceptOrders check
     const canAccept =
@@ -385,35 +401,75 @@ async function main() {
       !canAccept;
 
     record(
-      "3a. Lost, card declined → unpaid + hold; canAcceptOrders false",
+      "3a. Lost, unpaid remainder → unpaid + hold; canAcceptOrders false",
       unpaidOk,
       `recovery=${d?.recovery_status} hold=${biz?.dispute_balance_hold} canAccept=${canAccept}`,
     );
 
-    // Restore good card and pay the open invoice if any
+    await admin
+      .from("businesses")
+      .update({ stripe_connected_account_id: savedConnectId })
+      .eq("id", business.id);
+    business.stripe_connected_account_id = savedConnectId;
+
+    // Restore good card and charge unrecovered remainder via a fresh invoice.
+    const restoredPm = await stripe.paymentMethods.create({
+      type: "card",
+      card: { token: "tok_visa" },
+    });
+    await stripe.paymentMethods.attach(restoredPm.id, {
+      customer: customerStripeId,
+    });
     await stripe.customers.update(customerStripeId, {
-      invoice_settings: { default_payment_method: goodPm.id },
+      invoice_settings: { default_payment_method: restoredPm.id },
     });
     const { data: d2 } = await admin
       .from("disputes")
-      .select("recovery_invoice_id")
+      .select("recovery_invoice_id, unrecovered_pence")
       .eq("id", row.id)
       .maybeSingle();
-    if (d2?.recovery_invoice_id) {
+    const remainder = d2?.unrecovered_pence ?? 0;
+    if (remainder > 0) {
       try {
-        const inv = await stripe.invoices.pay(d2.recovery_invoice_id);
-        const paidPayload = JSON.stringify({
-          id: `evt_inv_${randomUUID().slice(0, 8)}`,
-          object: "event",
-          type: "invoice.paid",
-          data: { object: inv },
+        await stripe.invoiceItems.create({
+          customer: customerStripeId,
+          amount: remainder,
+          currency: "gbp",
+          description: `Dispute fee and unrecovered chargeback for order verify`,
+          metadata: {
+            dispute_id: row.id,
+            business_id: business.id,
+            purpose: "lost_dispute_recovery",
+          },
         });
-        await postStripeEvent(paidPayload);
-        await sleep(1000);
+        const invoice = await stripe.invoices.create({
+          customer: customerStripeId,
+          collection_method: "charge_automatically",
+          metadata: {
+            dispute_id: row.id,
+            business_id: business.id,
+            purpose: "lost_dispute_recovery",
+          },
+        });
+        const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+        const paidInv =
+          finalized.status === "paid"
+            ? finalized
+            : await stripe.invoices.pay(finalized.id);
+        await postStripeEvent(
+          JSON.stringify({
+            id: `evt_inv_${randomUUID().slice(0, 8)}`,
+            object: "event",
+            type: "invoice.paid",
+            data: { object: paidInv },
+          }),
+        );
+        await sleep(1500);
       } catch (e) {
-        console.log("       invoice pay after restore:", e.message);
+        console.log("       remainder invoice:", e.message);
       }
     }
+
     const { data: biz2 } = await admin
       .from("businesses")
       .select("dispute_balance_hold")

@@ -627,19 +627,18 @@ export async function runFullDisputeRecovery(
 
   const recoveredTotal = viaReversal + viaDebit + viaInvoice;
   const unrecovered = Math.max(0, owedTotal - recoveredTotal);
+  // Spec: if anything remains after invoice attempt (or invoice never paid),
+  // status is unpaid (hold). partial is reserved for invoice.paid that still
+  // leaves a shortfall after a successful card charge.
   let recoveryStatus: string;
   if (unrecovered <= 0) {
     recoveryStatus = "recovered";
+  } else if (remaining > 0) {
+    recoveryStatus = "unpaid";
   } else if (recoveredTotal > 0) {
-    recoveryStatus = remaining > 0 && invoiceId ? "unpaid" : "partial";
+    recoveryStatus = "partial";
   } else {
     recoveryStatus = "unpaid";
-  }
-  // Any positive shortfall after invoice attempt → unpaid hold.
-  if (unrecovered > 0) {
-    recoveryStatus = recoveredTotal > 0 ? "partial" : "unpaid";
-    // Spec: if invoice not paid → unpaid (hold). Prefer unpaid when card path failed.
-    if (remaining > 0) recoveryStatus = "unpaid";
   }
 
   const recoveryNotes = notes.join("; ").slice(0, 2000);
@@ -810,13 +809,18 @@ export async function handleDisputeRecoveryInvoice(
     const viaReversal = dispute.recovered_via_reversal_pence as number;
     const viaDebit = dispute.recovered_via_account_debit_pence as number;
     const viaInvoice = invoice.amount_paid ?? 0;
+    // Ignore empty/zero paid invoices — they must not flip unpaid → partial.
+    if (viaInvoice <= 0) {
+      return { handled: true, action: "ignored_zero_invoice_paid", disputeId };
+    }
     const recoveredTotal = viaReversal + viaDebit + viaInvoice;
     const unrecovered = Math.max(0, owedTotal - recoveredTotal);
+    const nextStatus = unrecovered <= 0 ? "recovered" : "partial";
 
     await supabase
       .from("disputes")
       .update({
-        recovery_status: unrecovered <= 0 ? "recovered" : "partial",
+        recovery_status: nextStatus,
         recovered_via_invoice_pence: viaInvoice,
         recovered_pence: recoveredTotal,
         unrecovered_pence: unrecovered,
