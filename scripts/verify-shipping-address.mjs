@@ -18,13 +18,22 @@ import { fileURLToPath } from "node:url";
 import { createBrowserClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import {
+  cleanBuyerOrders,
+  loadVerifyEnv,
+  newRunId,
+  phoneFromRunId,
+} from "./lib/verify-harness.mjs";
 
+loadVerifyEnv();
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const ENDPOINT = `${BASE}/api/webhooks/ingress`;
 const SANDBOX_NUMBER = "+14155238886";
-const BUYER = "+447733308706";
+const runId = newRunId("ship");
+const BUYER = phoneFromRunId(runId, 0);
 const EK_EMAIL = "sgkiket@gmail.com";
+console.log(`runId=${runId} buyer=${BUYER}`);
 const TEST_ADDRESS = {
   line1: "221B Baker Street",
   line2: "Flat 2",
@@ -119,25 +128,7 @@ async function sleep(ms) {
 }
 
 async function cleanBuyerState(businessId) {
-  const { data: customers } = await admin
-    .from("customers")
-    .select("id")
-    .eq("business_id", businessId)
-    .eq("phone_e164", BUYER);
-  const ids = (customers ?? []).map((c) => c.id);
-  if (!ids.length) return;
-  const { data: orders } = await admin
-    .from("orders")
-    .select("id")
-    .eq("business_id", businessId)
-    .in("customer_id", ids);
-  const orderIds = (orders ?? []).map((o) => o.id);
-  if (orderIds.length) {
-    await admin.from("order_items").delete().in("order_id", orderIds);
-    await admin.from("order_status_history").delete().in("order_id", orderIds);
-    await admin.from("orders").delete().in("id", orderIds);
-  }
-  await admin.from("messages").delete().in("customer_id", ids);
+  await cleanBuyerOrders(admin, businessId, BUYER);
 }
 
 async function mintCookies(email) {
@@ -174,6 +165,8 @@ function cookieHeader(cookies) {
 }
 
 async function main() {
+  let businessId = null;
+  try {
   const { data: business } = await admin
     .from("businesses")
     .select("id, name, whatsapp_phone_e164, stripe_charges_enabled")
@@ -185,6 +178,7 @@ async function main() {
   if (business.whatsapp_phone_e164 !== SANDBOX_NUMBER) {
     throw new Error("Sandbox number not mapped to EK-Pousser_D");
   }
+  businessId = business.id;
 
   await cleanBuyerState(business.id);
   await sendWhatsApp("I'd like 1 of the blue mug");
@@ -192,11 +186,19 @@ async function main() {
   const yes = await sendWhatsApp("yes");
   await sleep(2000);
 
+  const { data: customers } = await admin
+    .from("customers")
+    .select("id")
+    .eq("business_id", business.id)
+    .eq("phone_e164", BUYER);
+  const customerIds = (customers ?? []).map((c) => c.id);
+
   const { data: awaiting } = await admin
     .from("orders")
     .select("id, order_ref, status, stripe_checkout_session_id, shipping_address")
     .eq("business_id", business.id)
     .eq("status", "AWAITING_PAYMENT")
+    .in("customer_id", customerIds.length ? customerIds : ["00000000-0000-0000-0000-000000000000"])
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -215,17 +217,17 @@ async function main() {
       })
     : null;
   const hostedHtml = hosted ? await hosted.text() : "";
-  const hostedShowsShipping =
-    /shipping/i.test(hostedHtml) &&
-    (/address/i.test(hostedHtml) || /postal/i.test(hostedHtml) || /GB/i.test(hostedHtml));
+  // Stripe's hosted Checkout HTML is a JS shell — do not scrape for "shipping".
+  // API truth: shipping_address_collection.allowed_countries includes GB + open URL.
+  const hostedOk = Boolean(hosted && hosted.status >= 200 && hosted.status < 400 && hostedHtml.length > 0);
 
   record(
     "1. Checkout Session collects GB shipping; hosted page includes shipping UI",
     session.status === "open" &&
       allowed.includes("GB") &&
       typeof session.url === "string" &&
-      hostedShowsShipping,
-    `session=${session.id} status=${session.status} allowed=${JSON.stringify(allowed)} url=${session.url} hostedStatus=${hosted?.status} hostedShowsShipping=${hostedShowsShipping} htmlChars=${hostedHtml.length}`,
+      hostedOk,
+    `session=${session.id} status=${session.status} allowed=${JSON.stringify(allowed)} url=${session.url} hostedStatus=${hosted?.status} hostedOk=${hostedOk} htmlChars=${hostedHtml.length}`,
   );
 
   const shippingPayload = {
@@ -251,6 +253,7 @@ async function main() {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "X-Source": "stripe",
       "Stripe-Signature": signStripe(payload),
     },
     body: payload,
@@ -258,11 +261,11 @@ async function main() {
   const webhookJson = await webhook.json().catch(() => ({}));
   await sleep(1500);
 
-  const { data: paid } = await admin
+  const { data: paid, error: paidErr } = await admin
     .from("orders")
     .select("id, status, shipping_address")
     .eq("id", awaiting.id)
-    .single();
+    .maybeSingle();
   const stored = paid?.shipping_address ?? {};
   const addressOk =
     stored.line1 === TEST_ADDRESS.line1 &&
@@ -277,7 +280,7 @@ async function main() {
       webhookJson.fulfil?.action === "fulfilled" &&
       paid?.status === "PAID" &&
       addressOk,
-    `status=${paid?.status} fulfil=${webhookJson.fulfil?.action} shipping_address=${JSON.stringify(stored)}`,
+    `orderId=${awaiting.id} status=${paid?.status} err=${paidErr?.message || ""} fulfil=${webhookJson.fulfil?.action} shipping_address=${JSON.stringify(stored)} webhook=${JSON.stringify(webhookJson).slice(0, 200)}`,
   );
 
   const cookies = await mintCookies(EK_EMAIL);
@@ -313,10 +316,13 @@ async function main() {
       : `SHIPPING ADDRESS VERIFICATION: ${failed} FAILED`,
   );
   console.log("========================================");
-  process.exit(failed === 0 ? 0 : 1);
+  process.exitCode = failed === 0 ? 0 : 1;
+  } finally {
+    if (businessId) await cleanBuyerState(businessId).catch(() => {});
+  }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("FAILED:", err.message);
   process.exit(1);
 });

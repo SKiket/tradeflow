@@ -211,22 +211,12 @@ async function main() {
     .is("deleted_at", null)
     .ilike("description", "%[order_parse_seed]%");
 
-  if (!products?.length) {
-    const { spawnSync } = await import("node:child_process");
-    spawnSync("node", ["scripts/seed-ek-pousser-catalog.mjs"], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    const refreshed = await admin
-      .from("products")
-      .select(
-        "id, name, price_pence, product_variants(id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at)",
-      )
-      .eq("business_id", business.id)
-      .eq("active", true)
-      .is("deleted_at", null)
-      .ilike("description", "%[order_parse_seed]%");
-    products = refreshed.data;
+  if (
+    !products?.length ||
+    !(products ?? []).some((p) => (p.product_variants ?? []).some((v) => !v.deleted_at))
+  ) {
+    const { ensureSeedCatalog } = await import("./lib/verify-harness.mjs");
+    products = await ensureSeedCatalog(admin, business.id);
   }
 
   const blueMug = products.find((p) => /blue mug/i.test(p.name));

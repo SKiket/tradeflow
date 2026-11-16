@@ -119,6 +119,12 @@ async function cleanBuyerState(businessId) {
     .in("customer_id", ids);
   const orderIds = (orders ?? []).map((o) => o.id);
   if (orderIds.length) {
+    await admin.from("order_refunds").delete().in("order_id", orderIds);
+    await admin.from("fraud_warnings").delete().in("order_id", orderIds);
+    await admin
+      .from("disputes")
+      .update({ order_id: null })
+      .in("order_id", orderIds);
     await admin.from("order_items").delete().in("order_id", orderIds);
     await admin.from("order_status_history").delete().in("order_id", orderIds);
     await admin.from("orders").delete().in("id", orderIds);

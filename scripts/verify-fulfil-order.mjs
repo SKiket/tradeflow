@@ -11,11 +11,18 @@
  *   node scripts/verify-fulfil-order.mjs
  */
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import {
+  createAdmin,
+  deleteOrdersByIds,
+  ensureSeedCatalog,
+  hashTag,
+  liveVariants,
+  loadVerifyEnv,
+  newRunId,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
@@ -23,24 +30,14 @@ const ENDPOINT = `${BASE}/api/webhooks/ingress`;
 const BUYER = "+447733308706";
 const SELLER = process.env.SELLER_PHONE ?? "+447733308706";
 
-function loadEnv() {
-  const env = {};
-  for (const line of readFileSync(resolve(root, ".env.local"), "utf8").split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const eq = t.indexOf("=");
-    if (eq === -1) continue;
-    env[t.slice(0, eq)] = t.slice(eq + 1);
-  }
-  return env;
-}
-
-const env = loadEnv();
-const WEBHOOK_SECRET = env.STRIPE_WEBHOOK_SECRET;
-const admin = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
+const env = loadVerifyEnv();
+const WEBHOOK_SECRET = env.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET;
+const admin = createAdmin();
+const stripe = new Stripe(env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2026-06-24.dahlia",
 });
-const stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: "2026-06-24.dahlia" });
+const runId = newRunId("fulfil");
+const createdOrderIds = [];
 
 const results = [];
 const eventLog = [];
@@ -102,7 +99,7 @@ async function getVariantState(variantId) {
 }
 
 async function createAwaitingPaymentOrder(businessId, customerId, threadId, variantId, unitPrice, qty = 1) {
-  const orderRef = `TF-TEST-${Date.now().toString(16).toUpperCase()}`;
+  const orderRef = `TF${hashTag(runId).slice(0, 6)}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`.toUpperCase().slice(0, 32);
   const total = unitPrice * qty;
 
   const { data: business } = await admin
@@ -126,6 +123,7 @@ async function createAwaitingPaymentOrder(businessId, customerId, threadId, vari
     .select("id, order_ref")
     .single();
   if (orderErr || !order) throw new Error(orderErr?.message ?? "order create failed");
+  createdOrderIds.push(order.id);
 
   await admin.from("order_items").insert({
     order_id: order.id,
@@ -135,9 +133,17 @@ async function createAwaitingPaymentOrder(businessId, customerId, threadId, vari
     unit_price_pence: unitPrice,
   });
 
+  const { data: cur } = await admin
+    .from("product_variants")
+    .select("reserved_quantity, track_inventory")
+    .eq("id", variantId)
+    .single();
   await admin
     .from("product_variants")
-    .update({ reserved_quantity: qty })
+    .update({
+      reserved_quantity: (cur?.reserved_quantity ?? 0) + qty,
+      track_inventory: true,
+    })
     .eq("id", variantId);
 
   const session = await stripe.checkout.sessions.create({
@@ -181,6 +187,7 @@ async function countOutboundMessages(customerId, pattern) {
 }
 
 async function main() {
+  console.log(`runId=${runId}`);
   const { data: business } = await admin
     .from("businesses")
     .select("id, name, stripe_connected_account_id, stripe_charges_enabled")
@@ -203,17 +210,17 @@ async function main() {
     .maybeSingle();
   if (!customer) throw new Error("Buyer customer not found — run verify-confirm-payment first");
 
-  const { data: products } = await admin
-    .from("products")
-    .select("id, price_pence, product_variants(id, deleted_at)")
-    .eq("business_id", business.id)
-    .ilike("description", "%[order_parse_seed]%")
-    .limit(1);
-  const variant = (products?.[0]?.product_variants ?? []).find((v) => !v.deleted_at);
+  let variant;
+  let unitPrice;
+  try {
+  const products = await ensureSeedCatalog(admin, business.id, {
+    select: "id, price_pence, product_variants(id, deleted_at)",
+  });
+  variant = liveVariants(products[0])[0];
   if (!variant) throw new Error("No catalog variant");
+  unitPrice = products[0].price_pence;
 
   const threadId = crypto.randomUUID();
-  const unitPrice = products[0].price_pence;
 
   await admin
     .from("product_variants")
@@ -444,10 +451,21 @@ async function main() {
 
   const allPassed = results.every((r) => r.passed);
   console.log(allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
-  process.exit(allPassed ? 0 : 1);
+  return allPassed ? 0 : 1;
+  } finally {
+    await deleteOrdersByIds(admin, createdOrderIds);
+    if (variant?.id) {
+      await admin
+        .from("product_variants")
+        .update({ reserved_quantity: 0 })
+        .eq("id", variant.id);
+    }
+  }
 }
 
-main().catch((err) => {
-  console.error("FAILED:", err.message);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error("FAILED:", err.message);
+    process.exit(1);
+  });

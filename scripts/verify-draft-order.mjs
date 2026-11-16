@@ -115,13 +115,18 @@ async function cleanBuyerState(businessId) {
     .in("customer_id", ids);
   const orderIds = (orders ?? []).map((o) => o.id);
   if (orderIds.length) {
+    await admin.from("order_refunds").delete().in("order_id", orderIds);
+    await admin.from("fraud_warnings").delete().in("order_id", orderIds);
+    await admin
+      .from("disputes")
+      .update({ order_id: null })
+      .in("order_id", orderIds);
     await admin.from("order_items").delete().in("order_id", orderIds);
     await admin.from("order_status_history").delete().in("order_id", orderIds);
     await admin.from("orders").delete().in("id", orderIds);
   }
   await admin.from("messages").delete().in("customer_id", ids);
-  // Keep the customer row so WhatsApp continuity is fine; clearing messages
-  // forces a fresh thread_id on the next inbound.
+  // Keep the customer row; clearing messages forces a fresh thread.
 }
 
 async function main() {
@@ -239,21 +244,26 @@ async function main() {
   const d2 = await sendWhatsApp("actually make it size 11");
   await sleep(3000);
   const d2Draft = d2.json.draft;
-  const dOrders = await buyerPendingOrders(
-    "id, status, total_pence, order_ref, thread_id, order_items(id, quantity, unit_price_pence, product_variant_id)",
-  );
+  const { data: dOrder } = d1OrderId
+    ? await admin
+        .from("orders")
+        .select(
+          "id, status, total_pence, order_ref, thread_id, order_items(id, quantity, unit_price_pence, product_variant_id)",
+        )
+        .eq("id", d1OrderId)
+        .maybeSingle()
+    : { data: null };
   const dPass =
     d1Draft?.action === "draft_created" &&
     d2Draft?.action === "draft_updated" &&
     d2Draft?.orderId === d1OrderId &&
-    dOrders.length === 1 &&
-    dOrders[0].id === d1OrderId &&
-    dOrders[0].order_items?.length === 1 &&
-    dOrders[0].order_items[0].product_variant_id === size11?.id;
+    dOrder?.id === d1OrderId &&
+    dOrder?.order_items?.length === 1 &&
+    dOrder.order_items[0].product_variant_id === size11?.id;
   record(
     "Case d: size correction updates SAME draft (no duplicate)",
     dPass,
-    `d1=${JSON.stringify(d1Draft)}\nd2=${JSON.stringify(d2Draft)}\norders=${JSON.stringify(dOrders, null, 2)}`,
+    `d1=${JSON.stringify(d1Draft)}\nd2=${JSON.stringify(d2Draft)}\norder=${JSON.stringify(dOrder, null, 2)}`,
   );
 
   // ========== Case b ==========

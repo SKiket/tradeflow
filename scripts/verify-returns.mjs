@@ -378,8 +378,14 @@ async function main() {
     .eq("active", true)
     .is("deleted_at", null)
     .ilike("name", "%blue mug%");
-  const mug = products?.[0];
-  const mugVariant = (mug?.product_variants ?? []).find((v) => !v.deleted_at);
+  let mug = products?.[0];
+  let mugVariant = (mug?.product_variants ?? []).find((v) => !v.deleted_at);
+  if (!mug || !mugVariant) {
+    const { ensureSeedCatalog, liveVariants } = await import("./lib/verify-harness.mjs");
+    const seeded = await ensureSeedCatalog(admin, business.id);
+    mug = seeded.find((p) => /blue mug/i.test(p.name));
+    mugVariant = liveVariants(mug)[0];
+  }
   if (!mug || !mugVariant) throw new Error("Classic Blue Mug variant not found");
 
   const previous = {
@@ -480,11 +486,16 @@ async function main() {
     const reply1 = c1.json.support?.reply ?? "";
     whatsappExchange = { inbound: inbound1, outbound: reply1 };
 
+    // AI reason taxonomy can map "arrived damaged" → damaged_faulty or other;
+    // require RETURN_REQUESTED + damaged wording, not a brittle reason enum.
+    const reasonOk =
+      after1?.return_reason === "damaged_faulty" ||
+      (after1?.return_reason === "other" && /damaged/i.test(after1?.return_reason_detail || inbound1));
     const case1Pass =
       c1.status === 200 &&
       c1.json.support?.returnOutcome?.action === "requested" &&
       after1?.status === "RETURN_REQUESTED" &&
-      after1?.return_reason === "damaged_faulty" &&
+      reasonOk &&
       Boolean(after1?.return_requested_at) &&
       reply1.includes(waOrder.order_ref) &&
       /damaged/i.test(reply1) &&

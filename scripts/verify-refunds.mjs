@@ -12,37 +12,35 @@
  *   node scripts/verify-refunds.mjs
  */
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import {
+  createAdmin,
+  deleteOrdersByIds,
+  ensureSeedCatalog,
+  hashTag,
+  liveVariants,
+  loadVerifyEnv,
+  newRunId,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const ENDPOINT = `${BASE}/api/webhooks/ingress`;
 const BUYER = "+447733308706";
 
-function loadEnv() {
-  const env = {};
-  for (const line of readFileSync(resolve(root, ".env.local"), "utf8").split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const eq = t.indexOf("=");
-    if (eq === -1) continue;
-    env[t.slice(0, eq)] = t.slice(eq + 1);
-  }
-  return env;
-}
-
-const env = loadEnv();
-const url = env.NEXT_PUBLIC_SUPABASE_URL;
-const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const WEBHOOK_SECRET = env.STRIPE_WEBHOOK_SECRET;
-const admin = createClient(url, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
+const env = loadVerifyEnv();
+const url = env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const WEBHOOK_SECRET = env.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET;
+const admin = createAdmin();
+const stripe = new Stripe(env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2026-06-24.dahlia",
 });
-const stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: "2026-06-24.dahlia" });
+const runId = newRunId("refund");
+const createdOrderIds = [];
 
 const results = [];
 const eventLog = [];
@@ -148,7 +146,7 @@ async function cleanupOtherUser(email) {
 
 /** Create AWAITING_PAYMENT order + Checkout Session, confirm card payment, fulfil via webhook. */
 async function createPaidOrder(business, customer, variant, unitPrice, threadId) {
-  const orderRef = `TF-REF-${Date.now().toString(16).toUpperCase()}`;
+  const orderRef = `RF${hashTag(runId).slice(0, 6)}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`.toUpperCase().slice(0, 32);
   const total = unitPrice;
 
   const { data: order, error: orderErr } = await admin
@@ -166,6 +164,7 @@ async function createPaidOrder(business, customer, variant, unitPrice, threadId)
     .select("id, order_ref, total_pence, customer_id")
     .single();
   if (orderErr || !order) throw new Error(orderErr?.message ?? "order create failed");
+  createdOrderIds.push(order.id);
 
   await admin.from("order_items").insert({
     order_id: order.id,
@@ -246,6 +245,8 @@ async function createPaidOrder(business, customer, variant, unitPrice, threadId)
 }
 
 async function main() {
+  console.log(`runId=${runId}`);
+  let exitCode = 1;
   const { data: business } = await admin
     .from("businesses")
     .select("id, name, owner_user_id, stripe_connected_account_id, stripe_charges_enabled")
@@ -272,14 +273,11 @@ async function main() {
     .maybeSingle();
   if (!customer) throw new Error("Buyer customer not found");
 
-  const { data: products } = await admin
-    .from("products")
-    .select("id, price_pence, product_variants(id, deleted_at)")
-    .eq("business_id", business.id)
-    .ilike("description", "%[order_parse_seed]%")
-    .is("deleted_at", null)
-    .limit(1);
-  const variant = (products?.[0]?.product_variants ?? []).find((v) => !v.deleted_at);
+  try {
+  const products = await ensureSeedCatalog(admin, business.id, {
+    select: "id, price_pence, product_variants(id, deleted_at)",
+  });
+  const variant = liveVariants(products[0])[0];
   if (!variant) throw new Error("No catalog variant");
 
   const unitPrice = products[0].price_pence;
@@ -503,10 +501,16 @@ async function main() {
 
   const allPassed = results.every((r) => r.passed);
   console.log(allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
-  process.exit(allPassed ? 0 : 1);
+  exitCode = allPassed ? 0 : 1;
+  } finally {
+    await deleteOrdersByIds(admin, createdOrderIds);
+  }
+  return exitCode;
 }
 
-main().catch((err) => {
-  console.error("FAILED:", err.message);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error("FAILED:", err.message);
+    process.exit(1);
+  });

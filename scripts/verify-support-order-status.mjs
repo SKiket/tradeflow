@@ -208,15 +208,12 @@ async function main() {
     throw new Error("Sandbox number not mapped to EK-Pousser_D");
   }
 
-  const { data: products } = await admin
-    .from("products")
-    .select("id, name, price_pence, product_variants(id, label, deleted_at)")
-    .eq("business_id", business.id)
-    .eq("active", true)
-    .is("deleted_at", null)
-    .ilike("name", "%blue mug%");
-  const mug = products?.[0];
-  const mugVariant = (mug?.product_variants ?? []).find((v) => !v.deleted_at);
+  const { ensureSeedCatalog, liveVariants } = await import("./lib/verify-harness.mjs");
+  const products = await ensureSeedCatalog(admin, business.id, {
+    select: "id, name, price_pence, product_variants(id, label, deleted_at)",
+  });
+  const mug = products.find((p) => /blue mug/i.test(p.name));
+  const mugVariant = liveVariants(mug)[0];
   if (!mug || !mugVariant) throw new Error("Classic Blue Mug variant not found");
 
   const previous = {

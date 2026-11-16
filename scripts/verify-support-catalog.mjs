@@ -12,7 +12,6 @@
  *   node scripts/verify-support-catalog.mjs
  */
 import { createHmac } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,33 +124,11 @@ async function cleanBuyerState(businessId) {
 }
 
 async function ensureCatalog(businessId) {
-  const select =
-    "id, name, price_pence, product_variants(id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at)";
-  let { data: products } = await admin
-    .from("products")
-    .select(select)
-    .eq("business_id", businessId)
-    .eq("active", true)
-    .is("deleted_at", null)
-    .ilike("description", "%[order_parse_seed]%");
-  if (products?.length) return products;
-
-  console.log("No seed catalog — seeding…");
-  const seeded = spawnSync("node", ["scripts/seed-ek-pousser-catalog.mjs"], {
-    cwd: root,
-    encoding: "utf8",
+  const { ensureSeedCatalog } = await import("./lib/verify-harness.mjs");
+  return ensureSeedCatalog(admin, businessId, {
+    select:
+      "id, name, price_pence, product_variants(id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at)",
   });
-  if (seeded.status !== 0) {
-    throw new Error(seeded.stderr || seeded.stdout || "seed failed");
-  }
-  const refreshed = await admin
-    .from("products")
-    .select(select)
-    .eq("business_id", businessId)
-    .eq("active", true)
-    .is("deleted_at", null)
-    .ilike("description", "%[order_parse_seed]%");
-  return refreshed.data ?? [];
 }
 
 function liveVariants(product) {

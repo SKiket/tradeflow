@@ -117,7 +117,7 @@ async function main() {
     );
   }
 
-  const { data: products } = await admin
+  let { data: products } = await admin
     .from("products")
     .select("id, name, product_variants(id, label, deleted_at)")
     .eq("business_id", business.id)
@@ -125,6 +125,12 @@ async function main() {
     .is("deleted_at", null)
     .ilike("description", "%[order_parse_seed]%");
 
+  if (!products?.length) {
+    const { ensureSeedCatalog } = await import("./lib/verify-harness.mjs");
+    products = await ensureSeedCatalog(admin, business.id, {
+      select: "id, name, product_variants(id, label, deleted_at)",
+    });
+  }
   if (!products?.length) {
     throw new Error("No seed catalog found — run scripts/seed-ek-pousser-catalog.mjs first");
   }

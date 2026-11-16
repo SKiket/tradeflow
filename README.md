@@ -29,6 +29,30 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Verify scripts
+
+Run the suite sequentially (never in parallel) with:
+
+```bash
+# Terminal 1 — Next.js with mocked Twilio (required for WhatsApp paths)
+# Ensure .env.local contains: TWILIO_DRY_RUN=true
+npm run dev
+
+# Terminal 2
+node scripts/verify-all.mjs
+```
+
+`verify-all.mjs` cleans leftover test rows, seeds `EK-Pousser_D`, forces `TWILIO_DRY_RUN=true` for child processes (never real Twilio), runs scripts in a fixed order (never parallel), prints a PASS/FAIL/KNOWN table, and exits non-zero on unexpected failures. Known failures live in `scripts/KNOWN_FAILURES.md`.
+
+| Need | Scripts |
+| --- | --- |
+| Local Next on `BASE_URL` (default `http://localhost:3000`) + `TWILIO_DRY_RUN=true` on the server | Most WhatsApp / inbox / draft / support / returns verifies |
+| Stripe TEST keys + a charges-enabled Connect account with **transfers** capability | `verify-payment-intent`, `verify-billing*`, `verify-pricing`, `verify-refunds`, `verify-storefront-checkout`, disputes |
+| Seed catalog (`[order_parse_seed]`) via `seed-ek-pousser-catalog.mjs` | order-parse, draft-order, support-catalog, refunds, fulfil-order |
+| Cleanup leftovers | `node scripts/cleanup-verify-leftovers.mjs` (add `--delete` to remove) |
+
+Never use real Twilio sends in verifies (mock / dry-run only; test numbers in the `+447700900xxx` range).
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.

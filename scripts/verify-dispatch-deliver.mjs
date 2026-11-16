@@ -11,32 +11,29 @@
  * Requires Next.js dev server. Run:
  *   node scripts/verify-dispatch-deliver.mjs
  */
-import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
+import {
+  createAdmin,
+  deleteOrdersByIds,
+  deleteTestBusiness,
+  ensureSeedCatalog,
+  hashTag,
+  liveVariants,
+  loadVerifyEnv,
+  newRunId,
+  phoneFromRunId,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 
-function loadEnv() {
-  const env = {};
-  for (const line of readFileSync(resolve(root, ".env.local"), "utf8").split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const eq = t.indexOf("=");
-    if (eq === -1) continue;
-    env[t.slice(0, eq)] = t.slice(eq + 1);
-  }
-  return env;
-}
-
-const env = loadEnv();
-const url = env.NEXT_PUBLIC_SUPABASE_URL;
-const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const admin = createClient(url, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
+const env = loadVerifyEnv();
+const url = env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const admin = createAdmin();
+const runId = newRunId("disp");
 
 const results = [];
 let dispatchMessageText = "";
@@ -121,6 +118,11 @@ async function cleanupOtherUser(email) {
 }
 
 async function main() {
+  console.log(`runId=${runId}`);
+  const createdOrderIds = [];
+  let otherEmail = null;
+  let exitCode = 1;
+
   const { data: business } = await admin
     .from("businesses")
     .select("id, name, owner_user_id")
@@ -132,81 +134,71 @@ async function main() {
   const ownerEmail = owner?.user?.email;
   if (!ownerEmail) throw new Error("Owner email not found");
 
-  // Use a dedicated PAID order for this test run
-  const { data: paidOrder } = await admin
-    .from("orders")
-    .select("id, order_ref, status, customer_id")
+  const buyerPhone = phoneFromRunId(runId, 0);
+  let { data: customer } = await admin
+    .from("customers")
+    .select("id")
     .eq("business_id", business.id)
-    .eq("status", "PAID")
-    .order("created_at", { ascending: false })
-    .limit(1)
+    .eq("phone_e164", buyerPhone)
     .maybeSingle();
-
-  let orderId = paidOrder?.id;
-  let orderRef = paidOrder?.order_ref;
-  let customerId = paidOrder?.customer_id;
-
-  if (!orderId) {
-    const { data: anyOrder } = await admin
-      .from("orders")
-      .select("id, order_ref, status, customer_id")
-      .eq("business_id", business.id)
-      .in("status", ["DISPATCHED", "DELIVERED"])
-      .limit(1)
-      .maybeSingle();
-    if (anyOrder) {
-      await admin
-        .from("orders")
-        .update({
-          status: "PAID",
-          dispatch_tracking_number: null,
-          dispatch_carrier: null,
-          dispatch_label_url: null,
-          shippo_shipment_id: null,
-          shippo_transaction_id: null,
-        })
-        .eq("id", anyOrder.id);
-      orderId = anyOrder.id;
-      orderRef = anyOrder.order_ref;
-      customerId = anyOrder.customer_id;
-    }
+  if (!customer) {
+    const inserted = await admin
+      .from("customers")
+      .insert({
+        business_id: business.id,
+        phone_e164: buyerPhone,
+        name: `Dispatch Verify ${runId}`,
+      })
+      .select("id")
+      .single();
+    customer = inserted.data;
   }
+  const customerId = customer.id;
 
-  if (!orderId) throw new Error("No PAID order available for testing");
+  const products = await ensureSeedCatalog(admin, business.id, {
+    select: "id, name, price_pence, product_variants(id, deleted_at)",
+  });
+  const mug = products.find((p) => /blue mug/i.test(p.name)) ?? products[0];
+  const variant = liveVariants(mug)[0];
+  if (!variant) throw new Error("No catalog variant");
+  const unitPrice = mug.price_pence ?? 1200;
 
-  await admin
-    .from("orders")
-    .update({ shipping_address: BAKER_ST })
-    .eq("id", orderId);
-
-  const ownerToken = await signIn(ownerEmail);
-
-  // Separate PAID order for case 5 (never dispatch)
-  const { data: paidOnly } = await admin
-    .from("orders")
-    .select("id, order_ref")
-    .eq("business_id", business.id)
-    .eq("status", "PAID")
-    .neq("id", orderId)
-    .limit(1)
-    .maybeSingle();
-
-  let paidOnlyId = paidOnly?.id;
-  if (!paidOnlyId) {
-    const { data: created } = await admin
+  async function createPaidOrder(suffix) {
+    const orderRef = `DP${hashTag(`${runId}:${suffix}`).slice(0, 8)}${Date.now().toString(36)}${suffix}`.toUpperCase().slice(0, 28);
+    const { data: order, error } = await admin
       .from("orders")
       .insert({
         business_id: business.id,
         customer_id: customerId,
         channel: "whatsapp",
         status: "PAID",
-        total_pence: 1200,
-        order_ref: `TF-DISPTEST-${Date.now().toString(16).toUpperCase()}`,
+        total_pence: unitPrice,
+        order_ref: orderRef,
+        shipping_address: BAKER_ST,
       })
-      .select("id")
+      .select("id, order_ref")
       .single();
-    paidOnlyId = created?.id;
+    if (error || !order) throw new Error(error?.message ?? "order create failed");
+    createdOrderIds.push(order.id);
+    await admin.from("order_items").insert({
+      order_id: order.id,
+      business_id: business.id,
+      product_variant_id: variant.id,
+      quantity: 1,
+      unit_price_pence: unitPrice,
+    });
+    return order;
   }
+
+  try {
+  const paidOrder = await createPaidOrder("A");
+  const orderId = paidOrder.id;
+  const orderRef = paidOrder.order_ref;
+
+  const ownerToken = await signIn(ownerEmail);
+
+  const paidOnlyOrder = await createPaidOrder("B");
+  const paidOnlyId = paidOnlyOrder.id;
 
   // ========== Case 1: dispatch with purchased Shippo label ==========
   const { quoted, dispatch: dispatch1, rate } = await quoteAndDispatch(
@@ -273,24 +265,28 @@ async function main() {
   );
 
   // ========== Case 3: cross-tenant ==========
-  const OTHER_EMAIL = `other-tenant-${Date.now()}@tradeflow-test.local`;
-  await cleanupOtherUser(OTHER_EMAIL);
+  otherEmail = `other-tenant-${runId}@tradeflow-test.local`;
+  await cleanupOtherUser(otherEmail);
   const { data: otherUser } = await admin.auth.admin.createUser({
-    email: OTHER_EMAIL,
+    email: otherEmail,
     email_confirm: true,
   });
-  await admin.from("businesses").insert({
-    owner_user_id: otherUser.user.id,
-    name: "Other Tenant Shop",
-    slug: `other-${Date.now()}`,
-    dispatch_address_line1: "2 Other St",
-    dispatch_city: "London",
-    dispatch_postcode: "E2 2BB",
-    payout_account_holder_name: "Other",
-    payout_sort_code: "11-22-33",
-    payout_account_number: "87654321",
-  });
-  const otherToken = await signIn(OTHER_EMAIL);
+  const { data: otherBiz } = await admin
+    .from("businesses")
+    .insert({
+      owner_user_id: otherUser.user.id,
+      name: `Other Tenant Shop ${runId}`,
+      slug: `other-${runId}`.slice(0, 40),
+      dispatch_address_line1: "2 Other St",
+      dispatch_city: "London",
+      dispatch_postcode: "E2 2BB",
+      payout_account_holder_name: "Other",
+      payout_sort_code: "11-22-33",
+      payout_account_number: "87654321",
+    })
+    .select("id")
+    .single();
+  const otherToken = await signIn(otherEmail);
   const crossTenant = await apiPost(otherToken, `/api/orders/${orderId}/dispatch`, {
     trackingNumber: "HACK",
   });
@@ -301,7 +297,12 @@ async function main() {
     case3Pass,
     `status=${crossTenant.status} body=${JSON.stringify(crossTenant.json)}`,
   );
-  await cleanupOtherUser(OTHER_EMAIL);
+  if (otherBiz?.id) {
+    await deleteTestBusiness(admin, otherBiz.id, { ownerUserId: otherUser.user.id });
+  } else {
+    await cleanupOtherUser(otherEmail);
+  }
+  otherEmail = null;
 
   // ========== Case 4: deliver ==========
   const deliver1 = await apiPost(ownerToken, `/api/orders/${orderId}/deliver`);
@@ -361,10 +362,17 @@ async function main() {
 
   const allPassed = results.every((r) => r.passed);
   console.log(allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
-  process.exit(allPassed ? 0 : 1);
+  exitCode = allPassed ? 0 : 1;
+  } finally {
+    await deleteOrdersByIds(admin, createdOrderIds);
+    if (otherEmail) await cleanupOtherUser(otherEmail);
+  }
+  return exitCode;
 }
 
-main().catch((err) => {
-  console.error("FAILED:", err.message);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error("FAILED:", err.message);
+    process.exit(1);
+  });

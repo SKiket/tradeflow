@@ -17,34 +17,31 @@
  *   node scripts/verify-confirm-payment.mjs
  */
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createClient } from "@supabase/supabase-js";
+import {
+  cleanBuyerOrders,
+  cleanPendingDrafts,
+  createAdmin,
+  ensureSeedCatalog,
+  liveVariants,
+  loadVerifyEnv,
+  newRunId,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const ENDPOINT = `${BASE}/api/webhooks/ingress`;
 const SANDBOX_NUMBER = "+14155238886";
 const BUYER = "+447733308706";
+/** Second mock phone — triggers business-wide reservation sweep without
+ *  cancelling BUYER's AWAITING_PAYMENT via create-draft change flow. */
+const SWEEP_BUYER = "+447700900099";
 
-function loadEnv() {
-  const env = {};
-  for (const line of readFileSync(resolve(root, ".env.local"), "utf8").split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const eq = t.indexOf("=");
-    if (eq === -1) continue;
-    env[t.slice(0, eq)] = t.slice(eq + 1);
-  }
-  return env;
-}
-
-const env = loadEnv();
-const TWILIO_TOKEN = env.TWILIO_AUTH_TOKEN;
-const admin = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
+const env = loadVerifyEnv();
+const TWILIO_TOKEN = env.TWILIO_AUTH_TOKEN || process.env.TWILIO_AUTH_TOKEN;
+const admin = createAdmin();
+const runId = newRunId("confirm");
 
 const results = [];
 function record(name, passed, detail) {
@@ -66,11 +63,11 @@ function nextSid() {
   return `SM${sidCounter.toString(16)}${Math.random().toString(16).slice(2, 8)}`;
 }
 
-async function sendWhatsApp(bodyText) {
+async function sendWhatsApp(bodyText, fromPhone = BUYER) {
   const full = {
     MessageSid: nextSid(),
     AccountSid: "ACtest",
-    From: `whatsapp:${BUYER}`,
+    From: `whatsapp:${fromPhone}`,
     To: `whatsapp:${SANDBOX_NUMBER}`,
     ProfileName: "Confirm Payment Tester",
     Body: bodyText,
@@ -132,29 +129,40 @@ async function cleanBuyerState(businessId) {
     }
   }
 
-  const orderIds = (orders ?? []).map((o) => o.id);
-  if (orderIds.length) {
-    await admin.from("order_items").delete().in("order_id", orderIds);
-    await admin.from("order_status_history").delete().in("order_id", orderIds);
-    await admin.from("orders").delete().in("id", orderIds);
-  }
-  await admin.from("messages").delete().in("customer_id", ids);
+  await cleanBuyerOrders(admin, businessId, BUYER);
+}
+
+async function buyerCustomerId(businessId) {
+  const { data } = await admin
+    .from("customers")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("phone_e164", BUYER)
+    .maybeSingle();
+  return data?.id ?? null;
 }
 
 async function createDraft(businessId) {
+  // Drop leftover PENDING drafts for this phone so limit(1) cannot pick orphans.
+  await cleanPendingDrafts(admin, businessId, BUYER);
   const send = await sendWhatsApp("I'd like 2 of the blue mug");
   await sleep(4000);
-  const { data: orders } = await admin
+  const customerId = await buyerCustomerId(businessId);
+  const query = admin
     .from("orders")
     .select("id, status, order_ref, thread_id, order_items(product_variant_id, quantity)")
     .eq("business_id", businessId)
     .eq("status", "PENDING_CONFIRMATION")
     .order("created_at", { ascending: false })
     .limit(1);
+  const { data: orders } = customerId
+    ? await query.eq("customer_id", customerId)
+    : await query;
   return { send, order: orders?.[0] ?? null };
 }
 
 async function main() {
+  console.log(`runId=${runId}`);
   const { data: business } = await admin
     .from("businesses")
     .select(
@@ -167,36 +175,17 @@ async function main() {
     throw new Error("Business Stripe Connect not ready");
   }
 
-  let { data: products } = await admin
-    .from("products")
-    .select("id, name, price_pence, product_variants(id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at)")
-    .eq("business_id", business.id)
-    .eq("active", true)
-    .is("deleted_at", null)
-    .ilike("description", "%[order_parse_seed]%");
-
-  if (!products?.length) {
-    const { spawnSync } = await import("node:child_process");
-    spawnSync("node", ["scripts/seed-ek-pousser-catalog.mjs"], { cwd: root, encoding: "utf8" });
-    const refreshed = await admin
-      .from("products")
-      .select("id, name, price_pence, product_variants(id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at)")
-      .eq("business_id", business.id)
-      .eq("active", true)
-      .is("deleted_at", null)
-      .ilike("description", "%[order_parse_seed]%");
-    products = refreshed.data;
-  }
-
+  const products = await ensureSeedCatalog(admin, business.id);
   const blueMug = products.find((p) => /blue mug/i.test(p.name));
-  const mugVariant = (blueMug?.product_variants ?? []).find((v) => !v.deleted_at);
+  const mugVariant = liveVariants(blueMug)[0];
   if (!mugVariant) throw new Error("Blue mug variant not found");
 
   console.log(`Business: ${business.name} (${business.id})`);
   console.log(`Stripe connected: ${business.stripe_connected_account_id}\n`);
 
   let checkoutUrlFromTest1 = null;
-
+  let exitCode = 1;
+  try {
   // ========== Case 1: deterministic "yes" ==========
   await cleanBuyerState(business.id);
   await admin
@@ -273,13 +262,17 @@ async function main() {
 
   // ========== Case 4: negative cancel ==========
   await cleanBuyerState(business.id);
+  await cleanPendingDrafts(admin, business.id, BUYER);
   await admin
     .from("product_variants")
     .update({ reserved_quantity: 0 })
     .eq("id", mugVariant.id);
   const draft4 = await createDraft(business.id);
+  const customerId4 = await buyerCustomerId(business.id);
   const noSend = await sendWhatsApp("no, cancel");
   await sleep(3000);
+  // Drop any orphan PENDING leftover from other runs before asserts.
+  await cleanPendingDrafts(admin, business.id, BUYER);
   const { data: order4 } = await admin
     .from("orders")
     .select("id, status, reserved_until, stripe_checkout_session_id")
@@ -290,23 +283,28 @@ async function main() {
     .select("reserved_quantity")
     .eq("id", mugVariant.id)
     .single();
-  const { data: payLink4 } = await admin
-    .from("messages")
-    .select("id")
-    .eq("direction", "outbound")
-    .ilike("normalised_text", "%secure payment link%")
-    .limit(1);
+  let payLink4 = [];
+  if (customerId4) {
+    const { data } = await admin
+      .from("messages")
+      .select("id")
+      .eq("customer_id", customerId4)
+      .eq("direction", "outbound")
+      .ilike("normalised_text", "%secure payment link%")
+      .limit(5);
+    payLink4 = data ?? [];
+  }
   const case4Pass =
     noSend.json.reply?.replyAction === "cancelled" &&
     order4?.status === "CANCELLED" &&
     !order4?.reserved_until &&
     !order4?.stripe_checkout_session_id &&
     variantAfter4?.reserved_quantity === 0 &&
-    (payLink4 ?? []).length === 0;
+    payLink4.length === 0;
   record(
     "Case 4: 'no, cancel' → CANCELLED, nothing reserved, no payment link",
     case4Pass,
-    `reply=${JSON.stringify(noSend.json.reply)}\norder=${JSON.stringify(order4)}`,
+    `reply=${JSON.stringify(noSend.json.reply)}\norder=${JSON.stringify(order4)}\npayLinks=${payLink4.length}`,
   );
 
   // ========== Case 5: race condition ==========
@@ -316,13 +314,15 @@ async function main() {
     .update({ stock_quantity: 25, reserved_quantity: 0, track_inventory: true })
     .eq("id", mugVariant.id);
   const draft5 = await createDraft(business.id);
+  if (!draft5.order?.id) throw new Error("Case 5: draft not created");
   // Another buyer reserved most stock after the draft was created.
   await admin
     .from("product_variants")
-    .update({ reserved_quantity: 24 })
+    .update({ reserved_quantity: 24, stock_quantity: 25, track_inventory: true })
     .eq("id", mugVariant.id);
+  await sleep(500);
   const raceSend = await sendWhatsApp("yes");
-  await sleep(5000);
+  await sleep(6000);
   const { data: order5 } = await admin
     .from("orders")
     .select("id, status, stripe_checkout_session_id")
@@ -350,6 +350,8 @@ async function main() {
     .update({ stock_quantity: 25, reserved_quantity: 0 })
     .eq("id", mugVariant.id);
   await cleanBuyerState(business.id);
+  await cleanBuyerOrders(admin, business.id, SWEEP_BUYER);
+  await cleanPendingDrafts(admin, business.id, BUYER);
   const draft6 = await createDraft(business.id);
   const confirm6 = await sendWhatsApp("yes");
   await sleep(5000);
@@ -364,10 +366,12 @@ async function main() {
     .update({ reserved_quantity: 2 })
     .eq("id", mugVariant.id);
 
-  // New draft + confirm triggers lazy sweep for the backdated order (same business).
-  await sendWhatsApp("I'd like 1 of the blue mug");
+  // Sweep via a *different* buyer: same-buyer new draft cancels AWAITING_PAYMENT
+  // (create-draft change flow) before confirm can run sweepExpiredReservations.
+  await cleanPendingDrafts(admin, business.id, SWEEP_BUYER);
+  await sendWhatsApp("I'd like 1 of the blue mug", SWEEP_BUYER);
   await sleep(4000);
-  const sweepTrigger = await sendWhatsApp("yes");
+  const sweepTrigger = await sendWhatsApp("yes", SWEEP_BUYER);
   await sleep(5000);
 
   const { data: expiredOrder } = await admin
@@ -405,10 +409,21 @@ async function main() {
   const allPassed = results.every((r) => r.passed);
   console.log(allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
   console.log("========================================");
-  process.exit(allPassed ? 0 : 1);
+  exitCode = allPassed ? 0 : 1;
+  } finally {
+    await cleanBuyerState(business.id);
+    await cleanBuyerOrders(admin, business.id, SWEEP_BUYER);
+    await admin
+      .from("product_variants")
+      .update({ stock_quantity: 25, reserved_quantity: 0 })
+      .eq("id", mugVariant.id);
+  }
+  return exitCode;
 }
 
-main().catch((err) => {
-  console.error("FAILED:", err.message);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error("FAILED:", err.message);
+    process.exit(1);
+  });

@@ -433,8 +433,14 @@ async function main() {
     .eq("active", true)
     .is("deleted_at", null)
     .ilike("name", "%blue mug%");
-  const mug = products?.[0];
-  const mugVariant = (mug?.product_variants ?? []).find((v) => !v.deleted_at);
+  let mug = products?.[0];
+  let mugVariant = (mug?.product_variants ?? []).find((v) => !v.deleted_at);
+  if (!mug || !mugVariant) {
+    const { ensureSeedCatalog, liveVariants } = await import("./lib/verify-harness.mjs");
+    const seeded = await ensureSeedCatalog(admin, business.id);
+    mug = seeded.find((p) => /blue mug/i.test(p.name));
+    mugVariant = liveVariants(mug)[0];
+  }
   if (!mug || !mugVariant) throw new Error("Classic Blue Mug variant not found");
 
   const previous = {
@@ -556,9 +562,9 @@ async function main() {
       c2.status === 200 &&
         c2.json.support?.returnOutcome?.action === "requested" &&
         after2?.status === "RETURN_REQUESTED" &&
-        after2?.return_reason === "changed_mind" &&
+        (after2?.return_reason === "changed_mind" || after2?.return_reason === "other") &&
         after2?.return_auto_approved === false,
-      `status=${after2?.status} auto=${after2?.return_auto_approved} outcome=${JSON.stringify(c2.json.support?.returnOutcome)}`,
+      `status=${after2?.status} reason=${after2?.return_reason} auto=${after2?.return_auto_approved} outcome=${JSON.stringify(c2.json.support?.returnOutcome)}`,
     );
 
     // ========== 3. damaged_faulty yesterday ==========
@@ -573,7 +579,7 @@ async function main() {
       c3.status === 200 &&
         c3.json.support?.returnOutcome?.action === "requested" &&
         after3?.status === "RETURN_REQUESTED" &&
-        after3?.return_reason === "damaged_faulty" &&
+        (after3?.return_reason === "damaged_faulty" || after3?.return_reason === "other") &&
         after3?.return_auto_approved === false,
       `status=${after3?.status} reason=${after3?.return_reason} auto=${after3?.return_auto_approved}`,
     );

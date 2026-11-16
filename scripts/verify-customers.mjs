@@ -7,18 +7,27 @@
  *   node scripts/verify-customers.mjs
  */
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBrowserClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import {
+  cleanBuyerOrders,
+  createAdmin,
+  ensureSeedCatalog,
+  liveVariants,
+  loadVerifyEnv,
+  newRunId,
+  phoneFromRunId,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
 const WEBHOOK = `${BASE}/api/webhooks/ingress`;
 const EK_EMAIL = "sgkiket@gmail.com";
-const NEW_PHONE = `+44770${String(Date.now()).slice(-7)}`;
-const REPEAT_PHONE = "+447700901012";
+const runId = newRunId("cust");
+const NEW_PHONE = phoneFromRunId(runId, 1);
+const REPEAT_PHONE = phoneFromRunId(runId, 2);
 const BAKER_ST = {
   line1: "221B Baker Street",
   line2: "Flat 2",
@@ -27,32 +36,11 @@ const BAKER_ST = {
   country: "GB",
 };
 
-function loadEnv() {
-  const env = {};
-  for (const line of readFileSync(resolve(root, ".env.local"), "utf8").split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const eq = t.indexOf("=");
-    if (eq === -1) continue;
-    let v = t.slice(eq + 1);
-    if (
-      (v.startsWith('"') && v.endsWith('"')) ||
-      (v.startsWith("'") && v.endsWith("'"))
-    ) {
-      v = v.slice(1, -1);
-    }
-    env[t.slice(0, eq)] = v;
-  }
-  return env;
-}
-
-const env = loadEnv();
-const admin = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
-const url = env.NEXT_PUBLIC_SUPABASE_URL;
-const anon = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const WEBHOOK_SECRET = env.STRIPE_WEBHOOK_SECRET;
+const env = loadVerifyEnv();
+const admin = createAdmin();
+const url = env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const anon = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const WEBHOOK_SECRET = env.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET;
 
 const results = [];
 function record(name, passed, detail) {
@@ -266,6 +254,7 @@ async function cleanupOtherUser(email) {
 }
 
 async function main() {
+  console.log(`runId=${runId} phones=${NEW_PHONE},${REPEAT_PHONE}`);
   const { data: business, error } = await admin
     .from("businesses")
     .select("id, slug, name")
@@ -273,6 +262,9 @@ async function main() {
     .is("deleted_at", null)
     .maybeSingle();
   if (error || !business) throw new Error("EK-Pousser_D not found");
+
+  let exitCode = 1;
+  try {
 
   const { data: allCustomers } = await admin
     .from("customers")
@@ -329,15 +321,11 @@ async function main() {
     );
   }
 
-  const { data: mug } = await admin
-    .from("products")
-    .select("id, name, price_pence, product_variants(id, deleted_at, stock_quantity)")
-    .eq("business_id", business.id)
-    .eq("active", true)
-    .ilike("name", "%blue mug%")
-    .is("deleted_at", null)
-    .maybeSingle();
-  const variant = (mug?.product_variants ?? []).find((row) => !row.deleted_at);
+  const products = await ensureSeedCatalog(admin, business.id, {
+    select: "id, name, price_pence, product_variants(id, deleted_at, stock_quantity)",
+  });
+  const mug = products.find((p) => /blue mug/i.test(p.name));
+  const variant = liveVariants(mug)[0];
   if (!mug || !variant) throw new Error("Classic Blue Mug variant missing");
   await admin
     .from("product_variants")
@@ -505,10 +493,17 @@ async function main() {
 
   const allPassed = results.every((row) => row.passed);
   console.log(allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
-  process.exit(allPassed ? 0 : 1);
+  exitCode = allPassed ? 0 : 1;
+  } finally {
+    await cleanBuyerOrders(admin, business.id, NEW_PHONE);
+    await cleanBuyerOrders(admin, business.id, REPEAT_PHONE);
+  }
+  return exitCode;
 }
 
-main().catch((err) => {
-  console.error("FAILED:", err);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error("FAILED:", err);
+    process.exit(1);
+  });
