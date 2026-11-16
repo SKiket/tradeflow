@@ -308,9 +308,16 @@ async function main() {
     `old=${oldOrder?.application_fee_pence} new=${order2.application_fee_pence}`,
   );
 
-  // Restore prior active pricing by setting new row effective_from in the future
-  // (so getActivePricing sees original). Safer: delete the test pricing row.
-  await admin.from("pricing_config").delete().eq("id", newPricing.id);
+  // Restore prior active pricing: clear FK then delete the test pricing row.
+  await admin
+    .from("orders")
+    .update({ pricing_config_id: null })
+    .eq("pricing_config_id", newPricing.id);
+  const { error: delPricingErr } = await admin
+    .from("pricing_config")
+    .delete()
+    .eq("id", newPricing.id);
+  if (delPricingErr) throw delPricingErr;
   cleanup.pricingIds = cleanup.pricingIds.filter((id) => id !== newPricing.id);
 
   // ---------- Cash / outside: no fee ----------
@@ -503,12 +510,24 @@ async function main() {
   );
 
   // Cleanup
-  if (cleanup.orderIds.length) {
-    await admin.from("orders").delete().in("id", cleanup.orderIds);
+  async function cleanupAll() {
+    if (cleanup.orderIds.length) {
+      await admin.from("order_items").delete().in("order_id", cleanup.orderIds);
+      await admin
+        .from("orders")
+        .update({ pricing_config_id: null })
+        .in("id", cleanup.orderIds);
+      await admin.from("orders").delete().in("id", cleanup.orderIds);
+    }
+    for (const id of cleanup.pricingIds) {
+      await admin
+        .from("orders")
+        .update({ pricing_config_id: null })
+        .eq("pricing_config_id", id);
+      await admin.from("pricing_config").delete().eq("id", id);
+    }
   }
-  for (const id of cleanup.pricingIds) {
-    await admin.from("pricing_config").delete().eq("id", id);
-  }
+  await cleanupAll();
 
   const passed = results.filter((r) => r.passed).length;
   const failed = results.filter((r) => !r.passed).length;
@@ -521,9 +540,18 @@ main().catch(async (err) => {
   console.error("FATAL:", err);
   try {
     if (cleanup.orderIds.length) {
+      await admin.from("order_items").delete().in("order_id", cleanup.orderIds);
+      await admin
+        .from("orders")
+        .update({ pricing_config_id: null })
+        .in("id", cleanup.orderIds);
       await admin.from("orders").delete().in("id", cleanup.orderIds);
     }
     for (const id of cleanup.pricingIds) {
+      await admin
+        .from("orders")
+        .update({ pricing_config_id: null })
+        .eq("pricing_config_id", id);
       await admin.from("pricing_config").delete().eq("id", id);
     }
   } catch {

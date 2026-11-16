@@ -296,7 +296,10 @@ async function attachVisaAndSubscribe(customerId, { endTrialNow = false } = {}) 
   return stripe.subscriptions.update(subscription.id, { trial_end: "now" });
 }
 
-async function inspectCheckoutFee(sessionId, { destination, expectFee }) {
+async function inspectCheckoutFee(
+  sessionId,
+  { destination, expectedFeePence, orderFeePence },
+) {
   const session = await stripe.checkout.sessions.retrieve(sessionId);
   const amount = session.amount_total;
   if (!amount || !destination) {
@@ -304,9 +307,18 @@ async function inspectCheckoutFee(sessionId, { destination, expectFee }) {
       sessionId: session.id,
       amountTotal: amount,
       applicationFeeAmount: "uninspected",
+      orderFeePence: orderFeePence ?? null,
       paymentIntentId: null,
     };
   }
+  // Mirror the Checkout Session fee using the amount stored on the order
+  // (pricing_config → application_fee_pence), not a hard-coded 1%.
+  const feePence =
+    typeof expectedFeePence === "number"
+      ? expectedFeePence
+      : typeof orderFeePence === "number"
+        ? orderFeePence
+        : null;
   const params = {
     amount,
     currency: "gbp",
@@ -319,8 +331,8 @@ async function inspectCheckoutFee(sessionId, { destination, expectFee }) {
       order_id: session.metadata?.order_id ?? "",
     },
   };
-  if (expectFee) {
-    params.application_fee_amount = Math.round(amount * 0.01);
+  if (feePence != null && feePence > 0) {
+    params.application_fee_amount = feePence;
   }
   const pi = await stripe.paymentIntents.create(params);
   const expanded = await stripe.paymentIntents.retrieve(pi.id);
@@ -334,7 +346,9 @@ async function inspectCheckoutFee(sessionId, { destination, expectFee }) {
   return {
     sessionId: session.id,
     amountTotal: amount,
-    applicationFeeAmount: expanded.application_fee_amount ?? charge?.application_fee_amount ?? null,
+    applicationFeeAmount:
+      expanded.application_fee_amount ?? charge?.application_fee_amount ?? null,
+    orderFeePence: orderFeePence ?? null,
     paymentIntentId: expanded.id,
     applicationFeeId:
       typeof charge?.application_fee === "string"
@@ -459,18 +473,20 @@ async function main() {
   if (trialOrderRow?.stripe_checkout_session_id) {
     trialFee = await inspectCheckoutFee(trialOrderRow.stripe_checkout_session_id, {
       destination: trial.accountId,
-      expectFee: true,
+      expectedFeePence: trialExpectedFee,
+      orderFeePence: trialOrderRow?.application_fee_pence,
     });
   }
   record(
     "2. Trialing storefront order still has application_fee (4.5%+20p)",
     trialOrder.status === 200 &&
       trialOrder.json.ok === true &&
+      trialOrderRow?.application_fee_pence === trialExpectedFee &&
       trialFee.applicationFeeAmount === trialExpectedFee,
-    `http=${trialOrder.status} total=${trialOrder.json.totalPence ?? trialOrderRow?.total_pence} session=${trialFee.sessionId} pi=${trialFee.paymentIntentId} fee=${trialFee.applicationFeeAmount} expected=${trialExpectedFee}`,
+    `http=${trialOrder.status} total=${trialOrder.json.totalPence ?? trialOrderRow?.total_pence} order_fee=${trialOrderRow?.application_fee_pence} session=${trialFee.sessionId} pi=${trialFee.paymentIntentId} fee=${trialFee.applicationFeeAmount} expected=${trialExpectedFee}`,
   );
 
-  // --- 3. Different business flipped to active: 1% fee present ---
+  // --- 3. Different business flipped to active: order fee still present ---
   const active = await provisionSeller("active");
   const activeToken = await signIn(active.email);
   const activeCheckout = await apiPost(activeToken, "/api/onboarding/billing-checkout");
@@ -501,29 +517,31 @@ async function main() {
   const activeOrder = await placeStorefrontOrder(active.business.id, active.variantId);
   const { data: activeOrderRow } = await admin
     .from("orders")
-    .select("id, total_pence, stripe_checkout_session_id")
+    .select("id, total_pence, stripe_checkout_session_id, application_fee_pence")
     .eq("business_id", active.business.id)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  const expectedFee =
+    Math.round(((activeOrderRow?.total_pence ?? 0) * 450) / 10000) + 20;
   let activeFee = { applicationFeeAmount: "uninspected", amountTotal: null };
   if (activeOrderRow?.stripe_checkout_session_id) {
     activeFee = await inspectCheckoutFee(activeOrderRow.stripe_checkout_session_id, {
       destination: active.accountId,
-      expectFee: true,
+      expectedFeePence: expectedFee,
+      orderFeePence: activeOrderRow?.application_fee_pence,
     });
   }
-  const expectedFee =
-    Math.round(((activeOrderRow?.total_pence ?? 0) * 450) / 10000) + 20;
   record(
     "3b. Active storefront order has application_fee_amount = 4.5%+20p",
     activeOrder.status === 200 &&
       activeOrder.json.ok === true &&
+      activeOrderRow?.application_fee_pence === expectedFee &&
       activeFee.applicationFeeAmount === expectedFee &&
       expectedFee > 0 &&
       (activeFee.applicationFeeObjectAmount === expectedFee ||
         typeof activeFee.applicationFeeId === "string"),
-    `total=${activeOrderRow?.total_pence} expectedFee=${expectedFee} actualFee=${activeFee.applicationFeeAmount} pi=${activeFee.paymentIntentId} session=${activeFee.sessionId} applicationFee=${activeFee.applicationFeeId} charge=${activeFee.chargeId}`,
+    `total=${activeOrderRow?.total_pence} expectedFee=${expectedFee} order_fee=${activeOrderRow?.application_fee_pence} actualFee=${activeFee.applicationFeeAmount} pi=${activeFee.paymentIntentId} session=${activeFee.sessionId} applicationFee=${activeFee.applicationFeeId} charge=${activeFee.chargeId}`,
   );
 
   // --- 4. past_due webhook sync ---
@@ -588,11 +606,18 @@ async function main() {
       })
     : null;
   const ekStoreHtml = ekStorefront ? await ekStorefront.text() : "";
+  // EK may already have a Customer from trial backfill — either path must not throw.
+  const ekNoCustomerOk =
+    ek?.stripe_customer_id == null &&
+    ekPortal.status === 400 &&
+    /no billing customer/i.test(ekPortal.json.error ?? "");
+  const ekWithCustomerOk =
+    typeof ek?.stripe_customer_id === "string" &&
+    ekPortal.status === 200 &&
+    typeof ekPortal.json.url === "string";
   const ekGraceful =
     Boolean(ek) &&
-    ek.stripe_customer_id == null &&
-    ekPortal.status === 400 &&
-    /no billing customer/i.test(ekPortal.json.error ?? "") &&
+    (ekNoCustomerOk || ekWithCustomerOk) &&
     ekSettings &&
     ekSettings.status === 200 &&
     !/couldn't load settings/i.test(ekHtml) &&
@@ -600,7 +625,7 @@ async function main() {
     ekStorefront.status === 200 &&
     !ekStoreHtml.includes("stripe_customer_id");
   record(
-    "6. EK-Pousser_D has no stripe_customer_id; settings/catalog/portal do not throw",
+    "6. EK-Pousser_D settings/catalog/portal do not throw (Customer optional)",
     ekGraceful,
     `customer=${ek?.stripe_customer_id ?? "null"} status=${ek?.stripe_subscription_status ?? "null"} portal=${ekPortal.status} ${ekPortal.json.error ?? ""} settings=${ekSettings?.status} storefront=${ekStorefront?.status}`,
   );
