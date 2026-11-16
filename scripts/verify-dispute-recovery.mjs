@@ -429,13 +429,27 @@ async function main() {
       .eq("id", row.id)
       .maybeSingle();
     const remainder = d2?.unrecovered_pence ?? 0;
+    console.log("       3b remainder", remainder, "oldInvoice", d2?.recovery_invoice_id);
     if (remainder > 0) {
       try {
+        // Void any open draft/open invoices for this customer first.
+        const openInvs = await stripe.invoices.list({
+          customer: customerStripeId,
+          status: "open",
+          limit: 5,
+        });
+        for (const inv of openInvs.data) {
+          try {
+            await stripe.invoices.voidInvoice(inv.id);
+          } catch {
+            // ignore
+          }
+        }
         await stripe.invoiceItems.create({
           customer: customerStripeId,
           amount: remainder,
           currency: "gbp",
-          description: `Dispute fee and unrecovered chargeback for order verify`,
+          description: "Dispute fee and unrecovered chargeback for order verify",
           metadata: {
             dispute_id: row.id,
             business_id: business.id,
@@ -445,18 +459,25 @@ async function main() {
         const invoice = await stripe.invoices.create({
           customer: customerStripeId,
           collection_method: "charge_automatically",
+          pending_invoice_items_behavior: "include",
           metadata: {
             dispute_id: row.id,
             business_id: business.id,
             purpose: "lost_dispute_recovery",
           },
         });
-        const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
-        const paidInv =
-          finalized.status === "paid"
-            ? finalized
-            : await stripe.invoices.pay(finalized.id);
-        await postStripeEvent(
+        let paidInv = await stripe.invoices.finalizeInvoice(invoice.id);
+        if (paidInv.status !== "paid") {
+          paidInv = await stripe.invoices.pay(paidInv.id);
+        }
+        console.log(
+          "       3b paidInv",
+          paidInv.id,
+          paidInv.status,
+          paidInv.amount_paid,
+          paidInv.metadata,
+        );
+        const hook = await postStripeEvent(
           JSON.stringify({
             id: `evt_inv_${randomUUID().slice(0, 8)}`,
             object: "event",
@@ -464,7 +485,8 @@ async function main() {
             data: { object: paidInv },
           }),
         );
-        await sleep(1500);
+        console.log("       3b webhook", hook.status, JSON.stringify(hook.json));
+        await sleep(2000);
       } catch (e) {
         console.log("       remainder invoice:", e.message);
       }

@@ -611,13 +611,17 @@ export async function runFullDisputeRecovery(
     });
     if (inv.ok) {
       invoiceId = inv.invoiceId || invoiceId;
-      if (inv.paid) {
+      if (inv.paid && inv.amount > 0) {
         viaInvoice = inv.amount;
         remaining = Math.max(0, remaining - viaInvoice);
         appendNote(`invoice_paid:${viaInvoice} (${invoiceId})`);
       } else {
-        invoiceId = inv.invoiceId;
-        appendNote(`invoice_open_unpaid:${invoiceId}`);
+        invoiceId = inv.invoiceId || invoiceId;
+        appendNote(
+          inv.paid
+            ? `invoice_paid_zero:${invoiceId}`
+            : `invoice_open_unpaid:${invoiceId}`,
+        );
       }
     } else {
       invoiceId = inv.invoiceId ?? invoiceId;
