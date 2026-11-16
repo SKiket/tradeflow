@@ -178,6 +178,7 @@ async function sendWhatsApp(toNumber, bodyText, fromNumber = BUYER_PHONE) {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       "X-Source": "twilio-whatsapp",
+      "X-TradeFlow-Verify": "1",
       "X-Twilio-Signature": signTwilio(WEBHOOK, full),
     },
     body,

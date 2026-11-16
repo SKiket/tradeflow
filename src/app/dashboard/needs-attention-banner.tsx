@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 export type NeedsAttentionItem = {
-  kind: "dispute" | "fraud" | "complaint";
+  kind: "dispute" | "fraud" | "complaint" | "knowledge_gap";
   href: string;
   label: string;
 };

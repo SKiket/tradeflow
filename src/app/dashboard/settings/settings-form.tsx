@@ -19,6 +19,8 @@ import {
 } from "@/lib/orders/return-window";
 import { BUSINESS_BRANDING_BUCKET } from "@/lib/storage/upload";
 import { createClient } from "@/lib/supabase/client";
+import type { FaqItem } from "@/lib/knowledge/types";
+import { normaliseShopKnowledge } from "@/lib/knowledge/validate";
 import {
   stripePaymentsStatus,
   whatsappConnectionStatus,
@@ -36,6 +38,8 @@ export type SettingsFormValues = {
   returns_policy_text: string | null;
   return_window_days: number;
   ai_tone: string;
+  shop_faq: FaqItem[];
+  delivery_info: string | null;
   default_low_stock_threshold: number;
   stripe_connected_account_id: string | null;
   stripe_charges_enabled: boolean;
@@ -75,6 +79,10 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
     String(business.return_window_days ?? DEFAULT_RETURN_WINDOW_DAYS),
   );
   const [aiTone, setAiTone] = useState(business.ai_tone || "friendly");
+  const [deliveryInfo, setDeliveryInfo] = useState(
+    business.delivery_info ?? "",
+  );
+  const [shopFaq, setShopFaq] = useState<FaqItem[]>(business.shop_faq ?? []);
   const [lowStock, setLowStock] = useState(
     String(business.default_low_stock_threshold ?? 5),
   );
@@ -120,6 +128,15 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
       return;
     }
 
+    const shopNorm = normaliseShopKnowledge({
+      shop_faq: shopFaq,
+      delivery_info: deliveryInfo,
+    });
+    if (!shopNorm.ok) {
+      setError(shopNorm.error);
+      return;
+    }
+
     setPending(true);
     const supabase = createClient();
     try {
@@ -135,6 +152,8 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             ? Math.trunc(Number.parseInt(returnWindowDays, 10))
             : (business.return_window_days ?? DEFAULT_RETURN_WINDOW_DAYS),
           ai_tone: aiTone.trim() || "friendly",
+          shop_faq: shopNorm.value.shop_faq,
+          delivery_info: shopNorm.value.delivery_info,
           default_low_stock_threshold: parseThreshold(
             lowStock,
             business.default_low_stock_threshold ?? 5,
@@ -311,6 +330,93 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             <p className="text-xs text-muted-foreground">
               Used when answering buyer questions over WhatsApp.
             </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="delivery-info">Delivery information</Label>
+            <p className="text-xs text-muted-foreground">
+              Shown on your storefront and used when the AI answers delivery
+              questions (max 1000 characters).
+            </p>
+            <textarea
+              id="delivery-info"
+              value={deliveryInfo}
+              onChange={(event) => setDeliveryInfo(event.target.value)}
+              disabled={pending}
+              rows={3}
+              maxLength={1000}
+              className="flex w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none"
+            />
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <Label>Shop FAQ</Label>
+                <p className="text-xs text-muted-foreground">
+                  Up to 20 question/answer pairs for the whole shop.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={pending || shopFaq.length >= 20}
+                onClick={() =>
+                  setShopFaq((current) => [
+                    ...current,
+                    { question: "", answer: "" },
+                  ])
+                }
+              >
+                Add FAQ
+              </Button>
+            </div>
+            {shopFaq.map((faq, index) => (
+              <div key={index} className="space-y-2 rounded-md border p-3">
+                <Input
+                  placeholder="Question"
+                  value={faq.question}
+                  maxLength={500}
+                  disabled={pending}
+                  onChange={(event) => {
+                    const next = [...shopFaq];
+                    next[index] = {
+                      ...next[index]!,
+                      question: event.target.value,
+                    };
+                    setShopFaq(next);
+                  }}
+                />
+                <textarea
+                  placeholder="Answer"
+                  value={faq.answer}
+                  maxLength={500}
+                  disabled={pending}
+                  rows={2}
+                  className="flex w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  onChange={(event) => {
+                    const next = [...shopFaq];
+                    next[index] = {
+                      ...next[index]!,
+                      answer: event.target.value,
+                    };
+                    setShopFaq(next);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={pending}
+                  onClick={() =>
+                    setShopFaq((current) =>
+                      current.filter((_, i) => i !== index),
+                    )
+                  }
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
           </div>
           <div id="returns" className="scroll-mt-24 space-y-1">
             <Label htmlFor="returns-policy">Returns policy</Label>

@@ -17,6 +17,13 @@ type ProductRow = {
   price_pence: number;
   photo_url: string | null;
   active: boolean;
+  usage_instructions: string | null;
+  ingredients: string | null;
+  storage_and_care: string | null;
+  size_and_fit: string | null;
+  allergens_status: string | null;
+  allergens_text: string | null;
+  product_faqs: unknown;
   product_variants: VariantRow[] | VariantRow | null;
 };
 
@@ -77,6 +84,12 @@ export function buildCatalogCsv(products: ProductRow[]): string {
         variant.weight_grams != null ? String(variant.weight_grams) : "";
       const label = variant.label?.trim() ?? "";
 
+      const faqsJson =
+        product.product_faqs == null
+          ? ""
+          : typeof product.product_faqs === "string"
+            ? product.product_faqs
+            : JSON.stringify(product.product_faqs);
       const cells = [
         product.name,
         product.description ?? "",
@@ -87,6 +100,13 @@ export function buildCatalogCsv(products: ProductRow[]): string {
         stock,
         threshold,
         weight,
+        product.usage_instructions ?? "",
+        product.ingredients ?? "",
+        product.storage_and_care ?? "",
+        product.size_and_fit ?? "",
+        product.allergens_status ?? "not_provided",
+        product.allergens_text ?? "",
+        faqsJson,
       ].map((cell) => escapeCsvField(cell));
 
       lines.push(cells.join(","));
@@ -115,7 +135,7 @@ export async function loadCatalogForExport(
   const { data, error } = await supabase
     .from("products")
     .select(
-      "name, description, price_pence, photo_url, active, product_variants(label, stock_quantity, low_stock_threshold, track_inventory, weight_grams, deleted_at)",
+      "name, description, price_pence, photo_url, active, usage_instructions, ingredients, storage_and_care, size_and_fit, allergens_status, allergens_text, product_faqs, product_variants(label, stock_quantity, low_stock_threshold, track_inventory, weight_grams, deleted_at)",
     )
     .eq("business_id", businessId)
     .is("deleted_at", null)

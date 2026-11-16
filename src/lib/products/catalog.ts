@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { parseAllergensStatus, parseFaqArray } from "@/lib/knowledge/validate";
+import type { AllergensStatus, FaqItem } from "@/lib/knowledge/types";
 import { availableQuantity } from "@/lib/products/stock";
 
 export interface CatalogVariant {
@@ -17,6 +19,13 @@ export interface CatalogProduct {
   name: string;
   description: string | null;
   price_pence: number;
+  usage_instructions: string | null;
+  ingredients: string | null;
+  storage_and_care: string | null;
+  size_and_fit: string | null;
+  allergens_text: string | null;
+  allergens_status: AllergensStatus;
+  product_faqs: FaqItem[];
   variants: CatalogVariant[];
 }
 
@@ -31,7 +40,7 @@ export async function fetchActiveCatalog(
   const { data: products, error } = await supabase
     .from("products")
     .select(
-      "id, name, description, price_pence, product_variants(id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at)",
+      "id, name, description, price_pence, usage_instructions, ingredients, storage_and_care, size_and_fit, allergens_text, allergens_status, product_faqs, product_variants(id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at)",
     )
     .eq("business_id", businessId)
     .eq("active", true)
@@ -70,11 +79,20 @@ export async function fetchActiveCatalog(
         };
       });
 
+    const faqs = parseFaqArray(product.product_faqs, 10).items;
+
     return {
       id: product.id as string,
       name: product.name as string,
       description: (product.description as string | null) ?? null,
       price_pence: product.price_pence as number,
+      usage_instructions: (product.usage_instructions as string | null) ?? null,
+      ingredients: (product.ingredients as string | null) ?? null,
+      storage_and_care: (product.storage_and_care as string | null) ?? null,
+      size_and_fit: (product.size_and_fit as string | null) ?? null,
+      allergens_text: (product.allergens_text as string | null) ?? null,
+      allergens_status: parseAllergensStatus(product.allergens_status),
+      product_faqs: faqs,
       variants,
     };
   });

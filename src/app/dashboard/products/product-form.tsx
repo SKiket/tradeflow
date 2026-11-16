@@ -11,6 +11,13 @@ import {
   type GalleryDraft,
 } from "@/components/upload/product-gallery-upload";
 import { poundsToPence, penceToPoundsInput } from "@/lib/orders/display";
+import {
+  blankKnowledgeDraft,
+  ProductKnowledgeFields,
+  type ProductKnowledgeDraft,
+} from "@/components/products/product-knowledge-fields";
+import { normaliseProductKnowledge } from "@/lib/knowledge/validate";
+import type { AllergensStatus, FaqItem } from "@/lib/knowledge/types";
 import { createProductWithVariants } from "@/lib/products/create";
 import {
   coverImageUrl,
@@ -37,6 +44,13 @@ export type ProductFormValues = {
   photo_url: string | null;
   images: ProductImageRow[];
   active: boolean;
+  usage_instructions?: string | null;
+  ingredients?: string | null;
+  storage_and_care?: string | null;
+  size_and_fit?: string | null;
+  allergens_text?: string | null;
+  allergens_status?: AllergensStatus;
+  product_faqs?: FaqItem[];
   variants: ProductFormVariant[];
 };
 
@@ -88,6 +102,20 @@ export function ProductForm({
   const isEdit = Boolean(product?.id);
   const [name, setName] = useState(product?.name ?? "");
   const [description, setDescription] = useState(product?.description ?? "");
+  const [knowledge, setKnowledge] = useState<ProductKnowledgeDraft>(() => {
+    if (!product) return blankKnowledgeDraft();
+    return {
+      usageInstructions: product.usage_instructions ?? "",
+      ingredients: product.ingredients ?? "",
+      storageAndCare: product.storage_and_care ?? "",
+      sizeAndFit: product.size_and_fit ?? "",
+      allergensStatus: product.allergens_status ?? "not_provided",
+      allergensText: product.allergens_text ?? "",
+      faqs: product.product_faqs ?? [],
+    };
+  });
+  const [suggestPending, setSuggestPending] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
   const [price, setPrice] = useState(
     product ? penceToPoundsInput(product.price_pence) : "",
   );
@@ -164,10 +192,25 @@ export function ProductForm({
       weightByClientId.set(variant.clientId, grams);
     }
 
+    const knowledgeNorm = normaliseProductKnowledge({
+      usage_instructions: knowledge.usageInstructions,
+      ingredients: knowledge.ingredients,
+      storage_and_care: knowledge.storageAndCare,
+      size_and_fit: knowledge.sizeAndFit,
+      allergens_status: knowledge.allergensStatus,
+      allergens_text: knowledge.allergensText,
+      product_faqs: knowledge.faqs,
+    });
+    if (!knowledgeNorm.ok) {
+      setError(knowledgeNorm.error);
+      return;
+    }
+
     setPending(true);
     const supabase = createClient();
     const photo = coverImageUrl(images.map((image) => image.url));
     const desc = description.trim();
+    const knowledgePayload = knowledgeNorm.value;
 
     try {
       let productId = product?.id;
@@ -181,6 +224,7 @@ export function ProductForm({
             price_pence: pricePence,
             photo_url: photo,
             active,
+            ...knowledgePayload,
           })
           .eq("id", productId);
         if (updateError) throw new Error(updateError.message);
@@ -204,6 +248,7 @@ export function ProductForm({
           price_pence: pricePence,
           photo_url: photo,
           active,
+          ...knowledgePayload,
           variants: variantsToCreate,
         });
         productId = created.productId;
@@ -325,6 +370,63 @@ export function ProductForm({
           Active — inactive products are hidden from WhatsApp order matching
         </label>
       </section>
+
+      <ProductKnowledgeFields
+        value={knowledge}
+        onChange={setKnowledge}
+        suggestPending={suggestPending}
+        suggestError={suggestError}
+        suggestHint={
+          isEdit
+            ? null
+            : "Save the product with a photo first, then use Suggest from photo."
+        }
+        onSuggestFromPhoto={
+          isEdit && product?.id
+            ? async () => {
+                setSuggestError(null);
+                setSuggestPending(true);
+                try {
+                  const response = await fetch(
+                    "/api/dashboard/products/describe",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        productId: product.id,
+                        language: "en",
+                        sellerHints: description,
+                      }),
+                    },
+                  );
+                  const json = await response.json();
+                  if (!response.ok || !json.suggestion) {
+                    throw new Error(json.error ?? "Suggestion failed");
+                  }
+                  const s = json.suggestion as {
+                    title?: string;
+                    short_description?: string;
+                    usage_instructions?: string | null;
+                  };
+                  if (s.title) setName(s.title);
+                  if (s.short_description) setDescription(s.short_description);
+                  if (s.usage_instructions) {
+                    setKnowledge((k) => ({
+                      ...k,
+                      usageInstructions: s.usage_instructions ?? k.usageInstructions,
+                    }));
+                  }
+                } catch (caught) {
+                  setSuggestError(
+                    caught instanceof Error ? caught.message : String(caught),
+                  );
+                } finally {
+                  setSuggestPending(false);
+                }
+              }
+            : undefined
+        }
+      />
 
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import type { AllergensStatus, FaqItem } from "@/lib/knowledge/types";
 import { DEFAULT_WEIGHT_GRAMS } from "@/lib/shippo/client";
 
 export type NewProductVariant = {
@@ -17,6 +18,13 @@ export type NewProductInput = {
   price_pence: number;
   photo_url: string | null;
   active: boolean;
+  usage_instructions?: string | null;
+  ingredients?: string | null;
+  storage_and_care?: string | null;
+  size_and_fit?: string | null;
+  allergens_text?: string | null;
+  allergens_status?: AllergensStatus;
+  product_faqs?: FaqItem[];
   variants: NewProductVariant[];
 };
 
@@ -45,6 +53,13 @@ export async function createProductWithVariants(
       price_pence: input.price_pence,
       photo_url: input.photo_url,
       active: input.active,
+      usage_instructions: input.usage_instructions ?? null,
+      ingredients: input.ingredients ?? null,
+      storage_and_care: input.storage_and_care ?? null,
+      size_and_fit: input.size_and_fit ?? null,
+      allergens_text: input.allergens_text ?? null,
+      allergens_status: input.allergens_status ?? "not_provided",
+      product_faqs: input.product_faqs ?? [],
     })
     .select("id")
     .single();

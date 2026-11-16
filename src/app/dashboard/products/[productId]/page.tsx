@@ -16,7 +16,7 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
   const { data: product } = await supabase
     .from("products")
     .select(
-      "id, name, description, price_pence, photo_url, active, product_images(id, image_url, sort_order), product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory, weight_grams)",
+      "id, name, description, price_pence, photo_url, active, usage_instructions, ingredients, storage_and_care, size_and_fit, allergens_text, allergens_status, product_faqs, product_images(id, image_url, sort_order), product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory, weight_grams)",
     )
     .eq("id", productId)
     .eq("business_id", businessId)
@@ -36,6 +36,9 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
       ? [product.product_images]
       : [];
 
+  const faqsRaw = Array.isArray(product.product_faqs)
+    ? product.product_faqs
+    : [];
   const values: ProductFormValues = {
     id: product.id as string,
     name: product.name as string,
@@ -48,6 +51,27 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
       sort_order: image.sort_order as number,
     })),
     active: product.active as boolean,
+    usage_instructions: (product.usage_instructions as string | null) ?? null,
+    ingredients: (product.ingredients as string | null) ?? null,
+    storage_and_care: (product.storage_and_care as string | null) ?? null,
+    size_and_fit: (product.size_and_fit as string | null) ?? null,
+    allergens_text: (product.allergens_text as string | null) ?? null,
+    allergens_status:
+      (product.allergens_status as ProductFormValues["allergens_status"]) ??
+      "not_provided",
+    product_faqs: faqsRaw
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const rec = item as Record<string, unknown>;
+        const question =
+          typeof rec.question === "string" ? rec.question : "";
+        const answer = typeof rec.answer === "string" ? rec.answer : "";
+        if (!question || !answer) return null;
+        return { question, answer };
+      })
+      .filter((item): item is { question: string; answer: string } =>
+        Boolean(item),
+      ),
     variants: variants.map((variant) => ({
       id: variant.id as string,
       label: (variant.label as string | null) ?? null,

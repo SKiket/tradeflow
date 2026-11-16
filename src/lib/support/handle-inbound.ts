@@ -21,6 +21,8 @@ import {
   type RequestReturnOutcome,
 } from "@/lib/orders/request-return";
 import { parseReturnReason } from "@/lib/orders/return-reasons";
+import { logKnowledgeGap } from "@/lib/knowledge/gaps";
+import { fetchActiveCatalog } from "@/lib/products/catalog";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { notifySellerOfQuestion } from "@/lib/support/notify-seller";
 
@@ -165,6 +167,32 @@ export async function handleQuestionReply(
       question: params.messageText,
       supabase,
     });
+
+    // Log scrubbed knowledge gap (no customer/order/message ids). Never block reply.
+    try {
+      let productId: string | null = null;
+      try {
+        const catalog = await fetchActiveCatalog(supabase, params.businessId);
+        const lower = params.messageText.toLowerCase();
+        const hit = catalog.find((p) =>
+          p.name.trim() ? lower.includes(p.name.toLowerCase()) : false,
+        );
+        productId = hit?.id ?? null;
+      } catch {
+        productId = null;
+      }
+      await logKnowledgeGap({
+        businessId: params.businessId,
+        productId,
+        questionText: params.messageText,
+        supabase,
+      });
+    } catch (gapErr) {
+      console.error(
+        "[support] knowledge gap log failed",
+        gapErr instanceof Error ? gapErr.message : String(gapErr),
+      );
+    }
   }
 
   return {

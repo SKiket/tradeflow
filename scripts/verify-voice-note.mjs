@@ -190,6 +190,7 @@ async function sendAudioWhatsApp({ mediaUrl, contentType, body = "" }) {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       "X-Source": "twilio-whatsapp",
+      "X-TradeFlow-Verify": "1",
       "X-Twilio-Signature": signTwilio(ENDPOINT, full),
     },
     body: bodyEncoded,
@@ -215,6 +216,7 @@ async function sendTextWhatsApp(text) {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       "X-Source": "twilio-whatsapp",
+      "X-TradeFlow-Verify": "1",
       "X-Twilio-Signature": signTwilio(ENDPOINT, full),
     },
     body: bodyEncoded,
@@ -242,6 +244,7 @@ async function sendImageWhatsApp(mediaUrl) {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       "X-Source": "twilio-whatsapp",
+      "X-TradeFlow-Verify": "1",
       "X-Twilio-Signature": signTwilio(ENDPOINT, full),
     },
     body: bodyEncoded,

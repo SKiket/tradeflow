@@ -6,6 +6,7 @@ import { countRecentDeliveryFailures } from "@/lib/dashboard/delivery-failures";
 import { fetchSetupProgress } from "@/lib/dashboard/setup-progress";
 import { listOpenActionableFraudWarnings } from "@/lib/disputes/fraud-warnings";
 import { countOpenDisputes } from "@/lib/disputes/open-disputes";
+import { countOpenKnowledgeGaps } from "@/lib/knowledge/gaps";
 import {
   canAcceptOrders,
   getAcceptOrdersBlockReason,
@@ -76,6 +77,17 @@ export default async function DashboardLayout({
       kind: "complaint",
       href: `/dashboard/orders/${row.id}`,
       label: `Payment complaint on ${row.order_ref}`,
+    });
+  }
+  const openGaps = await countOpenKnowledgeGaps(business.id, supabase);
+  if (openGaps > 0) {
+    needsAttention.push({
+      kind: "knowledge_gap",
+      href: "/dashboard/knowledge-gaps",
+      label:
+        openGaps === 1
+          ? "1 question the AI could not answer"
+          : `${openGaps} questions the AI could not answer`,
     });
   }
 

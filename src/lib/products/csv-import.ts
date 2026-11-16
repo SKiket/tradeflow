@@ -1,3 +1,5 @@
+import { parseAllergensStatus, parseFaqArray } from "@/lib/knowledge/validate";
+import type { AllergensStatus, FaqItem } from "@/lib/knowledge/types";
 import { poundsToPence } from "@/lib/orders/display";
 import { DEFAULT_WEIGHT_GRAMS } from "@/lib/shippo/client";
 
@@ -13,15 +15,22 @@ export const CSV_COLUMNS = [
   "stock_quantity",
   "low_stock_threshold",
   "weight_grams",
+  "usage_instructions",
+  "ingredients",
+  "storage_and_care",
+  "size_and_fit",
+  "allergens_status",
+  "allergens_text",
+  "product_faqs",
 ] as const;
 
 export type CsvColumn = (typeof CSV_COLUMNS)[number];
 
 export const CSV_TEMPLATE = [
   CSV_COLUMNS.join(","),
-  'Example Soap Bar,"Hand-poured honey soap, 100g bar.",6.00,,yes,,40,5,100',
-  'Example Tote Bag,"Reusable linen tote for daily errands.",18.00,,yes,Natural,12,5,200',
-  'Example Tote Bag,"Reusable linen tote for daily errands.",18.00,,yes,Navy,8,5,200',
+  'Example Soap Bar,"Hand-poured honey soap, 100g bar.",6.00,,yes,,40,5,100,,,,,,not_provided,,',
+  'Example Tote Bag,"Reusable linen tote for daily errands.",18.00,,yes,Natural,12,5,200,,,,,,not_provided,,',
+  'Example Tote Bag,"Reusable linen tote for daily errands.",18.00,,yes,Navy,8,5,200,,,,,,not_provided,,',
 ].join("\n") + "\n";
 
 export const CSV_TEMPLATE_FILENAME = "tradeflow-catalog-template.csv";
@@ -42,6 +51,13 @@ export type ParsedCatalogProduct = {
   price_pence: number;
   photo_url: string | null;
   active: boolean;
+  usage_instructions: string | null;
+  ingredients: string | null;
+  storage_and_care: string | null;
+  size_and_fit: string | null;
+  allergens_status: AllergensStatus;
+  allergens_text: string | null;
+  product_faqs: FaqItem[];
   variants: ParsedCatalogVariant[];
   sourceRows: number[];
 };
@@ -58,6 +74,13 @@ type ProductGroup = {
   price_pence: number;
   photo_url: string | null;
   active: boolean;
+  usage_instructions: string | null;
+  ingredients: string | null;
+  storage_and_care: string | null;
+  size_and_fit: string | null;
+  allergens_status: AllergensStatus;
+  allergens_text: string | null;
+  product_faqs: FaqItem[];
   sourceRows: number[];
   variants: ParsedCatalogVariant[];
 };
@@ -319,6 +342,13 @@ export function parseCatalogCsv(
     const stockRaw = cell(raw, indexByColumn.get("stock_quantity"));
     const thresholdRaw = cell(raw, indexByColumn.get("low_stock_threshold"));
     const weightRaw = cell(raw, indexByColumn.get("weight_grams"));
+    const usageRaw = cell(raw, indexByColumn.get("usage_instructions"));
+    const ingredientsRaw = cell(raw, indexByColumn.get("ingredients"));
+    const storageRaw = cell(raw, indexByColumn.get("storage_and_care"));
+    const sizeRaw = cell(raw, indexByColumn.get("size_and_fit"));
+    const allergensStatusRaw = cell(raw, indexByColumn.get("allergens_status"));
+    const allergensTextRaw = cell(raw, indexByColumn.get("allergens_text"));
+    const faqsRaw = cell(raw, indexByColumn.get("product_faqs"));
 
     if (!name) {
       errors.push({
@@ -373,6 +403,20 @@ export function parseCatalogCsv(
       });
     }
 
+    const allergensStatus = parseAllergensStatus(
+      allergensStatusRaw || "not_provided",
+    );
+    const faqsParsed = faqsRaw
+      ? parseFaqArray(faqsRaw, 10)
+      : { items: [] as FaqItem[], error: undefined as string | undefined };
+    if (faqsParsed.error) {
+      errors.push({
+        row: rowNumber,
+        field: "product_faqs",
+        message: faqsParsed.error,
+      });
+    }
+
     const rowHadError =
       !priceRaw ||
       pricePence === null ||
@@ -381,7 +425,8 @@ export function parseCatalogCsv(
       Boolean(photo.error) ||
       Boolean(stock.error) ||
       Boolean(threshold.error) ||
-      Boolean(weight.error);
+      Boolean(weight.error) ||
+      Boolean(faqsParsed.error);
 
     const variantLabel = variantLabelRaw || "Standard";
     const trackInventory = stock.value != null;
@@ -400,6 +445,14 @@ export function parseCatalogCsv(
       price_pence: pricePence ?? -1,
       photo_url: photo.value,
       active: active.value ?? true,
+      usage_instructions: usageRaw || null,
+      ingredients: ingredientsRaw || null,
+      storage_and_care: storageRaw || null,
+      size_and_fit: sizeRaw || null,
+      allergens_status: allergensStatus,
+      allergens_text:
+        allergensStatus === "listed" ? allergensTextRaw || null : null,
+      product_faqs: faqsParsed.items,
     };
 
     if (rowHadError) continue;
@@ -472,6 +525,13 @@ export function parseCatalogCsv(
     price_pence: group.price_pence,
     photo_url: group.photo_url,
     active: group.active,
+    usage_instructions: group.usage_instructions,
+    ingredients: group.ingredients,
+    storage_and_care: group.storage_and_care,
+    size_and_fit: group.size_and_fit,
+    allergens_status: group.allergens_status,
+    allergens_text: group.allergens_text,
+    product_faqs: group.product_faqs,
     variants: group.variants,
     sourceRows: group.sourceRows,
   }));
@@ -490,6 +550,13 @@ export function toCreateInputs(
     price_pence: product.price_pence,
     photo_url: product.photo_url,
     active: product.active,
+    usage_instructions: product.usage_instructions,
+    ingredients: product.ingredients,
+    storage_and_care: product.storage_and_care,
+    size_and_fit: product.size_and_fit,
+    allergens_status: product.allergens_status,
+    allergens_text: product.allergens_text,
+    product_faqs: product.product_faqs,
     variants: product.variants.map((variant) => ({
       label: variant.label,
       stock_quantity: variant.stock_quantity,

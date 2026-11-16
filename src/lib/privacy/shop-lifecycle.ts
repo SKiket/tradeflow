@@ -319,6 +319,14 @@ export async function purgeClosedShop(
   }
 
   await supabase
+    .from("ai_knowledge_gaps")
+    .delete()
+    .eq("business_id", params.businessId);
+  await supabase
+    .from("ai_describe_usage")
+    .delete()
+    .eq("business_id", params.businessId);
+  await supabase
     .from("product_images")
     .delete()
     .eq("business_id", params.businessId);
@@ -396,6 +404,8 @@ export async function purgeClosedShop(
       dispatch_postcode: null,
       dispatch_days: null,
       returns_policy_text: null,
+      shop_faq: [],
+      delivery_info: null,
       whatsapp_phone_e164: null,
       whatsapp_waba_id: null,
       seller_whatsapp_phone_e164: null,

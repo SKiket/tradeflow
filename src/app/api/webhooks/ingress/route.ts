@@ -102,17 +102,31 @@ export async function POST(request: NextRequest) {
 
   // Inbound WhatsApp: process as usual, but ACK with empty TwiML so Twilio
   // stops logging error 12300 (Invalid Content-Type: application/json).
+  // Local verify scripts may send X-TradeFlow-Verify: 1 to get the JSON body.
   if (sourceHeader === "twilio-whatsapp") {
+    const verifyJson =
+      request.headers.get("x-tradeflow-verify") === "1";
     if (isDuplicate) {
-      return twimlAck();
+      return verifyJson
+        ? NextResponse.json({ ok: true, duplicate: true }, { status: 200 })
+        : twimlAck();
     }
     try {
-      await handleTwilioWhatsApp(rawBody);
+      const result = await handleTwilioWhatsApp(rawBody);
+      if (verifyJson) {
+        return NextResponse.json(result.body, { status: result.status });
+      }
       return twimlAck();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[whatsapp] Handler error", message);
       // Still ACK with TwiML — processing already logged; avoid 12300 + retries.
+      if (verifyJson) {
+        return NextResponse.json(
+          { ok: false, handled: false, reason: "handler_error" },
+          { status: 200 },
+        );
+      }
       return twimlAck();
     }
   }

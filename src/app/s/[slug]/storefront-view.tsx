@@ -79,7 +79,11 @@ export function StorefrontView({ storefront }: { storefront: PublicStorefront })
       <StorefrontHero storefront={storefront} />
       <TrustStrip hasReturnsPolicy={storefront.hasReturnsPolicy} />
 
-      <main id="catalog" className="px-4 pb-8 pt-6">
+      <main id="catalog" className="px-4 pb-8 pt-6 space-y-6">
+        <ShopInfoSection
+          deliveryInfo={storefront.deliveryInfo}
+          shopFaq={storefront.shopFaq}
+        />
         <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--tf-text-muted)]">
           Products
         </h2>
@@ -380,6 +384,104 @@ function ProductGallery({ urls }: { urls: string[] }) {
   );
 }
 
+function ProductKnowledgeDetails({
+  product,
+}: {
+  product: PublicStorefront["products"][number];
+}) {
+  const blocks: { title: string; body: string }[] = [];
+  if (product.usageInstructions?.trim()) {
+    blocks.push({ title: "How to use", body: product.usageInstructions.trim() });
+  }
+  if (product.ingredients?.trim()) {
+    blocks.push({ title: "Ingredients", body: product.ingredients.trim() });
+  }
+  if (product.storageAndCare?.trim()) {
+    blocks.push({
+      title: "Storage and care",
+      body: product.storageAndCare.trim(),
+    });
+  }
+  if (product.sizeAndFit?.trim()) {
+    blocks.push({ title: "Size and fit", body: product.sizeAndFit.trim() });
+  }
+  if (product.allergensStatus === "listed" && product.allergensText?.trim()) {
+    blocks.push({ title: "Allergens", body: product.allergensText.trim() });
+  } else if (product.allergensStatus === "none_declared") {
+    blocks.push({
+      title: "Allergens",
+      body: "The seller has declared no allergens. Ask the seller if unsure.",
+    });
+  } else {
+    blocks.push({
+      title: "Allergens",
+      body: "Allergen information has not been provided. Please ask the seller.",
+    });
+  }
+  for (const faq of product.faqs) {
+    blocks.push({ title: faq.question, body: faq.answer });
+  }
+  if (blocks.length === 0) return null;
+  return (
+    <details className="rounded-[12px] border border-[var(--tf-border)] px-3 py-2 text-sm">
+      <summary className="cursor-pointer font-medium">Product details</summary>
+      <div className="mt-2 space-y-3">
+        {blocks.map((block) => (
+          <div key={`${block.title}-${block.body.slice(0, 24)}`}>
+            <p className="font-medium text-[var(--tf-text-secondary)]">
+              {block.title}
+            </p>
+            <p className="mt-1 whitespace-pre-wrap leading-6 text-[var(--tf-text-secondary)]">
+              {block.body}
+            </p>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function ShopInfoSection({
+  deliveryInfo,
+  shopFaq,
+}: {
+  deliveryInfo: string | null;
+  shopFaq: PublicStorefront["shopFaq"];
+}) {
+  if (!deliveryInfo && shopFaq.length === 0) return null;
+  return (
+    <section className="space-y-3 rounded-[16px] border border-[var(--tf-border)] bg-[var(--tf-bg-surface)] p-4">
+      <h2 className="text-base font-semibold">Shop information</h2>
+      {deliveryInfo ? (
+        <div>
+          <p className="text-sm font-medium">Delivery</p>
+          <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-[var(--tf-text-secondary)]">
+            {deliveryInfo}
+          </p>
+        </div>
+      ) : null}
+      {shopFaq.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-sm font-medium">FAQ</p>
+          {shopFaq.map((faq) => (
+            <details
+              key={`${faq.question}-${faq.answer.slice(0, 16)}`}
+              className="rounded-[12px] border border-[var(--tf-border)] px-3 py-2 text-sm"
+            >
+              <summary className="cursor-pointer font-medium">
+                {faq.question}
+              </summary>
+              <p className="mt-2 whitespace-pre-wrap leading-6 text-[var(--tf-text-secondary)]">
+                {faq.answer}
+              </p>
+            </details>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function ProductCard({
   product,
 }: {
@@ -419,6 +521,8 @@ function ProductCard({
             {product.description}
           </p>
         ) : null}
+
+        <ProductKnowledgeDetails product={product} />
 
         {hasVariants ? (
           <label className="block space-y-1.5">

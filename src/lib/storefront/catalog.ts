@@ -19,6 +19,8 @@ export type PublicStorefrontVariant = {
   stockStatus: StockStatus | null;
 };
 
+export type PublicStorefrontFaq = { question: string; answer: string };
+
 export type PublicStorefrontProduct = {
   name: string;
   description: string | null;
@@ -26,6 +28,13 @@ export type PublicStorefrontProduct = {
   photoUrl: string | null;
   /** Ordered gallery. Storefront cards only carousel when this has 2+ URLs. */
   imageUrls: string[];
+  usageInstructions: string | null;
+  ingredients: string | null;
+  storageAndCare: string | null;
+  sizeAndFit: string | null;
+  allergensStatus: "not_provided" | "none_declared" | "listed";
+  allergensText: string | null;
+  faqs: PublicStorefrontFaq[];
   variants: PublicStorefrontVariant[];
 };
 
@@ -45,6 +54,8 @@ export type PublicStorefront = {
   shopClosed: boolean;
   /** True when the seller has written a returns policy — never the policy text itself. */
   hasReturnsPolicy: boolean;
+  deliveryInfo: string | null;
+  shopFaq: PublicStorefrontFaq[];
   products: PublicStorefrontProduct[];
 };
 
@@ -92,7 +103,7 @@ export const fetchPublicStorefront = cache(
     const { data: business, error: businessError } = await supabase
       .from("businesses")
       .select(
-        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text, stripe_subscription_status, closed_at, dispute_balance_hold",
+        "id, name, bio, logo_url, banner_url, storefront_accent_color, whatsapp_phone_e164, returns_policy_text, shop_faq, delivery_info, stripe_subscription_status, closed_at, dispute_balance_hold",
       )
       .eq("slug", trimmed)
       .is("deleted_at", null)
@@ -123,6 +134,8 @@ export const fetchPublicStorefront = cache(
         takingOrders: false,
         shopClosed: true,
         hasReturnsPolicy: false,
+        deliveryInfo: null,
+        shopFaq: [],
         products: [],
       };
     }
@@ -130,7 +143,7 @@ export const fetchPublicStorefront = cache(
     const { data: productRows, error: productError } = await supabase
       .from("products")
       .select(
-        "name, description, price_pence, photo_url, product_images(image_url, sort_order), product_variants(id, label, deleted_at, track_inventory, stock_quantity, reserved_quantity, low_stock_threshold)",
+        "name, description, price_pence, photo_url, usage_instructions, ingredients, storage_and_care, size_and_fit, allergens_status, allergens_text, product_faqs, product_images(image_url, sort_order), product_variants(id, label, deleted_at, track_inventory, stock_quantity, reserved_quantity, low_stock_threshold)",
       )
       .eq("business_id", business.id)
       .eq("active", true)
@@ -168,15 +181,55 @@ export const fetchPublicStorefront = cache(
         .sort((a, b) => a.sort_order - b.sort_order)
         .map((image) => image.image_url)
         .filter((url) => Boolean(url?.trim()));
+      const statusRaw = (row.allergens_status as string | null) ?? "not_provided";
+      const allergensStatus =
+        statusRaw === "listed" || statusRaw === "none_declared"
+          ? statusRaw
+          : "not_provided";
+      const faqsRaw = Array.isArray(row.product_faqs) ? row.product_faqs : [];
+      const faqs = faqsRaw
+        .map((item) => {
+          if (!item || typeof item !== "object") return null;
+          const rec = item as Record<string, unknown>;
+          const q = typeof rec.question === "string" ? rec.question.trim() : "";
+          const a = typeof rec.answer === "string" ? rec.answer.trim() : "";
+          if (!q || !a) return null;
+          return { question: q, answer: a };
+        })
+        .filter((item): item is PublicStorefrontFaq => Boolean(item));
       products.push({
         name,
         description: (row.description as string | null) ?? null,
         pricePence: row.price_pence as number,
         photoUrl: (row.photo_url as string | null) ?? null,
         imageUrls: gallery,
+        usageInstructions: (row.usage_instructions as string | null) ?? null,
+        ingredients: (row.ingredients as string | null) ?? null,
+        storageAndCare: (row.storage_and_care as string | null) ?? null,
+        sizeAndFit: (row.size_and_fit as string | null) ?? null,
+        allergensStatus,
+        allergensText:
+          allergensStatus === "listed"
+            ? ((row.allergens_text as string | null) ?? null)
+            : null,
+        faqs,
         variants,
       });
     }
+
+    const shopFaqRaw = Array.isArray(business.shop_faq)
+      ? business.shop_faq
+      : [];
+    const shopFaq = shopFaqRaw
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const rec = item as Record<string, unknown>;
+        const q = typeof rec.question === "string" ? rec.question.trim() : "";
+        const a = typeof rec.answer === "string" ? rec.answer.trim() : "";
+        if (!q || !a) return null;
+        return { question: q, answer: a };
+      })
+      .filter((item): item is PublicStorefrontFaq => Boolean(item));
 
     return {
       businessId: business.id as string,
@@ -198,6 +251,8 @@ export const fetchPublicStorefront = cache(
       hasReturnsPolicy: Boolean(
         (business.returns_policy_text as string | null)?.trim(),
       ),
+      deliveryInfo: (business.delivery_info as string | null)?.trim() || null,
+      shopFaq,
       products,
     };
   },
