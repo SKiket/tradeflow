@@ -213,7 +213,7 @@ Suggest title, short_description, and optional usage_instructions from the attac
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[ai] product_describe failed", message.slice(0, 180));
+    console.error("[ai] product_describe failed", message.slice(0, 400));
     return {
       ok: false,
       error: "AI suggestions are temporarily unavailable. Try again later.",

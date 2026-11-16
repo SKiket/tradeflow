@@ -126,10 +126,14 @@ export async function initiateRefund(
   const priorStatus = row.status;
   const reasonText = options?.reason?.trim() || null;
 
+  // reverse_transfer: pull refund from connected account.
+  // refund_application_fee: return TradeFlow's fee in proportion (sellers
+  // do not pay our fee on refunds). Buyer refund amount is unchanged.
   const stripeRefund = await getStripe().refunds.create({
     payment_intent: row.stripe_payment_intent_id,
     amount: amountPence,
     reverse_transfer: true,
+    refund_application_fee: true,
     reason: "requested_by_customer",
     metadata: {
       order_id: orderId,

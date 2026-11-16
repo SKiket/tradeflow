@@ -439,6 +439,10 @@ export function OrderActions({
             }}
           >
             <p className="text-sm font-medium">Issue refund</p>
+            <p className="text-xs text-muted-foreground">
+              TradeFlow&apos;s fee is returned on refunds (in proportion for
+              partial refunds). The buyer receives the refund amount you enter.
+            </p>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <Label htmlFor="refund-amount">Amount (£)</Label>

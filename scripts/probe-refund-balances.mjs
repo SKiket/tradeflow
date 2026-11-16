@@ -1,5 +1,5 @@
 /**
- * Step 22 Part 6 — read-only refund balance probe (Stripe TEST).
+ * Step 22b — refund balance probe with refund_application_fee: true (Stripe TEST).
  *   node scripts/probe-refund-balances.mjs
  */
 import { readFileSync } from "node:fs";
@@ -51,76 +51,160 @@ async function findDestination() {
 
 async function summarizeCharge(piId, label) {
   const pi = await stripe.paymentIntents.retrieve(piId, {
-    expand: ["latest_charge.balance_transaction", "latest_charge.transfer"],
+    expand: [
+      "latest_charge.balance_transaction",
+      "latest_charge.application_fee.balance_transaction",
+    ],
   });
   const charge =
-    typeof pi.latest_charge === "object" ? pi.latest_charge : await stripe.charges.retrieve(pi.latest_charge, {
-      expand: ["balance_transaction", "transfer"],
-    });
-  const btId =
-    typeof charge.balance_transaction === "string"
+    typeof pi.latest_charge === "object"
+      ? pi.latest_charge
+      : await stripe.charges.retrieve(pi.latest_charge, {
+          expand: ["balance_transaction", "application_fee.balance_transaction"],
+        });
+
+  const chargeBt =
+    typeof charge.balance_transaction === "object"
       ? charge.balance_transaction
-      : charge.balance_transaction?.id;
-  const bt = btId ? await stripe.balanceTransactions.retrieve(btId) : null;
+      : charge.balance_transaction
+        ? await stripe.balanceTransactions.retrieve(charge.balance_transaction)
+        : null;
+
+  const feeObj =
+    typeof charge.application_fee === "object" && charge.application_fee
+      ? charge.application_fee
+      : typeof charge.application_fee === "string"
+        ? await stripe.applicationFees.retrieve(charge.application_fee, {
+            expand: ["balance_transaction"],
+          })
+        : null;
+  const feeBt =
+    feeObj && typeof feeObj.balance_transaction === "object"
+      ? feeObj.balance_transaction
+      : feeObj?.balance_transaction
+        ? await stripe.balanceTransactions.retrieve(feeObj.balance_transaction)
+        : null;
 
   const transferId =
     typeof charge.transfer === "string"
       ? charge.transfer
-      : charge.transfer?.id;
+      : charge.transfer?.id ?? null;
   const transfer = transferId
     ? await stripe.transfers.retrieve(transferId)
     : null;
 
   console.log(`\n=== ${label} ===`);
-  console.log(`PI ${pi.id} amount=${pi.amount} app_fee=${pi.application_fee_amount}`);
-  console.log(`Charge ${charge.id} amount=${charge.amount} amount_refunded=${charge.amount_refunded}`);
-  if (bt) {
+  console.log(
+    `PI ${pi.id} amount=${pi.amount} app_fee=${pi.application_fee_amount}`,
+  );
+  console.log(
+    `Charge ${charge.id} amount=${charge.amount} amount_refunded=${charge.amount_refunded}`,
+  );
+  if (chargeBt) {
     console.log(
-      `Platform BT: amount=${bt.amount} fee=${bt.fee} net=${bt.net} type=${bt.type}`,
+      `Platform charge BT: amount=${chargeBt.amount} fee=${chargeBt.fee} net=${chargeBt.net}`,
+    );
+  }
+  if (feeObj) {
+    console.log(
+      `App fee: amount=${feeObj.amount} amount_refunded=${feeObj.amount_refunded}`,
+    );
+  }
+  if (feeBt) {
+    console.log(
+      `App fee BT: amount=${feeBt.amount} fee=${feeBt.fee} net=${feeBt.net}`,
     );
   }
   if (transfer) {
-    console.log(`Transfer ${transfer.id} amount=${transfer.amount} reversed=${transfer.reversed} amount_reversed=${transfer.amount_reversed}`);
+    console.log(
+      `Transfer ${transfer.id} amount=${transfer.amount} amount_reversed=${transfer.amount_reversed}`,
+    );
   }
 
-  // Refund balance transactions
   const refunds = await stripe.refunds.list({ payment_intent: piId, limit: 5 });
   for (const refund of refunds.data) {
-    const rBtId =
-      typeof refund.balance_transaction === "string"
-        ? refund.balance_transaction
-        : refund.balance_transaction?.id;
-    const rBt = rBtId
-      ? await stripe.balanceTransactions.retrieve(rBtId)
+    const rBt = refund.balance_transaction
+      ? await stripe.balanceTransactions.retrieve(refund.balance_transaction)
       : null;
-    const trr =
-      typeof refund.transfer_reversal === "string"
-        ? await stripe.transfers.retrieveReversal(
-            transferId,
-            refund.transfer_reversal,
-          ).catch(() => null)
-        : null;
     console.log(
-      `Refund ${refund.id} amount=${refund.amount} reverse_transfer=${refund.reverse_transfer} app_fee_refund=${refund.refund_application_fee}`,
+      `Refund ${refund.id} amount=${refund.amount} reverse_transfer=${refund.reverse_transfer} refund_application_fee=${refund.refund_application_fee}`,
     );
     if (rBt) {
       console.log(
-        `  Refund BT: amount=${rBt.amount} fee=${rBt.fee} net=${rBt.net}`,
+        `  Refund BT (buyer/platform): amount=${rBt.amount} fee=${rBt.fee} net=${rBt.net}`,
       );
     }
-    if (trr) {
-      console.log(`  Transfer reversal amount=${trr.amount}`);
+    if (refund.transfer_reversal && transferId) {
+      try {
+        const trr = await stripe.transfers.retrieveReversal(
+          transferId,
+          typeof refund.transfer_reversal === "string"
+            ? refund.transfer_reversal
+            : refund.transfer_reversal.id,
+        );
+        console.log(`  Transfer reversal amount=${trr.amount}`);
+      } catch (e) {
+        console.log(`  Transfer reversal lookup failed: ${e.message}`);
+      }
     }
   }
 
-  return { charge, bt, transfer, refunds: refunds.data };
+  // Application fee refund BTs (platform returns fee)
+  if (feeObj?.id) {
+    const feeRefunds = await stripe.applicationFees.listRefunds(feeObj.id, {
+      limit: 5,
+    });
+    for (const fr of feeRefunds.data) {
+      const frBt = fr.balance_transaction
+        ? await stripe.balanceTransactions.retrieve(fr.balance_transaction)
+        : null;
+      console.log(
+        `App fee refund ${fr.id} amount=${fr.amount}`,
+      );
+      if (frBt) {
+        console.log(
+          `  App fee refund BT: amount=${frBt.amount} fee=${frBt.fee} net=${frBt.net}`,
+        );
+      }
+    }
+  }
+
+  // Platform net across charge + refund + app fee + app fee refund
+  const platformNet =
+    (chargeBt?.net ?? 0) +
+    (feeBt?.net ?? 0) +
+    refunds.data.reduce((sum, r) => {
+      // refund BT retrieved above — recompute simply from amounts
+      return sum - (r.amount ?? 0);
+    }, 0) -
+    (feeObj?.amount_refunded ?? 0);
+
+  // Simpler: chargeBT.net + sum(refund BTs net) + feeBT.net + sum(fee refund BTs)
+  // We'll print components for the report.
+  console.log(
+    `Seller transfer net after reversals: ${
+      (transfer?.amount ?? 0) - (transfer?.amount_reversed ?? 0)
+    } (amount ${transfer?.amount} reversed ${transfer?.amount_reversed})`,
+  );
+  console.log(
+    `App fee remaining on platform: ${(feeObj?.amount ?? 0) - (feeObj?.amount_refunded ?? 0)}`,
+  );
+
+  return {
+    piId,
+    chargeBt,
+    feeObj,
+    feeBt,
+    transfer,
+    refunds: refunds.data,
+    platformNetRough: platformNet,
+  };
 }
 
 async function main() {
   const destination = await findDestination();
   console.log(`destination=${destination}`);
 
-  // Full £50 refund
   const fullPi = await stripe.paymentIntents.create({
     amount: 5000,
     currency: "gbp",
@@ -129,18 +213,17 @@ async function main() {
     confirm: true,
     transfer_data: { destination },
     application_fee_amount: 245,
-    metadata: { purpose: "step22-refund-full" },
+    metadata: { purpose: "step22b-refund-full" },
   });
-  await sleep(2500);
+  await sleep(3000);
   await stripe.refunds.create({
     payment_intent: fullPi.id,
     reverse_transfer: true,
-    // refund_application_fee unset — matches production
+    refund_application_fee: true,
   });
-  await sleep(2500);
-  const full = await summarizeCharge(fullPi.id, "FULL £50 refund (fee 245p)");
+  await sleep(3000);
+  await summarizeCharge(fullPi.id, "FULL £50 refund (fee 245p returned)");
 
-  // Partial £20 of £50
   const partPi = await stripe.paymentIntents.create({
     amount: 5000,
     currency: "gbp",
@@ -149,29 +232,24 @@ async function main() {
     confirm: true,
     transfer_data: { destination },
     application_fee_amount: 245,
-    metadata: { purpose: "step22-refund-partial" },
+    metadata: { purpose: "step22b-refund-partial" },
   });
-  await sleep(2500);
+  await sleep(3000);
   await stripe.refunds.create({
     payment_intent: partPi.id,
     amount: 2000,
     reverse_transfer: true,
+    refund_application_fee: true,
   });
-  await sleep(2500);
-  const part = await summarizeCharge(partPi.id, "PARTIAL £20 of £50 (fee 245p)");
+  await sleep(3000);
+  await summarizeCharge(partPi.id, "PARTIAL £20 of £50 (expect ~98p fee refund)");
 
-  console.log("\n=== INTERPRETATION ===");
+  console.log("\n=== EXPECTED ===");
   console.log(
-    "Buyer: receives refund amount (full 5000 / partial 2000). Platform keeps application fee unless refund_application_fee=true (unset → kept).",
+    "Full: seller transfer net 0; app fee fully refunded; platform net = -Stripe fee (178).",
   );
   console.log(
-    "Seller: transfer reversed by refund amount; net after full reverse should be ~0 on that transfer (minus any Stripe Connect nuances).",
-  );
-  console.log(
-    `Full: platform BT net=${full.bt?.net} fee=${full.bt?.fee}; transfer reversed=${full.transfer?.amount_reversed}/${full.transfer?.amount}`,
-  );
-  console.log(
-    `Partial: platform BT net=${part.bt?.net} fee=${part.bt?.fee}; transfer reversed=${part.transfer?.amount_reversed}/${part.transfer?.amount}`,
+    "Partial: transfer reverse 2000; app fee refund ~98 (245*2000/5000); Stripe fee stays 178.",
   );
 }
 

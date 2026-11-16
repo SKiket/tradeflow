@@ -123,7 +123,7 @@ VALUES (
   'gemini-2.5-flash',
   'gemini',
   'gemini-2.5-flash',
-  1024,
+  2048,
   TRUE
 )
 ON CONFLICT (task_key) DO UPDATE SET

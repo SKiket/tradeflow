@@ -380,6 +380,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
               <p className="text-sm text-muted-foreground">
                 Order total {formatPence(total)}, TradeFlow fee{" "}
                 {formatPence(fee)}, you receive {formatPence(receive)}.
+                TradeFlow&apos;s fee is returned on refunds.
               </p>
             );
           }

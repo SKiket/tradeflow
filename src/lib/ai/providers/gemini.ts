@@ -36,6 +36,16 @@ function toGeminiSchema(schema: JSONSchema7): ResponseSchema {
 }
 
 function jsonSchemaPropertyToGemini(schema: JSONSchema7): ResponseSchema {
+  // Gemini responseSchema: use nullable for ["string","null"] unions.
+  const typeList = Array.isArray(schema.type) ? schema.type : null;
+  if (typeList) {
+    const nonNull = typeList.filter((t) => t !== "null");
+    const nullable = typeList.includes("null");
+    const primary = (nonNull[0] ?? "string") as JSONSchema7["type"];
+    const base = jsonSchemaPropertyToGemini({ ...schema, type: primary });
+    return nullable ? { ...base, nullable: true } : base;
+  }
+
   switch (schema.type) {
     case "string":
       return { type: SchemaType.STRING };

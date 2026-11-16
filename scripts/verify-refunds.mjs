@@ -277,6 +277,7 @@ async function main() {
     .select("id, price_pence, product_variants(id, deleted_at)")
     .eq("business_id", business.id)
     .ilike("description", "%[order_parse_seed]%")
+    .is("deleted_at", null)
     .limit(1);
   const variant = (products?.[0]?.product_variants ?? []).find((v) => !v.deleted_at);
   if (!variant) throw new Error("No catalog variant");

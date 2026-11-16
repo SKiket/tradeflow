@@ -422,7 +422,7 @@ async function main() {
     payment_intent: refundPi.id,
     amount: 5000,
     reverse_transfer: true,
-    // refund_application_fee omitted — matches production refund-order.ts
+    refund_application_fee: true,
   });
   await sleep(1500);
   const fullRefundExpanded = await stripe.refunds.retrieve(fullRefund.id, {
@@ -467,6 +467,7 @@ async function main() {
     payment_intent: partialPi.id,
     amount: 2000,
     reverse_transfer: true,
+    refund_application_fee: true,
   });
   await sleep(1500);
   const partialChargeId =
@@ -484,29 +485,29 @@ async function main() {
     ? await stripe.applicationFees.retrieve(partialAppFeeId)
     : null;
 
-  console.log("\nRefund probe (current code: reverse_transfer=true, refund_application_fee unset):");
   console.log(
-    `  FULL £50: refund=${fullRefund.amount} status=${fullRefund.status} app_fee_amount=${fullAppFee?.amount} app_fee_refunded=${fullAppFee?.amount_refunded} transfer_reversed=${fullCharge.transfer_data ? "n/a" : ""}`,
+    "\nRefund probe (current code: reverse_transfer=true, refund_application_fee=true):",
+  );
+  console.log(
+    `  FULL £50: refund=${fullRefund.amount} status=${fullRefund.status} app_fee_amount=${fullAppFee?.amount} app_fee_refunded=${fullAppFee?.amount_refunded}`,
   );
   console.log(
     `  PARTIAL £20 of £50: refund=${partialRefund.amount} status=${partialRefund.status} app_fee_amount=${partialAppFee?.amount} app_fee_refunded=${partialAppFee?.amount_refunded}`,
   );
 
   record(
-    "9. refund leaves application fee with platform (no refund_application_fee)",
-    (fullAppFee?.amount_refunded ?? -1) === 0 &&
-      (partialAppFee?.amount_refunded ?? -1) === 0 &&
+    "9. refund returns application fee in proportion (refund_application_fee)",
+    (fullAppFee?.amount_refunded ?? -1) === 245 &&
+      (partialAppFee?.amount_refunded ?? -1) === 98 &&
       fullAppFee?.amount === 245 &&
       partialAppFee?.amount === 245,
     `full_fee_refunded=${fullAppFee?.amount_refunded} partial_fee_refunded=${partialAppFee?.amount_refunded}`,
   );
 
-  // Keeping only the 20p would require refund_application_fee + clawback or
-  // a second charge — not implemented (per Step 21c instructions).
   record(
-    "9b. complex keep-20p not implemented (left unchanged)",
-    true,
-    "Stripe has no simple keep-fixed-fee option; code unchanged",
+    "9b. buyer refund amounts unchanged (full 5000 / partial 2000)",
+    fullRefund.amount === 5000 && partialRefund.amount === 2000,
+    `full=${fullRefund.amount} partial=${partialRefund.amount}`,
   );
 
   // Cleanup

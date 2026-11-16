@@ -102,9 +102,15 @@ export async function POST(request: NextRequest) {
 
   // Inbound WhatsApp: process as usual, but ACK with empty TwiML so Twilio
   // stops logging error 12300 (Invalid Content-Type: application/json).
-  // Local verify scripts may send X-TradeFlow-Verify: 1 to get the JSON body.
+  // Non-production only: X-TradeFlow-Verify: 1 returns the handler JSON body
+  // for local verify scripts. Signature check, gates, and outbound sends are
+  // unchanged; production always ACKs with TwiML regardless of the header.
   if (sourceHeader === "twilio-whatsapp") {
+    // Production (VERCEL_ENV=production) always TwiML. Local/preview may
+    // request JSON via the header for verify scripts only.
+    const verifyJsonAllowed = process.env.VERCEL_ENV !== "production";
     const verifyJson =
+      verifyJsonAllowed &&
       request.headers.get("x-tradeflow-verify") === "1";
     if (isDuplicate) {
       return verifyJson

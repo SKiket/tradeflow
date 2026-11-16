@@ -112,7 +112,7 @@ async function main() {
       .insert({
         business_id: business.id,
         name: item.name,
-        description: item.description,
+        description: `${item.description} ${SEED_TAG}`,
         price_pence: item.price_pence,
         active: true,
       })

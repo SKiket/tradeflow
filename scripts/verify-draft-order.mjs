@@ -179,18 +179,42 @@ async function main() {
   console.log(`Blue mug: ${blueMug?.id} @ ${blueMug?.price_pence}p variant=${mugVariant?.id}`);
   console.log(`Sneakers size10/11: ${size10?.id} / ${size11?.id}\n`);
 
+  async function buyerCustomerId() {
+    const { data } = await admin
+      .from("customers")
+      .select("id")
+      .eq("business_id", business.id)
+      .eq("phone_e164", BUYER)
+      .maybeSingle();
+    return data?.id ?? null;
+  }
+
+  async function buyerPendingOrders(select = "id") {
+    const customerId = await buyerCustomerId();
+    if (!customerId) return [];
+    const { data } = await admin
+      .from("orders")
+      .select(select)
+      .eq("business_id", business.id)
+      .eq("customer_id", customerId)
+      .eq("status", "PENDING_CONFIRMATION");
+    return data ?? [];
+  }
+
   // ========== Case a ==========
   await cleanBuyerState(business.id);
   const aSend = await sendWhatsApp("I'd like 2 of the blue mug");
   await sleep(2500);
   const aDraft = aSend.json.draft;
-  const { data: aOrders } = await admin
-    .from("orders")
-    .select("id, status, total_pence, order_ref, thread_id, order_items(id, quantity, unit_price_pence, product_variant_id)")
-    .eq("business_id", business.id)
-    .eq("status", "PENDING_CONFIRMATION")
-    .order("created_at", { ascending: false });
-  const aOrder = (aOrders ?? [])[0];
+  const { data: aOrder } = aDraft?.orderId
+    ? await admin
+        .from("orders")
+        .select(
+          "id, status, total_pence, order_ref, thread_id, order_items(id, quantity, unit_price_pence, product_variant_id)",
+        )
+        .eq("id", aDraft.orderId)
+        .maybeSingle()
+    : { data: null };
   const expectedTotal = (blueMug?.price_pence ?? 0) * 2;
   const aPass =
     aSend.status === 200 &&
@@ -200,8 +224,11 @@ async function main() {
     aOrder?.order_items?.length === 1 &&
     aOrder.order_items[0].quantity === 2 &&
     aOrder.order_items[0].product_variant_id === mugVariant?.id;
-  record("Case a: confident order → PENDING_CONFIRMATION draft + confirmation WhatsApp", aPass,
-    `draft=${JSON.stringify(aDraft)}\norder=${JSON.stringify(aOrder, null, 2)}`);
+  record(
+    "Case a: confident order → PENDING_CONFIRMATION draft + confirmation WhatsApp",
+    aPass,
+    `draft=${JSON.stringify(aDraft)}\norder=${JSON.stringify(aOrder, null, 2)}\nsendError=${aDraft?.sendError ?? "none"}`,
+  );
 
   // ========== Case d (fresh thread) ==========
   await cleanBuyerState(business.id);
@@ -212,39 +239,39 @@ async function main() {
   const d2 = await sendWhatsApp("actually make it size 11");
   await sleep(3000);
   const d2Draft = d2.json.draft;
-  const { data: dOrders } = await admin
-    .from("orders")
-    .select("id, status, total_pence, order_ref, thread_id, order_items(id, quantity, unit_price_pence, product_variant_id)")
-    .eq("business_id", business.id)
-    .eq("status", "PENDING_CONFIRMATION");
+  const dOrders = await buyerPendingOrders(
+    "id, status, total_pence, order_ref, thread_id, order_items(id, quantity, unit_price_pence, product_variant_id)",
+  );
   const dPass =
     d1Draft?.action === "draft_created" &&
     d2Draft?.action === "draft_updated" &&
     d2Draft?.orderId === d1OrderId &&
-    (dOrders ?? []).length === 1 &&
+    dOrders.length === 1 &&
     dOrders[0].id === d1OrderId &&
     dOrders[0].order_items?.length === 1 &&
     dOrders[0].order_items[0].product_variant_id === size11?.id;
-  record("Case d: size correction updates SAME draft (no duplicate)", dPass,
-    `d1=${JSON.stringify(d1Draft)}\nd2=${JSON.stringify(d2Draft)}\norders=${JSON.stringify(dOrders, null, 2)}`);
+  record(
+    "Case d: size correction updates SAME draft (no duplicate)",
+    dPass,
+    `d1=${JSON.stringify(d1Draft)}\nd2=${JSON.stringify(d2Draft)}\norders=${JSON.stringify(dOrders, null, 2)}`,
+  );
 
   // ========== Case b ==========
   await cleanBuyerState(business.id);
   const bSend = await sendWhatsApp("Can I get a purple hoverboard please?");
   await sleep(2500);
   const bDraft = bSend.json.draft;
-  const { data: bOrders } = await admin
-    .from("orders")
-    .select("id")
-    .eq("business_id", business.id)
-    .eq("status", "PENDING_CONFIRMATION");
+  const bOrders = await buyerPendingOrders();
   const bPass =
     bDraft?.action === "clarification_sent" &&
-    (bOrders ?? []).length === 0 &&
+    bOrders.length === 0 &&
     typeof bDraft?.message === "string" &&
     bDraft.message.length > 0;
-  record("Case b: non-catalog → clarification, NO order", bPass,
-    `draft=${JSON.stringify(bDraft)}\npendingOrders=${(bOrders ?? []).length}`);
+  record(
+    "Case b: non-catalog → clarification, NO order",
+    bPass,
+    `draft=${JSON.stringify(bDraft)}\npendingOrders=${bOrders.length}`,
+  );
 
   // ========== Stock shortage ==========
   await cleanBuyerState(business.id);
@@ -257,17 +284,16 @@ async function main() {
     const sSend = await sendWhatsApp("I'd like 2 of the blue mug");
     await sleep(2500);
     const sDraft = sSend.json.draft;
-    const { data: sOrders } = await admin
-      .from("orders")
-      .select("id")
-      .eq("business_id", business.id)
-      .eq("status", "PENDING_CONFIRMATION");
+    const sOrders = await buyerPendingOrders();
     const sPass =
       sDraft?.action === "stock_shortage" &&
-      (sOrders ?? []).length === 0 &&
+      sOrders.length === 0 &&
       /stock|left|out of stock/i.test(sDraft?.message ?? "");
-    record("Stock case: insufficient stock → shortage message, NO order", sPass,
-      `draft=${JSON.stringify(sDraft)}\npendingOrders=${(sOrders ?? []).length}`);
+    record(
+      "Stock case: insufficient stock → shortage message, NO order",
+      sPass,
+      `draft=${JSON.stringify(sDraft)}\npendingOrders=${sOrders.length}`,
+    );
   } finally {
     await admin
       .from("product_variants")
