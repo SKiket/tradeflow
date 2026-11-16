@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
+import { orderHasOpenDispute } from "@/lib/disputes/open-disputes";
 import { t } from "@/lib/i18n";
 import { buyerFacingRefundReasonDisplay } from "@/lib/i18n/buyer-reason";
 import {
@@ -24,7 +25,8 @@ export type InitiateRefundOutcome =
   | { action: "invalid_status"; orderId: string; status: string }
   | { action: "amount_exceeds_refundable"; orderId: string; requested: number; refundable: number }
   | { action: "missing_payment_intent"; orderId: string }
-  | { action: "refund_in_progress"; orderId: string };
+  | { action: "refund_in_progress"; orderId: string }
+  | { action: "dispute_open"; orderId: string };
 
 export type ProcessRefundUpdatedOutcome =
   | { action: "succeeded"; orderId: string; stripeRefundId: string; alreadyProcessed: boolean }
@@ -79,6 +81,14 @@ export async function initiateRefund(
 
   if (row.status === ORDER_STATUS.REFUND_PENDING) {
     return { action: "refund_in_progress", orderId };
+  }
+
+  const disputeOpen = await orderHasOpenDispute(supabase, {
+    businessId: row.business_id,
+    orderId,
+  });
+  if (disputeOpen) {
+    return { action: "dispute_open", orderId };
   }
 
   if (!(REFUNDABLE_STATUSES as readonly string[]).includes(row.status)) {

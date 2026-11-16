@@ -20,7 +20,10 @@ export type TemplateKey =
   | "seller_refund_failed"
   | "seller_low_stock"
   | "seller_needs_attention"
-  | "seller_delivery_issue";
+  | "seller_delivery_issue"
+  | "seller_dispute_opened"
+  | "seller_dispute_closed"
+  | "seller_dispute_reminder";
 
 export interface TemplateVariableDef {
   /** Logical name used by callers (mapped to {{n}} by position). */
@@ -198,6 +201,42 @@ export const TEMPLATE_REGISTRY: readonly TemplateDefinition[] = [
     bodies: {
       en: "There is a delivery problem with order {{1}}: the carrier reports {{2}}. Open your TradeFlow dashboard for details.",
       fr: "Il y a un problème de livraison pour la commande {{1}} : le transporteur signale {{2}}. Ouvrez votre tableau de bord TradeFlow pour plus de détails.",
+    },
+  },
+  {
+    key: "seller_dispute_opened",
+    category: "utility",
+    variables: [
+      { name: "orderRef", sample: "TF-ABC123" },
+      { name: "deadlineDate", sample: "30 Nov 2026" },
+    ],
+    bodies: {
+      en: "A customer has disputed the payment for order {{1}}. The response deadline is {{2}}. Open your TradeFlow dashboard to review and add details.",
+      fr: "Un client a contesté le paiement de la commande {{1}}. La date limite de réponse est le {{2}}. Ouvrez votre tableau de bord TradeFlow pour vérifier et ajouter des détails.",
+    },
+  },
+  {
+    key: "seller_dispute_closed",
+    category: "utility",
+    variables: [
+      { name: "orderRef", sample: "TF-ABC123" },
+      { name: "outcome", sample: "won" },
+    ],
+    bodies: {
+      en: "The payment dispute for order {{1}} has closed: you {{2}}. Open your TradeFlow dashboard for details.",
+      fr: "Le litige de paiement pour la commande {{1}} est clos : {{2}}. Ouvrez votre tableau de bord TradeFlow pour plus de détails.",
+    },
+  },
+  {
+    key: "seller_dispute_reminder",
+    category: "utility",
+    variables: [
+      { name: "orderRef", sample: "TF-ABC123" },
+      { name: "deadlineDate", sample: "30 Nov 2026" },
+    ],
+    bodies: {
+      en: "Reminder: your response to the payment dispute for order {{1}} is due by {{2}}. Open your TradeFlow dashboard to confirm your evidence.",
+      fr: "Rappel : votre réponse au litige de paiement pour la commande {{1}} est due pour le {{2}}. Ouvrez votre tableau de bord TradeFlow pour confirmer vos preuves.",
     },
   },
 ] as const;

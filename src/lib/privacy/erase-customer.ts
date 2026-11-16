@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { findOpenDisputesForOrders } from "@/lib/disputes/open-disputes";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import {
   extractTwilioSids,
@@ -136,7 +137,23 @@ export async function findErasureBlocks(
     }
   }
 
-  // Stripe disputes are not tracked in TradeFlow — see Step 19 report.
+  if (orderIds.length > 0) {
+    const openDisputes = await findOpenDisputesForOrders(supabase, {
+      businessId,
+      orderIds,
+    });
+    if (openDisputes.length > 0) {
+      return {
+        blocked: true,
+        reason:
+          "Customer has an open payment dispute. Wait until the dispute is closed before erasing.",
+        orderRefs: openDisputes
+          .map((d) => d.orderRef)
+          .filter((r): r is string => Boolean(r)),
+      };
+    }
+  }
+
   return { blocked: false, reason: "", orderRefs: [] };
 }
 

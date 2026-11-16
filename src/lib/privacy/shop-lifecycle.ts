@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { businessHasOpenDispute } from "@/lib/disputes/open-disputes";
 import {
   eraseCustomer,
   ERASURE_BLOCKING_STATUSES,
@@ -98,6 +99,16 @@ export async function closeShop(
     return {
       ok: true,
       purgeAfter: (again?.purge_after as string) ?? new Date().toISOString(),
+    };
+  }
+
+  const openDisputes = await businessHasOpenDispute(supabase, businessId);
+  if (openDisputes.hasOpen) {
+    return {
+      ok: false,
+      error:
+        "Cannot close while a payment dispute is open. Wait until disputes are closed.",
+      blockingOrderRefs: openDisputes.orderRefs,
     };
   }
 

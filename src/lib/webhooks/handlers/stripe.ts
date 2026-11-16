@@ -1,5 +1,6 @@
 import type Stripe from "stripe";
 
+import { handleDisputeEvent } from "@/lib/disputes/handle-dispute-event";
 import { fulfilPaidOrder, notifyBuyerPaymentFailed } from "@/lib/orders/fulfil-order";
 import { processRefundUpdated } from "@/lib/orders/refund-order";
 import { persistOrderShippingAddress, shippingAddressFromSession } from "@/lib/orders/shipping-address";
@@ -62,6 +63,15 @@ export async function handleStripeEvent(
       );
     case "invoice.payment_failed":
       return handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
+    case "charge.dispute.created":
+    case "charge.dispute.updated":
+    case "charge.dispute.closed":
+    case "charge.dispute.funds_withdrawn":
+    case "charge.dispute.funds_reinstated":
+      return handleDisputeWebhook(
+        event.type,
+        event.data.object as Stripe.Dispute,
+      );
     default:
       console.info("[stripe-webhook] Unhandled event type", {
         type: event.type,
@@ -72,6 +82,29 @@ export async function handleStripeEvent(
         body: { ok: true, handled: false, type: event.type },
       };
   }
+}
+
+async function handleDisputeWebhook(
+  eventType: string,
+  dispute: Stripe.Dispute,
+): Promise<StripeHandlerResult> {
+  const supabase = createAdminClient();
+  const result = await handleDisputeEvent(supabase, eventType, dispute);
+  console.info("[stripe-webhook] dispute event", {
+    type: eventType,
+    stripeDisputeId: dispute.id,
+    action: result.action,
+    disputeId: result.disputeId ?? null,
+    orderId: result.orderId ?? null,
+  });
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      type: eventType,
+      ...result,
+    },
+  };
 }
 
 async function resolveOrderIdFromMetadata(

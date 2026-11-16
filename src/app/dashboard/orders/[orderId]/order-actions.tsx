@@ -26,6 +26,7 @@ export type OrderActionsProps = {
   totalPence: number;
   refundedAmountPence: number;
   hasPaymentIntent: boolean;
+  disputeOpen?: boolean;
   returnReason: string | null;
   returnReasonDetail: string | null;
   returnNotes: string | null;
@@ -85,6 +86,7 @@ export function OrderActions({
   totalPence,
   refundedAmountPence,
   hasPaymentIntent,
+  disputeOpen = false,
   returnReason,
   returnReasonDetail,
   returnNotes,
@@ -99,6 +101,7 @@ export function OrderActions({
   const canDecideReturn = status === ORDER_STATUS.RETURN_REQUESTED;
   const canMarkReturned = status === ORDER_STATUS.RETURN_APPROVED;
   const canRefund =
+    !disputeOpen &&
     hasPaymentIntent &&
     remainingPence > 0 &&
     (REFUNDABLE_STATUSES as readonly string[]).includes(status);
@@ -169,6 +172,7 @@ export function OrderActions({
     !canDispatch &&
     !canDeliver &&
     !canRefund &&
+    !disputeOpen &&
     !canDecideReturn &&
     !canMarkReturned &&
     !showAutoApprovedLabel &&
@@ -400,6 +404,17 @@ export function OrderActions({
               {pending === "returned" ? "Updating…" : "Mark as Returned"}
             </Button>
           </form>
+        )}
+
+        {disputeOpen && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+            <p className="font-medium">Refund unavailable</p>
+            <p className="mt-1">
+              This order has an open payment dispute. Refunding a disputed
+              charge can lead to double loss — wait until the dispute is closed,
+              then refund from the order page if needed.
+            </p>
+          </div>
         )}
 
         {canRefund && (

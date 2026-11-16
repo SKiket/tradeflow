@@ -79,6 +79,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
           },
           { status: 409 },
         );
+      case "dispute_open":
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "This order has an open payment dispute. Refunding a disputed charge can lead to double loss — wait until the dispute is closed.",
+            orderId: outcome.orderId,
+          },
+          { status: 409 },
+        );
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

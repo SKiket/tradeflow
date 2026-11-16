@@ -4,10 +4,12 @@ import { LegalLinks } from "@/components/brand/legal-links";
 import { countPendingReplays } from "@/lib/channels/pending-replay";
 import { countRecentDeliveryFailures } from "@/lib/dashboard/delivery-failures";
 import { fetchSetupProgress } from "@/lib/dashboard/setup-progress";
+import { countOpenDisputes } from "@/lib/disputes/open-disputes";
 import { canAcceptOrders, ordersPausedBanner } from "@/lib/stripe/billing-gate";
 
 import { BillingPausedBanner } from "./billing-paused-banner";
 import { DeliveryFailedBanner } from "./delivery-failed-banner";
+import { OpenDisputesBanner } from "./open-disputes-banner";
 import { PendingReplayBanner } from "./pending-replay-banner";
 import { BusinessSwitcher } from "./business-switcher";
 import { DashboardNav } from "./dashboard-nav";
@@ -27,6 +29,7 @@ export default async function DashboardLayout({
     business.id,
   );
   const pendingReplays = await countPendingReplays(supabase, business.id);
+  const openDisputes = await countOpenDisputes(supabase, business.id);
 
   const takingOrders = canAcceptOrders({
     stripe_subscription_status:
@@ -103,6 +106,7 @@ export default async function DashboardLayout({
           count={deliveryFailures.count}
           latestErrorText={deliveryFailures.latestErrorText}
         />
+        <OpenDisputesBanner count={openDisputes} />
         <main className="flex-1 p-4 md:p-6">
           {setupProgress ? <SetupChecklist progress={setupProgress} /> : null}
           {children}

@@ -47,6 +47,12 @@ async function main() {
     "customer.subscription.updated",
     "customer.subscription.deleted",
     "invoice.payment_failed",
+    // Destination-charge disputes land on the platform Account endpoint
+    "charge.dispute.created",
+    "charge.dispute.updated",
+    "charge.dispute.closed",
+    "charge.dispute.funds_withdrawn",
+    "charge.dispute.funds_reinstated",
   ];
   const missing = receivesAll
     ? []

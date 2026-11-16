@@ -316,6 +316,78 @@ async function main() {
     (delCross.data?.length ?? 0) === 0 &&
     !!delInsert.error;
 
+  // Step 21: disputes — SELECT own only; no authenticated INSERT
+  const { data: disputeSeed } = await admin
+    .from("disputes")
+    .insert({
+      business_id: tenantA.businessId,
+      stripe_dispute_id: `du_rls_${Date.now()}`,
+      stripe_charge_id: "ch_rls_probe",
+      amount_pence: 100,
+      currency: "gbp",
+      reason: "general",
+      status: "needs_response",
+      evidence_status: "draft",
+    })
+    .select("id")
+    .single();
+  const { data: disputeSeedB } = await admin
+    .from("disputes")
+    .insert({
+      business_id: tenantB.businessId,
+      stripe_dispute_id: `du_rls_b_${Date.now()}`,
+      stripe_charge_id: "ch_rls_probe_b",
+      amount_pence: 200,
+      currency: "gbp",
+      reason: "general",
+      status: "needs_response",
+      evidence_status: "draft",
+    })
+    .select("id")
+    .single();
+
+  const dispOwn = await clientA
+    .from("disputes")
+    .select("id")
+    .eq("business_id", tenantA.businessId);
+  const dispCross = await clientA
+    .from("disputes")
+    .select("id")
+    .eq("business_id", tenantB.businessId);
+  const dispInsert = await clientA.from("disputes").insert({
+    business_id: tenantA.businessId,
+    stripe_dispute_id: `du_rls_auth_${Date.now()}`,
+    stripe_charge_id: "ch_rls_auth",
+    amount_pence: 50,
+    currency: "gbp",
+    reason: "general",
+    status: "needs_response",
+    evidence_status: "draft",
+  });
+  logResult("Query: Tenant A reads own disputes", {
+    rowCount: dispOwn.data?.length ?? 0,
+    error: dispOwn.error?.message ?? null,
+  });
+  logResult("Query: Tenant A reads Tenant B disputes (expect 0)", {
+    rowCount: dispCross.data?.length ?? 0,
+    error: dispCross.error?.message ?? null,
+  });
+  logResult("Query: Tenant A INSERT disputes (expect denied)", {
+    error: dispInsert.error?.message ?? null,
+  });
+
+  if (disputeSeed?.id) {
+    await admin.from("disputes").delete().eq("id", disputeSeed.id);
+  }
+  if (disputeSeedB?.id) {
+    await admin.from("disputes").delete().eq("id", disputeSeedB.id);
+  }
+
+  const disputesIsolated =
+    (dispOwn.data?.length ?? 0) >= 1 &&
+    (dispCross.data?.length ?? 0) === 0 &&
+    !!dispInsert.error;
+
   // Step 19b: anon must not execute invoke_app_cron (cron/postgres only)
   const anonClient = createClient(url, anonKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -341,6 +413,7 @@ async function main() {
     !!insertCross.error &&
     templatesIsolated &&
     deletionRequestsIsolated &&
+    disputesIsolated &&
     cronRpcDenied;
 
   console.log("\n========================================");

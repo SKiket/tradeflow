@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { StatusBadge } from "@/components/orders/status-badge";
+import { isOpenDisputeStatus } from "@/lib/disputes/constants";
 import {
   formatDateTime,
   formatPence,
@@ -39,7 +40,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
+      "id, order_ref, status, dispute_status, total_pence, refunded_amount_pence, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
     .eq("business_id", businessId)
@@ -47,22 +48,35 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
 
   if (!order) notFound();
 
-  const [{ data: items }, { data: history }] = await Promise.all([
-    supabase
-      .from("order_items")
-      .select(
-        "id, quantity, unit_price_pence, product_variants(label, products(name))",
-      )
-      .eq("order_id", orderId)
-      .eq("business_id", businessId)
-      .order("created_at", { ascending: true }),
-    supabase
-      .from("order_status_history")
-      .select("id, from_status, to_status, changed_at")
-      .eq("order_id", orderId)
-      .eq("business_id", businessId)
-      .order("changed_at", { ascending: true }),
-  ]);
+  const [{ data: items }, { data: history }, { data: orderDisputes }] =
+    await Promise.all([
+      supabase
+        .from("order_items")
+        .select(
+          "id, quantity, unit_price_pence, product_variants(label, products(name))",
+        )
+        .eq("order_id", orderId)
+        .eq("business_id", businessId)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("order_status_history")
+        .select("id, from_status, to_status, changed_at")
+        .eq("order_id", orderId)
+        .eq("business_id", businessId)
+        .order("changed_at", { ascending: true }),
+      supabase
+        .from("disputes")
+        .select("id, status, evidence_due_by")
+        .eq("order_id", orderId)
+        .eq("business_id", businessId)
+        .is("closed_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1),
+    ]);
+
+  const openDispute = (orderDisputes ?? []).find((d) =>
+    isOpenDisputeStatus(d.status as string),
+  );
 
   const customer = unwrapRelation(
     order.customers as
@@ -118,6 +132,25 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
             </span>
           ) : null}
         </div>
+        {openDispute ? (
+          <p
+            role="alert"
+            className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+          >
+            This order has an open payment dispute
+            {openDispute.evidence_due_by
+              ? ` — evidence due ${formatDateTime(openDispute.evidence_due_by as string)}`
+              : ""}
+            .{" "}
+            <Link
+              href={`/dashboard/disputes/${openDispute.id}`}
+              className="font-medium underline-offset-2 hover:underline"
+            >
+              Review dispute
+            </Link>
+            . Refunding while a dispute is open can lead to double loss.
+          </p>
+        ) : null}
         {deliveryIssue ? (
           <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
             Delivery problem — carrier reports {deliveryIssue}
@@ -173,6 +206,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
         totalPence={order.total_pence as number}
         refundedAmountPence={(order.refunded_amount_pence as number) ?? 0}
         hasPaymentIntent={Boolean(order.stripe_payment_intent_id)}
+        disputeOpen={Boolean(openDispute)}
         returnReason={(order.return_reason as string | null) ?? null}
         returnReasonDetail={(order.return_reason_detail as string | null) ?? null}
         returnNotes={(order.return_notes as string | null) ?? null}
