@@ -2,8 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
-import { ProductForm, type ProductFormValues } from "../product-form";
+import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
+import {
+  fetchVariantInventoryMovements,
+  type InventoryMovementRow,
+} from "@/lib/inventory/movements";
+import { resolveInventoryLang } from "@/lib/inventory/movements-copy";
+
 import { requireSeller } from "../../require-seller";
+import { ProductForm, type ProductFormValues } from "../product-form";
+import { StockHistorySection } from "../stock-history";
 
 interface EditProductPageProps {
   params: Promise<{ productId: string }>;
@@ -13,22 +21,39 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
   const { productId } = await params;
   const { supabase, businessId } = await requireSeller();
 
-  const { data: product } = await supabase
-    .from("products")
-    .select(
-      "id, name, description, price_pence, photo_url, active, usage_instructions, ingredients, storage_and_care, size_and_fit, allergens_text, allergens_status, product_faqs, product_images(id, image_url, sort_order), product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory, weight_grams)",
-    )
-    .eq("id", productId)
-    .eq("business_id", businessId)
-    .maybeSingle();
+  const [{ data: product }, sellerLang] = await Promise.all([
+    supabase
+      .from("products")
+      .select(
+        "id, name, description, price_pence, photo_url, active, usage_instructions, ingredients, storage_and_care, size_and_fit, allergens_text, allergens_status, product_faqs, product_images(id, image_url, sort_order), product_variants(id, label, stock_quantity, low_stock_threshold, track_inventory, weight_grams)",
+      )
+      .eq("id", productId)
+      .eq("business_id", businessId)
+      .maybeSingle(),
+    getBusinessSellerLanguage(supabase, businessId),
+  ]);
 
   if (!product) notFound();
 
   const variants = Array.isArray(product.product_variants)
     ? product.product_variants
     : product.product_variants
-      ? [product.product_variants]
-      : [];
+    ? [product.product_variants]
+    : [];
+  const liveVariants = variants.filter((v) => Boolean(v.id));
+  const historyEntries = await Promise.all(
+    liveVariants.map(async (variant) => {
+      const { rows } = await fetchVariantInventoryMovements(
+        supabase,
+        businessId,
+        variant.id as string,
+      );
+      return [variant.id as string, rows] as const;
+    }),
+  );
+  const initialByVariant: Record<string, InventoryMovementRow[]> =
+    Object.fromEntries(historyEntries);
+  const invLang = resolveInventoryLang(sellerLang);
 
   const images = Array.isArray(product.product_images)
     ? product.product_images
@@ -97,6 +122,15 @@ export default async function EditProductPage({ params }: EditProductPageProps) 
         </h1>
       </div>
       <ProductForm businessId={businessId} product={values} />
+      <StockHistorySection
+        productId={productId}
+        variants={liveVariants.map((variant) => ({
+          id: variant.id as string,
+          label: (variant.label as string | null) ?? null,
+        }))}
+        initialByVariant={initialByVariant}
+        lang={invLang}
+      />
     </div>
   );
 }

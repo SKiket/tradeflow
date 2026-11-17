@@ -3,12 +3,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { OPEN_DISPUTE_STATUSES } from "@/lib/disputes/constants";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { countReturnsNeedingDecision } from "@/lib/returns/count-pending";
+import { countReturnedAwaitingRefund } from "@/lib/returns/count-returned-awaiting-refund";
 import { canTakeCardPayments } from "@/lib/stripe/connect-capabilities";
 
 export type SellerAttentionKind =
   | "disputes"
   | "fraud"
   | "returns"
+  | "returned_awaiting_refund"
   | "payments_setup"
   | "undispatched"
   | "reminder_failed"
@@ -38,6 +40,7 @@ export const SELLER_ATTENTION_ORDER: SellerAttentionKind[] = [
   "disputes",
   "fraud",
   "returns",
+  "returned_awaiting_refund",
   "payments_setup",
   "undispatched",
   "reminder_failed",
@@ -76,6 +79,7 @@ export async function fetchSellerAttention(
     fraudCount,
     fraudOldestRes,
     returnsCount,
+    returnedAwaitingRefundCount,
     undispatchedCount,
     reminderFailedCount,
     deliveryFailedCount,
@@ -119,6 +123,7 @@ export async function fetchSellerAttention(
       .limit(1)
       .maybeSingle(),
     countReturnsNeedingDecision(supabase, businessId),
+    countReturnedAwaitingRefund(supabase, businessId),
     countHead(
       supabase
         .from("orders")
@@ -230,6 +235,15 @@ export async function fetchSellerAttention(
       kind: "returns",
       count: returnsCount,
       href: "/dashboard/returns?tab=needs_decision",
+      oldestAt: null,
+      detail: null,
+    });
+  }
+  if (returnedAwaitingRefundCount > 0) {
+    items.push({
+      kind: "returned_awaiting_refund",
+      count: returnedAwaitingRefundCount,
+      href: "/dashboard/returns?tab=closed",
       oldestAt: null,
       detail: null,
     });

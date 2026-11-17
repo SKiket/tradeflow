@@ -346,6 +346,7 @@ export async function deleteTestBusiness(admin, businessId, { ownerUserId } = {}
     "analytics_cache",
     "pending_replays",
     "messages",
+    "inventory_movements",
     "product_images",
     "product_variants",
     "products",

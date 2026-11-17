@@ -539,6 +539,34 @@ export async function markReturned(
     to_status: ORDER_STATUS.RETURNED,
   });
 
+  // Single safe place: parcel received → restock tracked variants (labels restock_return).
+  const { data: lines } = await supabase
+    .from("order_items")
+    .select("quantity, product_variant_id")
+    .eq("order_id", orderId)
+    .eq("business_id", order.business_id as string);
+
+  for (const line of lines ?? []) {
+    const variantId = line.product_variant_id as string | null;
+    const qty = (line.quantity as number) ?? 0;
+    if (!variantId || qty <= 0) continue;
+    const { data: variant } = await supabase
+      .from("product_variants")
+      .select("id, stock_quantity, track_inventory")
+      .eq("id", variantId)
+      .eq("business_id", order.business_id as string)
+      .maybeSingle();
+    if (!variant?.track_inventory) continue;
+    const next = Math.max(0, (variant.stock_quantity as number) + qty);
+    const { error: stockError } = await supabase.rpc("adjust_variant_stock", {
+      p_variant_id: variantId,
+      p_stock_quantity: next,
+      p_reason: "restock_return",
+      p_order_id: orderId,
+    });
+    if (stockError) throw new Error(stockError.message);
+  }
+
   return {
     action: "returned",
     orderId,

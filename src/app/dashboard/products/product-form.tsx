@@ -59,6 +59,8 @@ type VariantDraft = {
   id?: string;
   label: string;
   stockQuantity: string;
+  /** Stock loaded from DB (edit); used to detect manual adjustments. */
+  initialStockQuantity?: number;
   lowStockThreshold: string;
   trackInventory: boolean;
   weightGrams: string;
@@ -140,6 +142,7 @@ export function ProductForm({
         id: variant.id,
         label: variant.label ?? "",
         stockQuantity: String(variant.stock_quantity),
+        initialStockQuantity: variant.stock_quantity,
         lowStockThreshold: String(variant.low_stock_threshold),
         trackInventory: variant.track_inventory,
         weightGrams: String(variant.weight_grams ?? 200),
@@ -274,9 +277,9 @@ export function ProductForm({
           }
           if (variant.removed || !productId) continue;
 
+          const nextStock = Math.max(0, parseIntField(variant.stockQuantity, 0));
           const payload = {
             label: variant.label.trim() || null,
-            stock_quantity: Math.max(0, parseIntField(variant.stockQuantity, 0)),
             low_stock_threshold: Math.max(
               0,
               parseIntField(variant.lowStockThreshold, 5),
@@ -291,11 +294,30 @@ export function ProductForm({
               .update(payload)
               .eq("id", variant.id);
             if (variantUpdateError) throw new Error(variantUpdateError.message);
+
+            // Stock via adjust RPC so reason GUC and UPDATE share one transaction.
+            if (
+              variant.initialStockQuantity === undefined ||
+              nextStock !== variant.initialStockQuantity
+            ) {
+              const { error: stockError } = await supabase.rpc(
+                "adjust_variant_stock",
+                {
+                  p_variant_id: variant.id,
+                  p_stock_quantity: nextStock,
+                  p_reason: "manual_adjustment",
+                  p_order_id: null,
+                },
+              );
+              if (stockError) throw new Error(stockError.message);
+            }
           } else {
+            // New rows: trigger records reason "initial" (no GUC needed).
             const { error: variantInsertError } = await supabase
               .from("product_variants")
               .insert({
                 ...payload,
+                stock_quantity: nextStock,
                 product_id: productId,
                 business_id: businessId,
                 reserved_quantity: 0,

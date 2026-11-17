@@ -16,6 +16,10 @@ const COPY = {
         n === 1 ? "1 fraud warning" : `${n} fraud warnings`,
       returns: (n: number) =>
         n === 1 ? "1 return to review" : `${n} returns to review`,
+      returned_awaiting_refund: (n: number) =>
+        n === 1
+          ? "1 returned item awaiting refund"
+          : `${n} returned items awaiting refund`,
       payments_setup: () => "Finish payment setup",
       undispatched: (n: number) =>
         n === 1 ? "1 paid order to dispatch" : `${n} paid orders to dispatch`,
@@ -41,6 +45,7 @@ const COPY = {
           : "Accept or contest before the deadline",
       fraud: () => "Decide whether to refund",
       returns: () => "Approve or decline the return",
+      returned_awaiting_refund: () => "Issue a refund on the order",
       payments_setup: () => "Buyers cannot pay by card yet",
       undispatched: () => "Mark as sent when you ship",
       reminder_failed: () => "Buyer may not have received the payment link",
@@ -62,6 +67,10 @@ const COPY = {
         n === 1 ? "1 alerte fraude" : `${n} alertes fraude`,
       returns: (n: number) =>
         n === 1 ? "1 retour à traiter" : `${n} retours à traiter`,
+      returned_awaiting_refund: (n: number) =>
+        n === 1
+          ? "1 retour reçu à rembourser"
+          : `${n} retours reçus à rembourser`,
       payments_setup: () => "Terminer la config paiements",
       undispatched: (n: number) =>
         n === 1
@@ -89,6 +98,7 @@ const COPY = {
           : "Accepter ou contester avant la deadline",
       fraud: () => "Décider s’il faut rembourser",
       returns: () => "Approuver ou refuser le retour",
+      returned_awaiting_refund: () => "Émettre un remboursement sur la commande",
       payments_setup: () => "Les acheteurs ne peuvent pas payer par carte",
       undispatched: () => "Marquez comme envoyé à l’expédition",
       reminder_failed: () =>
