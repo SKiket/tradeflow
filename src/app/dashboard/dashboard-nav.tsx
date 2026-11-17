@@ -46,8 +46,8 @@ const NAV = [
     live: true,
   },
   {
-    href: "/dashboard/analytics",
-    label: "Analytics",
+    href: "/dashboard/performance",
+    label: "Performance",
     icon: BarChart3,
     live: true,
   },

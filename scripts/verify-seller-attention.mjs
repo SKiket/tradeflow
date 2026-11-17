@@ -312,7 +312,7 @@ async function main() {
       bulk.push({
         business_id: shopA.business.id,
         customer_id: bulkCust.id,
-        order_ref: `TF-ATTN-BULK-${i.toString(16).padStart(4, "0")}`,
+        order_ref: `TF-ATTN-${tagA}-B${i.toString(16).padStart(4, "0")}`,
         status: "PAID",
         total_pence: 500,
         channel: "whatsapp",

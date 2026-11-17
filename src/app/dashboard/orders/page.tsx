@@ -1,8 +1,16 @@
+import { fetchPaidOrderFacts } from "@/lib/analytics/paid-orders";
+import { resolvePerformanceLang } from "@/lib/analytics/performance-copy";
+import {
+  rollingWindow,
+} from "@/lib/analytics/performance-periods";
+import { inWindow } from "@/lib/analytics/ranges";
+import { totalsFor } from "@/lib/analytics/summarize";
 import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
 import { fetchSellerAttention } from "@/lib/dashboard/seller-attention";
 import { resolveAttentionLang } from "@/lib/dashboard/seller-attention-copy";
 import { unwrapRelation } from "@/lib/orders/display";
 
+import { PerformanceHomeLink } from "../performance-home-link";
 import { SellerAttentionPanel } from "../seller-attention-panel";
 import { requireSeller } from "../require-seller";
 import { OrdersTable, type OrderListRow } from "./orders-table";
@@ -16,7 +24,7 @@ export default async function OrdersPage({
   const params = searchParams ? await searchParams : {};
   const initialStatus = params.status?.trim() || "ALL";
 
-  const [ordersResult, attention, sellerLang] = await Promise.all([
+  const [ordersResult, attention, sellerLang, paidFacts] = await Promise.all([
     supabase
       .from("orders")
       .select(
@@ -34,10 +42,17 @@ export default async function OrdersPage({
         (business.stripe_transfers_capability_active as boolean | null) ?? null,
     }),
     getBusinessSellerLanguage(supabase, businessId),
+    fetchPaidOrderFacts(supabase, businessId),
   ]);
 
   const { data, error } = ordersResult;
   const lang = resolveAttentionLang(sellerLang);
+  const perfLang = resolvePerformanceLang(sellerLang);
+  const recentSales = totalsFor(
+    paidFacts.facts.filter((row) =>
+      inWindow(row.paidAt, rollingWindow(30)),
+    ),
+  ).revenuePence;
 
   if (error) {
     return (
@@ -78,6 +93,7 @@ export default async function OrdersPage({
             ? "Your orders will appear here."
             : `${orders.length} order${orders.length === 1 ? "" : "s"}, newest first.`}
         </p>
+        <PerformanceHomeLink salesPence={recentSales} lang={perfLang} />
       </div>
       <OrdersTable orders={orders} initialStatus={initialStatus} />
     </div>

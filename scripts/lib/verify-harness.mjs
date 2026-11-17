@@ -137,12 +137,16 @@ export function phoneFromRunId(runId, slot = 0) {
 export async function deleteOrdersByIds(admin, orderIds) {
   const ids = (orderIds ?? []).filter(Boolean);
   if (!ids.length) return 0;
-  await admin.from("order_refunds").delete().in("order_id", ids);
-  await admin.from("fraud_warnings").delete().in("order_id", ids);
-  await admin.from("disputes").update({ order_id: null }).in("order_id", ids);
-  await admin.from("order_items").delete().in("order_id", ids);
-  await admin.from("order_status_history").delete().in("order_id", ids);
-  await admin.from("orders").delete().in("id", ids);
+  const CHUNK = 200;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    await admin.from("order_refunds").delete().in("order_id", slice);
+    await admin.from("fraud_warnings").delete().in("order_id", slice);
+    await admin.from("disputes").update({ order_id: null }).in("order_id", slice);
+    await admin.from("order_items").delete().in("order_id", slice);
+    await admin.from("order_status_history").delete().in("order_id", slice);
+    await admin.from("orders").delete().in("id", slice);
+  }
   return ids.length;
 }
 
@@ -321,14 +325,20 @@ export async function deleteTestBusiness(admin, businessId, { ownerUserId } = {}
     throw new Error("Refusing to delete pilot / missing business");
   }
 
-  const { data: orders } = await admin
-    .from("orders")
-    .select("id")
-    .eq("business_id", businessId);
-  await deleteOrdersByIds(
-    admin,
-    (orders ?? []).map((o) => o.id),
-  );
+  const orderIds = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data: orders } = await admin
+      .from("orders")
+      .select("id")
+      .eq("business_id", businessId)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    const page = orders ?? [];
+    for (const row of page) orderIds.push(row.id);
+    if (page.length < PAGE) break;
+  }
+  await deleteOrdersByIds(admin, orderIds);
 
   for (const table of [
     "ai_knowledge_gaps",

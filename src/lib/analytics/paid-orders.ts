@@ -14,57 +14,111 @@ export type PaidOrderFact = {
   totalPence: number;
   refundedPence: number;
   netPence: number;
+  /** Current order status (for status / returns breakdown). */
+  status: string;
+  /** Order channel: whatsapp | storefront | other. */
+  channel: string;
 };
 
 export async function fetchPaidOrderFacts(
   supabase: SupabaseClient,
   businessId: string,
 ): Promise<{ facts: PaidOrderFact[]; error: string | null }> {
-  const { data: history, error: histError } = await supabase
-    .from("order_status_history")
-    .select("order_id, changed_at")
-    .eq("business_id", businessId)
-    .eq("to_status", "PAID")
-    .order("changed_at", { ascending: true });
-
-  if (histError) {
-    return { facts: [], error: histError.message };
+  // Paginate past the default 1000-row PostgREST cap.
+  const PAGE = 1000;
+  const history: { order_id: string; changed_at: string }[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error: histError } = await supabase
+      .from("order_status_history")
+      .select("order_id, changed_at")
+      .eq("business_id", businessId)
+      .eq("to_status", "PAID")
+      .order("changed_at", { ascending: true })
+      .order("order_id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (histError) {
+      return { facts: [], error: histError.message };
+    }
+    const page = data ?? [];
+    for (const row of page) {
+      history.push({
+        order_id: row.order_id as string,
+        changed_at: row.changed_at as string,
+      });
+    }
+    if (page.length < PAGE) break;
   }
 
   const firstPaid = new Map<string, string>();
-  for (const row of history ?? []) {
-    const orderId = row.order_id as string;
+  for (const row of history) {
+    const orderId = row.order_id;
     if (firstPaid.has(orderId)) continue;
-    firstPaid.set(orderId, row.changed_at as string);
+    firstPaid.set(orderId, row.changed_at);
   }
 
-  const orderIds = [...firstPaid.keys()];
-  if (orderIds.length === 0) return { facts: [], error: null };
+  if (firstPaid.size === 0) return { facts: [], error: null };
 
-  const { data: orders, error: orderError } = await supabase
-    .from("orders")
-    .select("id, customer_id, total_pence, refunded_amount_pence")
-    .eq("business_id", businessId)
-    .in("id", orderIds)
-    .is("deleted_at", null);
-
-  if (orderError) {
-    return { facts: [], error: orderError.message };
+  // One paginated scan of the shop's orders (avoids huge .in() URL lists).
+  const orderById = new Map<
+    string,
+    {
+      id: string;
+      customer_id: string | null;
+      total_pence: number | null;
+      refunded_amount_pence: number | null;
+      status: string | null;
+      channel: string | null;
+    }
+  >();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error: orderError } = await supabase
+      .from("orders")
+      .select(
+        "id, customer_id, total_pence, refunded_amount_pence, status, channel",
+      )
+      .eq("business_id", businessId)
+      .is("deleted_at", null)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (orderError) {
+      return { facts: [], error: orderError.message };
+    }
+    const page = data ?? [];
+    for (const row of page) {
+      orderById.set(row.id as string, row as {
+        id: string;
+        customer_id: string | null;
+        total_pence: number | null;
+        refunded_amount_pence: number | null;
+        status: string | null;
+        channel: string | null;
+      });
+    }
+    if (page.length < PAGE) break;
   }
 
   const facts: PaidOrderFact[] = [];
-  for (const order of orders ?? []) {
-    const paidAt = firstPaid.get(order.id as string);
-    if (!paidAt) continue;
+  for (const [orderId, paidAt] of firstPaid) {
+    const order = orderById.get(orderId);
+    if (!order) continue;
     const totalPence = (order.total_pence as number) ?? 0;
     const refundedPence = (order.refunded_amount_pence as number) ?? 0;
+    const channelRaw = String(order.channel ?? "")
+      .trim()
+      .toLowerCase();
+    const channel =
+      channelRaw === "whatsapp" || channelRaw === "storefront"
+        ? channelRaw
+        : "other";
     facts.push({
-      orderId: order.id as string,
+      orderId,
       customerId: (order.customer_id as string | null) ?? null,
       paidAt,
       totalPence,
       refundedPence,
       netPence: Math.max(0, totalPence - refundedPence),
+      status: String(order.status ?? ""),
+      channel,
     });
   }
 
@@ -87,18 +141,32 @@ export async function fetchPaidOrderItems(
 ): Promise<{ items: LineItemRow[]; error: string | null }> {
   if (orderIds.length === 0) return { items: [], error: null };
 
-  const { data, error } = await supabase
-    .from("order_items")
-    .select(
-      "order_id, quantity, unit_price_pence, product_variants(product_id, products(id, name))",
-    )
-    .eq("business_id", businessId)
-    .in("order_id", orderIds);
-
-  if (error) return { items: [], error: error.message };
+  const wanted = new Set(orderIds);
+  // Paginate the shop's line items once, then keep rows for the requested orders.
+  // Avoids hundreds of .in() round-trips on large period sets.
+  const PAGE = 1000;
+  const rows: Record<string, unknown>[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("order_items")
+      .select(
+        "order_id, quantity, unit_price_pence, product_variants(product_id, products(id, name))",
+      )
+      .eq("business_id", businessId)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) return { items: [], error: error.message };
+    const page = data ?? [];
+    for (const row of page) {
+      if (wanted.has(row.order_id as string)) {
+        rows.push(row as Record<string, unknown>);
+      }
+    }
+    if (page.length < PAGE) break;
+  }
 
   const items: LineItemRow[] = [];
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const variantRaw = row.product_variants as
       | { product_id: string | null; products: { id: string; name: string } | { id: string; name: string }[] | null }
       | { product_id: string | null; products: { id: string; name: string } | { id: string; name: string }[] | null }[]
