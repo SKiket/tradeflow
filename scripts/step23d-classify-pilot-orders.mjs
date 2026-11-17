@@ -171,12 +171,13 @@ async function main() {
   if (aCustomerIds.length) {
     for (let i = 0; i < aCustomerIds.length; i += 100) {
       const chunk = aCustomerIds.slice(i, i + 100);
-      const { data: msgs } = await admin
+      const { data: msgs, error: msgErr } = await admin
         .from("messages")
-        .select("id, customer_id, direction, created_at, order_id")
+        .select("id, customer_id, direction, created_at, thread_id")
         .eq("business_id", pilot.id)
         .in("customer_id", chunk)
         .limit(5000);
+      if (msgErr) console.warn("messages query:", msgErr.message);
       messages.push(...(msgs ?? []));
     }
   }
@@ -265,28 +266,23 @@ WHERE order_id IN (
   ${idList || "NULL"}
 );
 
--- 4) Messages tied to these orders (if order_id set)
-DELETE FROM public.messages
-WHERE order_id IN (
-  ${idList || "NULL"}
-);
-
--- 5) Orders themselves
+-- 4) Orders themselves (messages have no order_id column — keyed by customer/thread)
 DELETE FROM public.orders
 WHERE id IN (
   ${idList || "NULL"}
 );
 
--- 6) Optional: messages for mock customers that have ZERO remaining orders
--- (commented — review before enabling; may remove live thread history if misclassified)
--- DELETE FROM public.messages
--- WHERE business_id = (SELECT id FROM public.businesses WHERE slug = 'ek-pousserd')
---   AND customer_id IN (
---   ${custList || "NULL"}
---   )
---   AND NOT EXISTS (
---     SELECT 1 FROM public.orders o WHERE o.customer_id = messages.customer_id
---   );
+-- 5) Messages for group-A customers that have ZERO remaining orders after step 4
+DELETE FROM public.messages
+WHERE business_id = (SELECT id FROM public.businesses WHERE slug = 'ek-pousserd')
+  AND customer_id IN (
+  ${custList || "NULL"}
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM public.orders o WHERE o.customer_id = messages.customer_id
+  );
+
+-- 6) Optional: drop those customers after messages cleared (commented)
 
 -- 7) Optional: customers with no remaining orders (commented)
 -- DELETE FROM public.customers c
