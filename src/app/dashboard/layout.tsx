@@ -2,26 +2,14 @@ import Link from "next/link";
 
 import { LegalLinks } from "@/components/brand/legal-links";
 import { countPendingReplays } from "@/lib/channels/pending-replay";
-import { countRecentDeliveryFailures } from "@/lib/dashboard/delivery-failures";
 import { fetchSetupProgress } from "@/lib/dashboard/setup-progress";
-import { listOpenActionableFraudWarnings } from "@/lib/disputes/fraud-warnings";
-import { countOpenDisputes } from "@/lib/disputes/open-disputes";
-import { countOpenKnowledgeGaps } from "@/lib/knowledge/gaps";
 import {
   canAcceptOrders,
   getAcceptOrdersBlockReason,
   ordersPausedBanner,
 } from "@/lib/stripe/billing-gate";
-import { canTakeCardPayments } from "@/lib/stripe/connect-capabilities";
 
 import { BillingPausedBanner } from "./billing-paused-banner";
-import { PaymentsSetupBanner } from "./payments-setup-banner";
-import { DeliveryFailedBanner } from "./delivery-failed-banner";
-import {
-  NeedsAttentionBanner,
-  type NeedsAttentionItem,
-} from "./needs-attention-banner";
-import { OpenDisputesBanner } from "./open-disputes-banner";
 import { PendingReplayBanner } from "./pending-replay-banner";
 import { BusinessSwitcher } from "./business-switcher";
 import { DashboardNav } from "./dashboard-nav";
@@ -36,62 +24,7 @@ export default async function DashboardLayout({
 }) {
   const { supabase, business, businesses } = await requireSeller();
   const setupProgress = await fetchSetupProgress(supabase, business.id);
-  const deliveryFailures = await countRecentDeliveryFailures(
-    supabase,
-    business.id,
-  );
   const pendingReplays = await countPendingReplays(supabase, business.id);
-  const openDisputes = await countOpenDisputes(supabase, business.id);
-  const fraudWarnings = await listOpenActionableFraudWarnings(
-    supabase,
-    business.id,
-  );
-  const { data: urgentOrders } = await supabase
-    .from("orders")
-    .select("id, order_ref")
-    .eq("business_id", business.id)
-    .not("seller_attention_urgent_at", "is", null)
-    .is("deleted_at", null)
-    .order("seller_attention_urgent_at", { ascending: false })
-    .limit(10);
-
-  const needsAttention: NeedsAttentionItem[] = [];
-  if (openDisputes > 0) {
-    needsAttention.push({
-      kind: "dispute",
-      href: "/dashboard/disputes",
-      label:
-        openDisputes === 1
-          ? "1 payment dispute needs a response"
-          : `${openDisputes} payment disputes need a response`,
-    });
-  }
-  for (const fw of fraudWarnings) {
-    if (!fw.orderId) continue;
-    needsAttention.push({
-      kind: "fraud",
-      href: `/dashboard/orders/${fw.orderId}`,
-      label: `Early fraud warning on ${fw.orderRef ?? "an order"}`,
-    });
-  }
-  for (const row of urgentOrders ?? []) {
-    needsAttention.push({
-      kind: "complaint",
-      href: `/dashboard/orders/${row.id}`,
-      label: `Payment complaint on ${row.order_ref}`,
-    });
-  }
-  const openGaps = await countOpenKnowledgeGaps(business.id, supabase);
-  if (openGaps > 0) {
-    needsAttention.push({
-      kind: "knowledge_gap",
-      href: "/dashboard/knowledge-gaps",
-      label:
-        openGaps === 1
-          ? "1 question the AI could not answer"
-          : `${openGaps} questions the AI could not answer`,
-    });
-  }
 
   const billingBusiness = {
     stripe_subscription_status:
@@ -171,21 +104,10 @@ export default async function DashboardLayout({
             hasCustomer={Boolean(business.stripe_customer_id)}
           />
         ) : null}
-        {!canTakeCardPayments({
-          stripe_connected_account_id: business.stripe_connected_account_id,
-          stripe_charges_enabled: business.stripe_charges_enabled,
-          stripe_transfers_capability_active:
-            business.stripe_transfers_capability_active,
-        }) ? (
-          <PaymentsSetupBanner />
-        ) : null}
+        {/* Payments setup, disputes, fraud, delivery failures, knowledge gaps,
+            returns, undispatched, reminders, low stock → SellerAttentionPanel
+            on /dashboard/orders (seller home). Avoid duplicating banners. */}
         <PendingReplayBanner count={pendingReplays} />
-        <DeliveryFailedBanner
-          count={deliveryFailures.count}
-          latestErrorText={deliveryFailures.latestErrorText}
-        />
-        <NeedsAttentionBanner items={needsAttention} />
-        <OpenDisputesBanner count={openDisputes} />
         <main className="flex-1 p-4 md:p-6">
           {setupProgress ? <SetupChecklist progress={setupProgress} /> : null}
           {children}

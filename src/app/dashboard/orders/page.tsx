@@ -1,17 +1,43 @@
-import { requireSeller } from "../require-seller";
+import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
+import { fetchSellerAttention } from "@/lib/dashboard/seller-attention";
+import { resolveAttentionLang } from "@/lib/dashboard/seller-attention-copy";
 import { unwrapRelation } from "@/lib/orders/display";
 
+import { SellerAttentionPanel } from "../seller-attention-panel";
+import { requireSeller } from "../require-seller";
 import { OrdersTable, type OrderListRow } from "./orders-table";
 
-export default async function OrdersPage() {
-  const { supabase, businessId } = await requireSeller();
-  const { data, error } = await supabase
-    .from("orders")
-    .select(
-      "id, order_ref, status, total_pence, created_at, customers(phone_e164, name)",
-    )
-    .eq("business_id", businessId)
-    .order("created_at", { ascending: false });
+export default async function OrdersPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ status?: string }>;
+}) {
+  const { supabase, businessId, business } = await requireSeller();
+  const params = searchParams ? await searchParams : {};
+  const initialStatus = params.status?.trim() || "ALL";
+
+  const [ordersResult, attention, sellerLang] = await Promise.all([
+    supabase
+      .from("orders")
+      .select(
+        "id, order_ref, status, total_pence, created_at, customers(phone_e164, name)",
+      )
+      .eq("business_id", businessId)
+      .order("created_at", { ascending: false }),
+    fetchSellerAttention(supabase, {
+      id: business.id,
+      stripe_connected_account_id:
+        (business.stripe_connected_account_id as string | null) ?? null,
+      stripe_charges_enabled:
+        (business.stripe_charges_enabled as boolean | null) ?? null,
+      stripe_transfers_capability_active:
+        (business.stripe_transfers_capability_active as boolean | null) ?? null,
+    }),
+    getBusinessSellerLanguage(supabase, businessId),
+  ]);
+
+  const { data, error } = ordersResult;
+  const lang = resolveAttentionLang(sellerLang);
 
   if (error) {
     return (
@@ -44,6 +70,7 @@ export default async function OrdersPage() {
 
   return (
     <div className="space-y-6">
+      <SellerAttentionPanel items={attention} lang={lang} />
       <div>
         <h1 className="tf-page-heading">Orders</h1>
         <p className="text-sm text-muted-foreground">
@@ -52,7 +79,7 @@ export default async function OrdersPage() {
             : `${orders.length} order${orders.length === 1 ? "" : "s"}, newest first.`}
         </p>
       </div>
-      <OrdersTable orders={orders} />
+      <OrdersTable orders={orders} initialStatus={initialStatus} />
     </div>
   );
 }

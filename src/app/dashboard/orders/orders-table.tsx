@@ -24,9 +24,17 @@ export type OrderListRow = {
   customer_name: string | null;
 };
 
-export function OrdersTable({ orders }: { orders: OrderListRow[] }) {
+export function OrdersTable({
+  orders,
+  initialStatus = "ALL",
+}: {
+  orders: OrderListRow[];
+  initialStatus?: string;
+}) {
   const router = useRouter();
-  const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [statusFilter, setStatusFilter] = useState<string>(
+    initialStatus && initialStatus !== "ALL" ? initialStatus : "ALL",
+  );
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
