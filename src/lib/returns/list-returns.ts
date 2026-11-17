@@ -140,11 +140,12 @@ export async function fetchReturnsList(
 
   // Closed/approved/declined must have been return requests; needs_decision is
   // status-only (same filter as attention count).
+  // Page fetch without count:"exact" — tab totals come from the parallel head
+  // counts below (avoids a second full scan of the same filter).
   let listQuery = supabase
     .from("orders")
     .select(
       "id, order_ref, status, return_reason, return_reason_detail, return_requested_at, refunded_amount_pence, total_pence, customers(name)",
-      { count: "exact" },
     )
     .eq("business_id", businessId)
     .in("status", TAB_STATUSES[tab])
@@ -164,18 +165,20 @@ export async function fetchReturnsList(
     countTab(supabase, businessId, "closed"),
   ]);
 
+  const totals = {
+    needs_decision: needs,
+    approved,
+    declined,
+    closed,
+  };
+
   if (listRes.error) {
     return {
       tab,
       page,
       pageSize,
       total: 0,
-      totals: {
-        needs_decision: needs,
-        approved,
-        declined,
-        closed,
-      },
+      totals,
       rows: [],
       error: listRes.error.message,
       queryMs: Date.now() - t0,
@@ -249,13 +252,8 @@ export async function fetchReturnsList(
     tab,
     page,
     pageSize,
-    total: listRes.count ?? rows.length,
-    totals: {
-      needs_decision: needs,
-      approved,
-      declined,
-      closed,
-    },
+    total: totals[tab],
+    totals,
     rows,
     error: null,
     queryMs: Date.now() - t0,

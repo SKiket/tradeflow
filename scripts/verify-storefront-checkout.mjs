@@ -1,5 +1,6 @@
 /**
- * Verifies structured storefront checkout (web cart, no order_parse):
+ * Verifies structured storefront checkout (web cart, no order_parse) on an
+ * isolated tagged shop (never ek-pousserd):
  *   1. Two-product cart → AWAITING_PAYMENT + reservation + Stripe Checkout URL
  *   2. Payment webhook → PAID, stock decremented, WhatsApp to form phone + tracking link
  *   3. Out-of-stock item → clean 409, no order created
@@ -10,17 +11,25 @@
  *   node scripts/verify-storefront-checkout.mjs
  */
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBrowserClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import {
+  assertNotPilotBusiness,
+  createAdmin,
+  deleteTestBusiness,
+  hashTag,
+  loadVerifyEnv,
+  newRunId,
+  phoneFromRunId,
+  PILOT_SLUG,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
 const WEBHOOK = `${BASE}/api/webhooks/ingress`;
-const BUYER = "+447733308706";
-const EK_EMAIL = "sgkiket@gmail.com";
+process.env.TWILIO_DRY_RUN = process.env.TWILIO_DRY_RUN ?? "true";
 const BAKER_ST = {
   line1: "221B Baker Street",
   line2: "Flat 2",
@@ -29,32 +38,14 @@ const BAKER_ST = {
   country: "GB",
 };
 
-function loadEnv() {
-  const env = {};
-  for (const line of readFileSync(resolve(root, ".env.local"), "utf8").split("\n")) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const eq = t.indexOf("=");
-    if (eq === -1) continue;
-    let v = t.slice(eq + 1);
-    if (
-      (v.startsWith('"') && v.endsWith('"')) ||
-      (v.startsWith("'") && v.endsWith("'"))
-    ) {
-      v = v.slice(1, -1);
-    }
-    env[t.slice(0, eq)] = v;
-  }
-  return env;
-}
-
-const env = loadEnv();
-const admin = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
+const env = loadVerifyEnv();
+const admin = createAdmin();
 const url = env.NEXT_PUBLIC_SUPABASE_URL;
 const anon = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const WEBHOOK_SECRET = env.STRIPE_WEBHOOK_SECRET;
+const runId = newRunId("sfront");
+const tag = hashTag(runId).slice(0, 10);
+const BUYER = phoneFromRunId(runId, 1);
 
 const results = [];
 function record(name, passed, detail) {
@@ -97,7 +88,7 @@ async function postStripeEvent(payload) {
   return { status: response.status, json };
 }
 
-async function mintEkCookies() {
+async function mintOwnerCookies(email) {
   const cookies = [];
   const supabase = createBrowserClient(url, anon, {
     cookies: {
@@ -115,7 +106,7 @@ async function mintEkCookies() {
   });
   const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
     type: "magiclink",
-    email: EK_EMAIL,
+    email,
   });
   if (linkError) throw linkError;
   const { error: otpError } = await supabase.auth.verifyOtp({
@@ -124,6 +115,94 @@ async function mintEkCookies() {
   });
   if (otpError) throw otpError;
   return cookies;
+}
+
+async function createTaggedCheckoutShop() {
+  const email = `sfront-${tag}@example.com`;
+  const password = `Sfront-${tag}!aA1`;
+  const slug = `sfront-${tag}`;
+  if (slug === PILOT_SLUG || slug.startsWith("ek-pousser")) {
+    throw new Error("refusing pilot slug");
+  }
+
+  const { data: pilot } = await admin
+    .from("businesses")
+    .select("stripe_connected_account_id, stripe_charges_enabled")
+    .eq("slug", PILOT_SLUG)
+    .maybeSingle();
+  if (!pilot?.stripe_connected_account_id || !pilot.stripe_charges_enabled) {
+    throw new Error("pilot Connect not ready (read-only borrow)");
+  }
+
+  const { data: created, error: uErr } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
+  if (uErr) throw uErr;
+  const userId = created.user.id;
+
+  const { data: business, error: bErr } = await admin
+    .from("businesses")
+    .insert({
+      owner_user_id: userId,
+      name: `Storefront Shop ${tag}`,
+      slug,
+      stripe_subscription_status: "active",
+      stripe_charges_enabled: true,
+      stripe_transfers_capability_active: true,
+      stripe_connected_account_id: pilot.stripe_connected_account_id,
+      whatsapp_phone_e164: phoneFromRunId(runId, 2),
+      seller_whatsapp_phone_e164: phoneFromRunId(runId, 3),
+      dispatch_address_line1: BAKER_ST.line1,
+      dispatch_city: BAKER_ST.city,
+      dispatch_postcode: BAKER_ST.postcode,
+    })
+    .select(
+      "id, slug, name, owner_user_id, stripe_charges_enabled, stripe_connected_account_id",
+    )
+    .single();
+  if (bErr) {
+    await admin.auth.admin.deleteUser(userId).catch(() => {});
+    throw bErr;
+  }
+  await assertNotPilotBusiness(admin, business.id, "createTaggedCheckoutShop");
+
+  async function seedProduct(name, pricePence) {
+    const { data: product, error } = await admin
+      .from("products")
+      .insert({
+        business_id: business.id,
+        name,
+        price_pence: pricePence,
+        active: true,
+        description: "seed:verify-catalog",
+      })
+      .select("id, name, price_pence")
+      .single();
+    if (error) throw error;
+    const { data: variant, error: vErr } = await admin
+      .from("product_variants")
+      .insert({
+        business_id: business.id,
+        product_id: product.id,
+        label: "Default",
+        stock_quantity: 20,
+        reserved_quantity: 0,
+        track_inventory: true,
+        weight_grams: 200,
+      })
+      .select("id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at")
+      .single();
+    if (vErr) throw vErr;
+    return { ...product, variant };
+  }
+
+  const mug = await seedProduct("Classic Blue Mug", 1200);
+  const tote = await seedProduct("Canvas Tote Bag", 1800);
+  const soap = await seedProduct("Lavender Soap", 600);
+
+  return { userId, email, password, business, mug, tote, soap };
 }
 
 async function signIn(email) {
@@ -184,43 +263,16 @@ function extractWaMeHrefs(html) {
 }
 
 async function main() {
-  const { data: business, error } = await admin
-    .from("businesses")
-    .select("id, slug, name, owner_user_id, stripe_charges_enabled")
-    .eq("name", "EK-Pousser_D")
-    .is("deleted_at", null)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (!business) throw new Error("EK-Pousser_D not found");
+  console.log(`runId=${runId} tag=${tag} BASE=${BASE}`);
+  console.log("(isolated shop — never ek-pousserd)");
+  let shop = null;
+  try {
+  shop = await createTaggedCheckoutShop();
+  const { business, mug, tote, soap, email: ownerEmail } = shop;
   if (!business.stripe_charges_enabled) {
     throw new Error("Seller Stripe cannot accept charges");
   }
 
-  const { data: catalog } = await admin
-    .from("products")
-    .select(
-      "id, name, price_pence, active, product_variants(id, label, stock_quantity, reserved_quantity, track_inventory, deleted_at)",
-    )
-    .eq("business_id", business.id)
-    .eq("active", true)
-    .is("deleted_at", null)
-    .order("name", { ascending: true });
-
-  const products = (catalog ?? [])
-    .map((p) => ({
-      ...p,
-      variant: (p.product_variants ?? []).find((v) => !v.deleted_at),
-    }))
-    .filter((p) => p.variant);
-
-  const mug = products.find((p) => /blue mug/i.test(p.name));
-  const tote = products.find((p) => /tote/i.test(p.name));
-  const soap = products.find((p) => /soap/i.test(p.name));
-  if (!mug?.variant || !tote?.variant || !soap?.variant) {
-    throw new Error("Need mug, tote, and soap variants in the catalog");
-  }
-
-  console.log(`BASE ${BASE}`);
   console.log(`Business ${business.name} slug=${business.slug} id=${business.id}`);
   console.log(`Mug ${mug.variant.id} @ ${mug.price_pence}p`);
   console.log(`Tote ${tote.variant.id} @ ${tote.price_pence}p\n`);
@@ -465,9 +517,6 @@ async function main() {
       .eq("id", soap.variant.id);
   }
 
-  const { data: owner } = await admin.auth.admin.getUserById(business.owner_user_id);
-  const ownerEmail = owner?.user?.email;
-  if (!ownerEmail) throw new Error("Owner email not found");
   const ownerToken = await signIn(ownerEmail);
 
   await admin.from("orders").update({ shipping_address: BAKER_ST }).eq("id", order.id);
@@ -491,7 +540,7 @@ async function main() {
     .single();
 
   const trackingPage = await fetchHtml(`/t/${order.order_ref}`);
-  const cookies = await mintEkCookies();
+  const cookies = await mintOwnerCookies(ownerEmail);
   const dashList = await fetch(`${BASE}/dashboard/orders`, {
     headers: { Cookie: cookies.map((c) => `${c.name}=${c.value}`).join("; ") },
     redirect: "manual",
@@ -539,10 +588,25 @@ async function main() {
   const allPassed = results.every((r) => r.passed);
   console.log(allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
   console.log("========================================");
-  process.exit(allPassed ? 0 : 1);
+  return allPassed ? 0 : 1;
+  } finally {
+    if (shop?.business?.id) {
+      try {
+        await assertNotPilotBusiness(admin, shop.business.id, "cleanup");
+        await deleteTestBusiness(admin, shop.business.id, {
+          ownerUserId: shop.userId,
+        });
+        console.log(`cleaned shop ${shop.business.slug}`);
+      } catch (e) {
+        console.warn("cleanup:", e.message);
+      }
+    }
+  }
 }
 
-main().catch((err) => {
-  console.error("FAILED:", err);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error("FAILED:", err);
+    process.exit(1);
+  });
