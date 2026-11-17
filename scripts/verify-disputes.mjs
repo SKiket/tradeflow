@@ -115,12 +115,133 @@ async function postStripeEvent(payload) {
 }
 
 function disputeEvent(type, dispute, eventId = `evt_test_${randomUUID().slice(0, 8)}`) {
+  const livemode = dispute.livemode ?? false;
   return JSON.stringify({
     id: eventId,
     object: "event",
     type,
-    data: { object: { object: "dispute", ...dispute } },
+    livemode,
+    data: {
+      object: {
+        object: "dispute",
+        ...dispute,
+        livemode,
+      },
+    },
   });
+}
+
+/**
+ * Unit-style: livemode=false → log only; livemode=true → one captureMessage
+ * with the readable title. Sentry is mocked (no network).
+ */
+async function verifyUnmatchedSentryGating() {
+  const { spawnSync } = await import("node:child_process");
+  const { writeFileSync, unlinkSync } = await import("node:fs");
+  const tmp = resolve(root, `scripts/_tmp_unmatched_sentry_${randomUUID().slice(0, 6)}.mts`);
+  writeFileSync(
+    tmp,
+    `
+import {
+  reportUnmatchedDisputeOrder,
+  UNMATCHED_DISPUTE_ORDER_MESSAGE,
+} from "../src/lib/disputes/unmatched-order-report.ts";
+
+const calls = [];
+const logs = [];
+const deps = {
+  captureMessage: (msg, ctx) => {
+    calls.push({ msg, level: ctx?.level, fingerprint: ctx?.fingerprint, tags: ctx?.tags });
+  },
+  warn: (...args) => {
+    logs.push(args);
+  },
+};
+
+const testId = "du_test_unmatched_verify";
+const liveId = "du_live_unmatched_verify";
+
+const rFalse = reportUnmatchedDisputeOrder(
+  {
+    livemode: false,
+    stripeDisputeId: testId,
+    hasChargeId: false,
+    hasPaymentIntent: false,
+  },
+  deps,
+);
+const rTrue = reportUnmatchedDisputeOrder(
+  {
+    livemode: true,
+    stripeDisputeId: liveId,
+    hasChargeId: true,
+    hasPaymentIntent: false,
+  },
+  deps,
+);
+
+console.log(
+  JSON.stringify({
+    rFalse,
+    rTrue,
+    calls,
+    logs,
+    message: UNMATCHED_DISPUTE_ORDER_MESSAGE,
+  }),
+);
+`,
+  );
+  const out = spawnSync(`npx --yes tsx "${tmp}"`, {
+    cwd: root,
+    env: process.env,
+    encoding: "utf8",
+    shell: true,
+    timeout: 60_000,
+  });
+  try {
+    unlinkSync(tmp);
+  } catch {
+    /* ignore */
+  }
+  if (out.status !== 0) {
+    record(
+      "0. unmatched Sentry gating (unit)",
+      false,
+      (out.stderr || out.stdout || "").slice(0, 400),
+    );
+    return;
+  }
+  const line = (out.stdout || "").trim().split("\n").filter(Boolean).pop();
+  let parsed;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    record("0. unmatched Sentry gating (unit)", false, `parse fail: ${line}`);
+    return;
+  }
+  const noSentryOnTest =
+    parsed.rFalse === "log" &&
+    parsed.calls.length === 1 &&
+    parsed.logs.length === 1 &&
+    String(parsed.logs[0]?.[0] ?? "").includes(parsed.message) &&
+    String(JSON.stringify(parsed.logs[0])).includes("du_test_unmatched_verify");
+  const oneLiveWarning =
+    parsed.rTrue === "sentry" &&
+    parsed.calls.length === 1 &&
+    parsed.calls[0].msg === parsed.message &&
+    parsed.calls[0].level === "warning" &&
+    parsed.calls[0].fingerprint?.[0] === "dispute_unmatched_order" &&
+    parsed.calls[0].tags?.stripe_dispute_id === "du_live_unmatched_verify";
+  record(
+    "0a. livemode=false unmatched → log only, no Sentry",
+    noSentryOnTest,
+    `rFalse=${parsed.rFalse} calls=${parsed.calls.length} logs=${parsed.logs.length}`,
+  );
+  record(
+    "0b. livemode=true unmatched → exactly one warning with readable title",
+    oneLiveWarning,
+    `msg=${parsed.calls[0]?.msg} level=${parsed.calls[0]?.level}`,
+  );
 }
 
 async function sleep(ms) {
@@ -302,6 +423,8 @@ async function main() {
 }
 
 async function runCases(business) {
+  await verifyUnmatchedSentryGating();
+
   await admin
     .from("businesses")
     .update({

@@ -169,6 +169,19 @@ export function scrubSentryEvent(
     event.tags.business_id = businessId;
   }
 
+  // captureMessage attaches a stack by default; Sentry then titles the issue
+  // from a minified frame (e.g. "j") instead of the message. Strip the
+  // exception so dispute_unmatched_order keeps the readable title.
+  const fingerprint0 = Array.isArray(event.fingerprint)
+    ? event.fingerprint[0]
+    : null;
+  if (
+    fingerprint0 === "dispute_unmatched_order" ||
+    event.tags?.event === "dispute_unmatched_order"
+  ) {
+    delete event.exception;
+  }
+
   return event;
 }
 

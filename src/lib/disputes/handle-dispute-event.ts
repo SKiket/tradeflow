@@ -18,6 +18,7 @@ import {
   runFullDisputeRecovery,
 } from "@/lib/disputes/recover";
 import { resolveOrderForDispute } from "@/lib/disputes/resolve-order";
+import { reportUnmatchedDisputeOrder } from "@/lib/disputes/unmatched-order-report";
 
 export type DisputeEventResult = {
   handled: boolean;
@@ -111,21 +112,15 @@ async function handleCreated(
   const fee = extractDisputeFeePence(dispute);
 
   if (!match.orderId) {
-    Sentry.captureMessage(
-      "Stripe dispute could not be matched to an order",
-      {
-        level: "warning",
-        tags: {
-          stripe_dispute_id: dispute.id,
-          event: "dispute_unmatched_order",
-        },
-        fingerprint: ["dispute_unmatched_order", dispute.id],
-        extra: {
-          has_charge_id: Boolean(match.chargeId),
-          has_payment_intent: Boolean(match.paymentIntentId),
-        },
-      },
-    );
+    // Call site: charge.dispute.created unmatched-order path (webhook ingress →
+    // handleDisputeWebhook → handleDisputeEvent → handleCreated).
+    // Live mode only to Sentry; test-mode verify noise stays in server logs.
+    reportUnmatchedDisputeOrder({
+      livemode: dispute.livemode,
+      stripeDisputeId: dispute.id,
+      hasChargeId: Boolean(match.chargeId),
+      hasPaymentIntent: Boolean(match.paymentIntentId),
+    });
   }
 
   // Prefer order's business; else resolve via charge transfer destination.
