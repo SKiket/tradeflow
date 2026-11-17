@@ -140,12 +140,13 @@ export async function fetchReturnsList(
 
   // Closed/approved/declined must have been return requests; needs_decision is
   // status-only (same filter as attention count).
-  // Page fetch without count:"exact" — tab totals come from the parallel head
-  // counts below (avoids a second full scan of the same filter).
+  // Nested order_items in the page select avoids a second round-trip (was the
+  // main reason case 5 occasionally breached 500ms under remote latency).
+  // Page fetch without count:"exact" — tab totals come from parallel head counts.
   let listQuery = supabase
     .from("orders")
     .select(
-      "id, order_ref, status, return_reason, return_reason_detail, return_requested_at, refunded_amount_pence, total_pence, customers(name)",
+      "id, order_ref, status, return_reason, return_reason_detail, return_requested_at, refunded_amount_pence, total_pence, customers(name), order_items(quantity, product_variants(products(name)))",
     )
     .eq("business_id", businessId)
     .in("status", TAB_STATUSES[tab])
@@ -186,42 +187,6 @@ export async function fetchReturnsList(
   }
 
   const rawRows = listRes.data ?? [];
-  const orderIds = rawRows.map((row) => row.id as string);
-
-  const itemNames = new Map<string, { quantity: number; name: string }[]>();
-  if (orderIds.length > 0) {
-    const { data: items, error: itemsError } = await supabase
-      .from("order_items")
-      .select(
-        "order_id, quantity, product_variants(products(name))",
-      )
-      .eq("business_id", businessId)
-      .in("order_id", orderIds);
-    if (itemsError) {
-      console.error("[returns] items", itemsError.message);
-    } else {
-      for (const row of items ?? []) {
-        const orderId = row.order_id as string;
-        const variantRaw = row.product_variants as
-          | { products: { name: string } | { name: string }[] | null }
-          | { products: { name: string } | { name: string }[] | null }[]
-          | null;
-        const variant = Array.isArray(variantRaw)
-          ? (variantRaw[0] ?? null)
-          : variantRaw;
-        const productRaw = variant?.products ?? null;
-        const product = Array.isArray(productRaw)
-          ? (productRaw[0] ?? null)
-          : productRaw;
-        const list = itemNames.get(orderId) ?? [];
-        list.push({
-          quantity: (row.quantity as number) ?? 0,
-          name: product?.name?.trim() || "Item",
-        });
-        itemNames.set(orderId, list);
-      }
-    }
-  }
 
   const rows: ReturnListRow[] = rawRows.map((row) => {
     const customerRaw = row.customers as
@@ -231,6 +196,30 @@ export async function fetchReturnsList(
     const customer = Array.isArray(customerRaw)
       ? (customerRaw[0] ?? null)
       : customerRaw;
+    const itemsRaw = row.order_items as
+      | {
+          quantity: number;
+          product_variants:
+            | { products: { name: string } | { name: string }[] | null }
+            | { products: { name: string } | { name: string }[] | null }[]
+            | null;
+        }[]
+      | null;
+    const itemNames: { quantity: number; name: string }[] = [];
+    for (const item of itemsRaw ?? []) {
+      const variantRaw = item.product_variants;
+      const variant = Array.isArray(variantRaw)
+        ? (variantRaw[0] ?? null)
+        : variantRaw;
+      const productRaw = variant?.products ?? null;
+      const product = Array.isArray(productRaw)
+        ? (productRaw[0] ?? null)
+        : productRaw;
+      itemNames.push({
+        quantity: item.quantity ?? 0,
+        name: product?.name?.trim() || "Item",
+      });
+    }
     const totalPence = (row.total_pence as number) ?? 0;
     const refundedPence = (row.refunded_amount_pence as number) ?? 0;
     return {
@@ -243,7 +232,7 @@ export async function fetchReturnsList(
       refundedPence,
       totalPence,
       refundStatus: refundStatus(totalPence, refundedPence),
-      itemSummary: summariseItems(itemNames.get(row.id as string) ?? []),
+      itemSummary: summariseItems(itemNames),
       customerInitials: initialsFromName(customer?.name ?? null),
     };
   });
