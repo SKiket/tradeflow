@@ -45,6 +45,7 @@ export type SettingsFormValues = {
   stripe_charges_enabled: boolean;
   stripe_payouts_enabled: boolean;
   stripe_details_submitted: boolean;
+  stripe_transfers_capability_active?: boolean;
   whatsapp_phone_e164: string | null;
   storefront_accent_color: string | null;
   logo_url: string | null;
@@ -499,10 +500,16 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
         </h2>
         <p className="text-sm font-medium">{stripe.headline}</p>
         <p className="text-sm text-muted-foreground">{stripe.detail}</p>
-        <dl className="grid gap-2 text-sm sm:grid-cols-3">
+        <dl className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <dt className="text-xs text-muted-foreground">Charges</dt>
             <dd>{business.stripe_charges_enabled ? "Enabled" : "Off"}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Transfers</dt>
+            <dd>
+              {business.stripe_transfers_capability_active ? "Active" : "Off"}
+            </dd>
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">Payouts</dt>
@@ -522,7 +529,8 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
           This is how buyers pay you. TradeFlow billing (your £19/month
           subscription plus per-order fees) is separate, below.
         </p>
-        {!business.stripe_charges_enabled ? (
+        {!business.stripe_charges_enabled ||
+        !business.stripe_transfers_capability_active ? (
           <Button
             type="button"
             disabled={billingPending}
@@ -531,7 +539,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             {billingPending
               ? "Opening Stripe…"
               : business.stripe_connected_account_id
-                ? "Continue Stripe setup"
+                ? "Finish your payment setup"
                 : "Connect Stripe"}
           </Button>
         ) : null}

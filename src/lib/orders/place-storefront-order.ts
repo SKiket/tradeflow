@@ -122,7 +122,7 @@ export async function placeStorefrontOrder(
   const { data: business, error: bizError } = await supabase
     .from("businesses")
     .select(
-      "id, stripe_connected_account_id, stripe_charges_enabled, stripe_subscription_status, closed_at, dispute_balance_hold",
+      "id, stripe_connected_account_id, stripe_charges_enabled, stripe_transfers_capability_active, stripe_subscription_status, closed_at, dispute_balance_hold",
     )
     .eq("id", businessId)
     .is("deleted_at", null)
@@ -160,7 +160,10 @@ export async function placeStorefrontOrder(
       "STRIPE_NOT_CONFIGURED",
     );
   }
-  if (!business.stripe_charges_enabled) {
+  if (
+    !business.stripe_charges_enabled ||
+    !business.stripe_transfers_capability_active
+  ) {
     throw new PlaceStorefrontOrderError(
       "This store isn't ready to accept card payments yet.",
       400,

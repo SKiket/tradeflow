@@ -1,14 +1,9 @@
 /**
  * Verifies destination-charge PaymentIntent creation (test mode).
  *
- * A brand-new Express account has no active `transfers` capability until its
- * owner completes hosted onboarding, so a destination charge can't route to
- * it yet. To prove the PaymentIntent + destination routing end to end without
- * a manual onboarding click-through, this script creates a fully-onboarded
- * Custom test account (Stripe's standard test data auto-verifies it instantly)
- * and runs the destination charge against it.
- *
- * The production onboarding wizard still uses Express (hosted) per spec.
+ * Prefers the pilot shop's connected account when transfers is already active.
+ * Otherwise creates a Custom test account with card_payments + transfers and
+ * tos_acceptance, then retries until transfers is active (or fails clearly).
  *
  * Run: node scripts/verify-payment-intent.mjs
  */
@@ -16,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import Stripe from "stripe";
+import { createClient } from "@supabase/supabase-js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -39,13 +35,15 @@ if (!secretKey) {
 }
 
 const stripe = new Stripe(secretKey, { apiVersion: "2026-06-24.dahlia" });
+const admin = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { autoRefreshToken: false, persistSession: false },
+});
 
-async function main() {
-  // Fully-onboarded Custom test account (GB). Stripe test data auto-verifies.
+async function createOnboardedCustomAccount() {
   const account = await stripe.accounts.create({
     type: "custom",
     country: "GB",
-    email: "seller-verify@example.com",
+    email: `seller-verify-${Date.now()}@example.com`,
     business_type: "individual",
     capabilities: {
       card_payments: { requested: true },
@@ -82,18 +80,64 @@ async function main() {
     metadata: { tradeflow_business_id: "verify-payment-script" },
   });
 
-  const refreshed = await stripe.accounts.retrieve(account.id);
-  console.log("=== CONNECTED ACCOUNT (verification) ===");
-  console.log(`id:                 ${account.id}`);
-  console.log(`transfers capability: ${refreshed.capabilities?.transfers}`);
-  console.log(`charges_enabled:      ${refreshed.charges_enabled}`);
-  console.log("");
+  // Request capabilities again if still pending (idempotent).
+  try {
+    await stripe.accounts.update(account.id, {
+      capabilities: {
+        card_payments: { requested: true },
+        transfers: { requested: true },
+      },
+    });
+  } catch {
+    /* ignore */
+  }
+
+  for (let i = 0; i < 8; i++) {
+    const refreshed = await stripe.accounts.retrieve(account.id);
+    if (refreshed.capabilities?.transfers === "active") return refreshed;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return stripe.accounts.retrieve(account.id);
+}
+
+async function main() {
+  let destinationId = null;
+
+  const { data: pilot } = await admin
+    .from("businesses")
+    .select("stripe_connected_account_id, stripe_transfers_capability_active")
+    .eq("name", "EK-Pousser_D")
+    .maybeSingle();
+
+  if (pilot?.stripe_connected_account_id) {
+    const live = await stripe.accounts.retrieve(pilot.stripe_connected_account_id);
+    if (live.capabilities?.transfers === "active") {
+      destinationId = live.id;
+      console.log(`Using pilot Connect account ${destinationId} (transfers active)`);
+    }
+  }
+
+  if (!destinationId) {
+    console.log("Creating onboarded Custom test account…");
+    const account = await createOnboardedCustomAccount();
+    destinationId = account.id;
+    console.log("=== CONNECTED ACCOUNT (verification) ===");
+    console.log(`id:                 ${account.id}`);
+    console.log(`transfers capability: ${account.capabilities?.transfers}`);
+    console.log(`charges_enabled:      ${account.charges_enabled}`);
+    if (account.capabilities?.transfers !== "active") {
+      console.error(
+        "FAILED: transfers capability not active on new test account — complete Stripe test onboarding or use a ready account",
+      );
+      process.exit(1);
+    }
+  }
 
   const intent = await stripe.paymentIntents.create({
     amount: 2500,
     currency: "gbp",
     payment_method_types: ["card", "pay_by_bank"],
-    transfer_data: { destination: account.id },
+    transfer_data: { destination: destinationId },
     metadata: { tradeflow_order_ref: "TEST-ORDER" },
   });
 
@@ -108,7 +152,7 @@ async function main() {
     intent.id &&
     intent.payment_method_types.includes("card") &&
     intent.payment_method_types.includes("pay_by_bank") &&
-    intent.transfer_data?.destination === account.id;
+    intent.transfer_data?.destination === destinationId;
   console.log("");
   console.log(ok ? "PASS — destination-charge PaymentIntent created" : "FAIL");
   process.exit(ok ? 0 : 1);

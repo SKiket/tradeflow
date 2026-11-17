@@ -236,6 +236,11 @@ async function provisionSeller(label) {
       stripe_charges_enabled: chargesEnabled,
       stripe_payouts_enabled: Boolean(account.payouts_enabled),
       stripe_details_submitted: true,
+      // Destination charges need transfers; EK fallback / completed test accounts have it.
+      stripe_transfers_capability_active:
+        connectedAccountId !== account.id
+          ? true
+          : account.capabilities?.transfers === "active",
     })
     .select("id, slug, name")
     .single();

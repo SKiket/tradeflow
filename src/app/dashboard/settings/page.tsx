@@ -20,7 +20,7 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
   const { data, error } = await supabase
     .from("businesses")
     .select(
-      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, return_window_days, ai_tone, shop_faq, delivery_info, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color, closed_at, purge_after",
+      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, return_window_days, ai_tone, shop_faq, delivery_info, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_transfers_capability_active, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color, closed_at, purge_after",
     )
     .eq("id", businessId)
     .maybeSingle();
@@ -71,6 +71,9 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
     stripe_connected_account_id:
       (data.stripe_connected_account_id as string | null) ?? null,
     stripe_charges_enabled: Boolean(data.stripe_charges_enabled),
+    stripe_transfers_capability_active: Boolean(
+      data.stripe_transfers_capability_active,
+    ),
     stripe_payouts_enabled: Boolean(data.stripe_payouts_enabled),
     stripe_details_submitted: Boolean(data.stripe_details_submitted),
     whatsapp_phone_e164: (data.whatsapp_phone_e164 as string | null) ?? null,

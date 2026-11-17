@@ -62,6 +62,10 @@ function accountUpdatedEvent(accountId, caps) {
         charges_enabled: caps.charges,
         payouts_enabled: caps.payouts,
         details_submitted: caps.details,
+        capabilities: {
+          card_payments: caps.charges ? "active" : "inactive",
+          transfers: caps.transfers ?? (caps.charges ? "active" : "inactive"),
+        },
       },
     },
   });
@@ -96,23 +100,37 @@ async function main() {
   const acct = business.stripe_connected_account_id;
   console.log(`Testing against ${business.name} (${acct})\n`);
 
-  // --- Test 1: matching account, all-true ---
-  const evt1 = accountUpdatedEvent(acct, { charges: true, payouts: true, details: true });
+  // Handler retrieves the live Account (thin payloads are incomplete). Assert DB
+  // matches Stripe truth after the webhook — including transfers capability.
+  const live = await stripe.accounts.retrieve(acct);
+  const evt1 = accountUpdatedEvent(acct, {
+    charges: Boolean(live.charges_enabled),
+    payouts: Boolean(live.payouts_enabled),
+    details: Boolean(live.details_submitted),
+    transfers: live.capabilities?.transfers === "active" ? "active" : "inactive",
+  });
   const res1 = await post(evt1);
   const { data: after1 } = await supabase
     .from("businesses")
-    .select("stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted")
+    .select(
+      "stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_transfers_capability_active",
+    )
     .eq("id", business.id)
     .single();
+  const liveTransfers = live.capabilities?.transfers === "active";
   const pass1 =
     res1.status === 200 &&
     res1.json.handled === true &&
-    after1.stripe_charges_enabled === true &&
-    after1.stripe_payouts_enabled === true &&
-    after1.stripe_details_submitted === true;
+    after1.stripe_charges_enabled === Boolean(live.charges_enabled) &&
+    after1.stripe_payouts_enabled === Boolean(live.payouts_enabled) &&
+    after1.stripe_details_submitted === Boolean(live.details_submitted) &&
+    after1.stripe_transfers_capability_active === liveTransfers;
   console.log(`${pass1 ? "PASS" : "FAIL"} — Test 1: matching account.updated syncs columns`);
   console.log(`       response=${JSON.stringify(res1.json)}`);
   console.log(`       row now=${JSON.stringify(after1)}`);
+  console.log(
+    `       live charges=${live.charges_enabled} payouts=${live.payouts_enabled} details=${live.details_submitted} transfers=${live.capabilities?.transfers}`,
+  );
 
   // --- Test 2: unknown account → 200, no error ---
   const evt2 = accountUpdatedEvent("acct_DOESNOTEXIST0000", { charges: true, payouts: true, details: true });
@@ -132,10 +150,14 @@ async function main() {
       stripe_charges_enabled: account.charges_enabled ?? false,
       stripe_payouts_enabled: account.payouts_enabled ?? false,
       stripe_details_submitted: account.details_submitted ?? false,
+      stripe_transfers_capability_active:
+        account.capabilities?.transfers === "active",
     })
     .eq("id", business.id);
   console.log(`\nRestored ${business.name} to true Stripe status:`);
-  console.log(`  charges_enabled=${account.charges_enabled} payouts_enabled=${account.payouts_enabled} details_submitted=${account.details_submitted}`);
+  console.log(
+    `  charges_enabled=${account.charges_enabled} payouts_enabled=${account.payouts_enabled} details_submitted=${account.details_submitted} transfers=${account.capabilities?.transfers}`,
+  );
 
   process.exit(pass1 && pass2 ? 0 : 1);
 }

@@ -624,13 +624,13 @@ async function handleAccountUpdated(
 ): Promise<StripeHandlerResult> {
   const supabase = createAdminClient();
 
-  const { data: business, error: lookupError } = await supabase
+  // Test / billing verifies may attach many shops to one Connect account.
+  const { data: businesses, error: lookupError } = await supabase
     .from("businesses")
     .select(
-      "id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted",
+      "id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_transfers_capability_active",
     )
-    .eq("stripe_connected_account_id", account.id)
-    .maybeSingle();
+    .eq("stripe_connected_account_id", account.id);
 
   if (lookupError) {
     console.error("[stripe-webhook] account.updated lookup failed", {
@@ -643,7 +643,7 @@ async function handleAccountUpdated(
     };
   }
 
-  if (!business) {
+  if (!businesses?.length) {
     console.info("[stripe-webhook] account.updated for unknown account", {
       account: account.id,
     });
@@ -653,24 +653,76 @@ async function handleAccountUpdated(
     };
   }
 
-  const next = {
-    stripe_charges_enabled: account.charges_enabled ?? false,
-    stripe_payouts_enabled: account.payouts_enabled ?? false,
-    stripe_details_submitted: account.details_submitted ?? false,
+  // Thin / incomplete webhook payloads can omit or under-report capabilities.
+  // Prefer a live retrieve so we never clear transfers on a healthy account.
+  let snapshot = account;
+  try {
+    snapshot = await getStripe().accounts.retrieve(account.id);
+  } catch (err) {
+    console.warn("[stripe-webhook] account.updated retrieve failed; using event object", {
+      account: account.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  const transfersStatus = snapshot.capabilities?.transfers;
+  const transfersActive =
+    transfersStatus === "active"
+      ? true
+      : transfersStatus
+        ? false
+        : null;
+
+  const next: Record<string, unknown> = {
+    stripe_charges_enabled: snapshot.charges_enabled ?? false,
+    stripe_payouts_enabled: snapshot.payouts_enabled ?? false,
+    stripe_details_submitted: snapshot.details_submitted ?? false,
   };
+  if (transfersActive !== null) {
+    next.stripe_transfers_capability_active = transfersActive;
+  }
+  if (Array.isArray(snapshot.requirements?.currently_due)) {
+    next.stripe_requirements_currently_due = snapshot.requirements!.currently_due;
+  }
 
-  logTransition(business.id, "charges_enabled", business.stripe_charges_enabled, next.stripe_charges_enabled);
-  logTransition(business.id, "payouts_enabled", business.stripe_payouts_enabled, next.stripe_payouts_enabled);
-  logTransition(business.id, "details_submitted", business.stripe_details_submitted, next.stripe_details_submitted);
+  for (const business of businesses) {
+    logTransition(
+      business.id,
+      "charges_enabled",
+      business.stripe_charges_enabled,
+      Boolean(next.stripe_charges_enabled),
+    );
+    logTransition(
+      business.id,
+      "payouts_enabled",
+      business.stripe_payouts_enabled,
+      Boolean(next.stripe_payouts_enabled),
+    );
+    logTransition(
+      business.id,
+      "details_submitted",
+      business.stripe_details_submitted,
+      Boolean(next.stripe_details_submitted),
+    );
+    if (typeof next.stripe_transfers_capability_active === "boolean") {
+      logTransition(
+        business.id,
+        "transfers_capability_active",
+        Boolean(business.stripe_transfers_capability_active),
+        next.stripe_transfers_capability_active,
+      );
+    }
+  }
 
+  const ids = businesses.map((b) => b.id);
   const { error: updateError } = await supabase
     .from("businesses")
     .update(next)
-    .eq("id", business.id);
+    .in("id", ids);
 
   if (updateError) {
     console.error("[stripe-webhook] account.updated write failed", {
-      business: business.id,
+      businesses: ids,
       error: updateError.message,
     });
     return {
@@ -681,7 +733,14 @@ async function handleAccountUpdated(
 
   return {
     status: 200,
-    body: { ok: true, handled: true, type: "account.updated", business: business.id, ...next },
+    body: {
+      ok: true,
+      handled: true,
+      type: "account.updated",
+      business: ids[0],
+      businesses: ids.length,
+      ...next,
+    },
   };
 }
 

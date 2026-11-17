@@ -7,6 +7,7 @@ import { formatPence } from "@/lib/orders/display";
 import { catalogLine, type PublicStorefront } from "@/lib/storefront/catalog";
 
 import { useCart } from "../cart-provider";
+import { WhatsAppCartButton } from "./whatsapp-cart-button";
 
 export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
   const cart = useCart();
@@ -147,6 +148,15 @@ export function CheckoutForm({ storefront }: { storefront: PublicStorefront }) {
           </span>
         </div>
       </div>
+
+      <WhatsAppCartButton
+        storefront={storefront}
+        lines={resolved.map((line) => ({
+          productName: line.productName,
+          variantLabel: line.variantLabel,
+          quantity: line.quantity,
+        }))}
+      />
 
       <form
         onSubmit={handleSubmit}

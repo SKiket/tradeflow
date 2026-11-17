@@ -48,6 +48,8 @@ export type PublicStorefront = {
   /** Raw DB value; null means the TradeFlow amber default. */
   accentColor: string | null;
   acceptingOrders: boolean;
+  /** Shop WhatsApp E.164 when configured (for cart deep-links). */
+  whatsappPhoneE164: string | null;
   /** False when TradeFlow billing is not trialing/active — shop exists, catalog hidden. */
   takingOrders: boolean;
   /** True when the seller closed the shop (grace or pending purge). */
@@ -131,6 +133,7 @@ export const fetchPublicStorefront = cache(
         bannerUrl: null,
         accentColor: parseAccentHex(business.storefront_accent_color),
         acceptingOrders: false,
+        whatsappPhoneE164: null,
         takingOrders: false,
         shopClosed: true,
         hasReturnsPolicy: false,
@@ -240,6 +243,7 @@ export const fetchPublicStorefront = cache(
       bannerUrl: (business.banner_url as string | null) ?? null,
       accentColor: parseAccentHex(business.storefront_accent_color),
       acceptingOrders: Boolean(phone),
+      whatsappPhoneE164: phone,
       takingOrders: canAcceptOrders({
         stripe_subscription_status:
           (business.stripe_subscription_status as string | null) ?? null,

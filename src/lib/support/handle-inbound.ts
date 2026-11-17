@@ -24,6 +24,7 @@ import { parseReturnReason } from "@/lib/orders/return-reasons";
 import { logKnowledgeGap } from "@/lib/knowledge/gaps";
 import { fetchActiveCatalog } from "@/lib/products/catalog";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { applySupportReplyGuardrail } from "@/lib/support/reply-guardrail";
 import { notifySellerOfQuestion } from "@/lib/support/notify-seller";
 
 /** @deprecated Prefer t("support.other_fallback", lang). */
@@ -143,6 +144,54 @@ export async function handleQuestionReply(
     reply = applied.reply;
     returnOutcome = applied.returnOutcome;
     skipBuyerSend = applied.returnOutcome?.action === "auto_approved";
+  } else {
+    // Deterministic allergen/health post-check (Step 23). Never silent.
+    let catalog: Awaited<ReturnType<typeof fetchActiveCatalog>> = [];
+    try {
+      catalog = await fetchActiveCatalog(supabase, params.businessId);
+    } catch {
+      catalog = [];
+    }
+    const guarded = applySupportReplyGuardrail({
+      reply,
+      escalateToSeller,
+      products: catalog.map((p) => ({
+        id: p.id,
+        name: p.name,
+        ingredients: p.ingredients,
+        allergens_status: p.allergens_status,
+        allergens_text: p.allergens_text,
+        usage_instructions: p.usage_instructions,
+        storage_and_care: p.storage_and_care,
+        size_and_fit: p.size_and_fit,
+      })),
+      buyerMessage: params.messageText,
+      handoverMessage: t("support.seller_will_confirm", lang),
+      allergyConfirmFooter: t("support.allergy_confirm_footer", lang),
+    });
+    reply = guarded.reply;
+    escalateToSeller = guarded.escalateToSeller;
+    if (guarded.blocked) {
+      console.info("[support] reply_guardrail_blocked", {
+        businessId: params.businessId,
+        reason: guarded.reason,
+        // No personal data — product id only when known.
+        productId: guarded.productId,
+      });
+      try {
+        await logKnowledgeGap({
+          businessId: params.businessId,
+          productId: guarded.productId,
+          questionText: params.messageText,
+          supabase,
+        });
+      } catch (gapErr) {
+        console.error(
+          "[support] knowledge gap log failed after guardrail",
+          gapErr instanceof Error ? gapErr.message : String(gapErr),
+        );
+      }
+    }
   }
 
   reply = withReplyPrefix(params.buyerReplyPrefix, reply);

@@ -28,7 +28,7 @@ export function parseBusinessId(
 }
 
 export const OWNED_BUSINESS_SELECT =
-  "id, name, slug, created_at, stripe_connected_account_id, stripe_customer_id, stripe_subscription_status, trial_ends_at, closed_at, dispute_balance_hold, dispute_balance_owed_pence";
+  "id, name, slug, created_at, stripe_connected_account_id, stripe_customer_id, stripe_subscription_status, trial_ends_at, closed_at, dispute_balance_hold, dispute_balance_owed_pence, stripe_charges_enabled, stripe_transfers_capability_active, stripe_details_submitted";
 
 export type OwnedBusiness = {
   id: string;
@@ -42,6 +42,9 @@ export type OwnedBusiness = {
   closed_at: string | null;
   dispute_balance_hold: boolean | null;
   dispute_balance_owed_pence: number | null;
+  stripe_charges_enabled?: boolean | null;
+  stripe_transfers_capability_active?: boolean | null;
+  stripe_details_submitted?: boolean | null;
 };
 
 export function pickActiveBusiness<T extends { id: string }>(

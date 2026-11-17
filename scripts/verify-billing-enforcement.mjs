@@ -353,6 +353,7 @@ async function provisionSeller() {
       dispatch_postcode: "SW1A 2AA",
       stripe_connected_account_id: connectedAccountId,
       stripe_charges_enabled: chargesEnabled,
+      stripe_transfers_capability_active: chargesEnabled,
       stripe_payouts_enabled: Boolean(account.payouts_enabled),
       stripe_details_submitted: true,
       whatsapp_phone_e164: `+4477${String(Date.now()).slice(-8)}`,

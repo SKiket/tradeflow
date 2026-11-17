@@ -230,6 +230,18 @@ export const MESSAGES: Record<MessageId, Record<SupportedLang, string>> = {
     en: "Sorry, something went wrong on our side — the seller has been notified",
     fr: "Désolé, quelque chose a mal tourné de notre côté — le vendeur a été informé",
   },
+  "support.seller_will_confirm": {
+    en: "I can't confirm that from the shop's information. The seller will confirm and reply here shortly.",
+    fr: "Je ne peux pas confirmer cela à partir des informations de la boutique. Le vendeur confirmera et vous répondra ici sous peu.",
+  },
+  "support.allergy_confirm_footer": {
+    en: "Please confirm with the seller if you have allergies.",
+    fr: "Veuillez confirmer auprès du vendeur si vous avez des allergies.",
+  },
+  "confirm.payments_unavailable": {
+    en: "This shop cannot take card payments right now; the seller has been told. Your order is saved — they'll follow up here.",
+    fr: "Cette boutique ne peut pas accepter les paiements par carte pour le moment ; le vendeur a été prévenu. Votre commande est enregistrée — ils vous répondront ici.",
+  },
   "billing.shop_unavailable": {
     en: "This shop isn't currently taking new orders. If you already have an order with us, we'll still fulfil it. Please try again later.",
     fr: "Cette boutique n'accepte pas de nouvelles commandes pour le moment. Si vous avez déjà une commande chez nous, nous l'honorerons quand même. Veuillez réessayer plus tard.",

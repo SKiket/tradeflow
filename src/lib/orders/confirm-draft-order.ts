@@ -17,6 +17,8 @@ import {
   expireCheckoutSessionIfOpen,
 } from "@/lib/stripe/checkout";
 import { canAcceptOrders } from "@/lib/stripe/billing-gate";
+import { canTakeCardPayments } from "@/lib/stripe/connect-capabilities";
+import { notifySellerOfPaymentsUnavailable } from "@/lib/support/notify-seller";
 
 export type ConfirmDraftOutcome =
   | {
@@ -31,6 +33,13 @@ export type ConfirmDraftOutcome =
   | {
       action: "stock_unavailable";
       orderId: string;
+      message: string;
+      outboundMessageId: string;
+    }
+  | {
+      action: "payments_unavailable";
+      orderId: string;
+      orderRef: string;
       message: string;
       outboundMessageId: string;
     }
@@ -80,7 +89,7 @@ export async function confirmDraftOrder(
   const { data: business, error: bizError } = await supabase
     .from("businesses")
     .select(
-      "stripe_connected_account_id, stripe_charges_enabled, stripe_subscription_status, closed_at, dispute_balance_hold",
+      "stripe_connected_account_id, stripe_charges_enabled, stripe_transfers_capability_active, stripe_subscription_status, closed_at, dispute_balance_hold",
     )
     .eq("id", businessId)
     .maybeSingle();
@@ -89,12 +98,6 @@ export async function confirmDraftOrder(
     return {
       action: "error",
       error: "Seller Stripe account is not configured",
-    };
-  }
-  if (!business.stripe_charges_enabled) {
-    return {
-      action: "error",
-      error: "Seller Stripe account cannot accept charges yet",
     };
   }
   if (
@@ -127,6 +130,43 @@ export async function confirmDraftOrder(
   await sweepExpiredReservations(supabase, businessId);
 
   const lang = await getCustomerPreferredLanguage(supabase, params.customerId);
+
+  // Card / destination-charge gate. Order stays PENDING_CONFIRMATION (not lost).
+  if (
+    !canTakeCardPayments({
+      stripe_connected_account_id: business.stripe_connected_account_id,
+      stripe_charges_enabled: business.stripe_charges_enabled,
+      stripe_transfers_capability_active:
+        business.stripe_transfers_capability_active,
+    })
+  ) {
+    const message = t("confirm.payments_unavailable", lang);
+    const sent = await sendWhatsAppMessage({
+      businessId,
+      toPhoneE164: params.customerPhoneE164,
+      text: message,
+      threadId: params.threadId,
+      customerId: params.customerId,
+      supabase,
+    });
+    await notifySellerOfPaymentsUnavailable({
+      businessId,
+      orderRef: order.order_ref as string,
+      supabase,
+    }).catch((err) => {
+      console.error(
+        "[confirm] seller payments-unavailable notify failed",
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+    return {
+      action: "payments_unavailable",
+      orderId: order.id as string,
+      orderRef: order.order_ref as string,
+      message,
+      outboundMessageId: sent.messageId ?? "",
+    };
+  }
 
   const stock = await checkOrderStockAvailable(supabase, orderId);
   if (!stock.ok) {

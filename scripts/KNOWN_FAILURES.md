@@ -1,19 +1,6 @@
-# Known verify failures (Step 22c)
+# Known verify failures
 
 Scripts listed here are reported as **KNOWN** by `verify-all.mjs` (not silent skips).
-They fail for reasons outside the current step’s product changes, or need a dedicated fix step.
-
-## verify-payment-intent.mjs
-
-- Reason: Stripe TEST connected account missing `transfers` (or legacy) capability — **real Connect configuration issue** on the test destination account, not an assertion bug. Error: "destination account needs … transfers, crypto_transfers, legacy_payments".
-- Owner step: Stripe Connect / payments setup
-- Classification: (b) pre-existing config
-
-## verify-account-updated.mjs
-
-- Reason: Depends on Connect `account.updated` webhook path and capability state tied to the same TEST connected account (charges/payouts sync).
-- Owner step: Stripe Connect
-- Classification: (b) pre-existing config
 
 ## verify-billing-enforcement.mjs
 
@@ -62,9 +49,3 @@ They fail for reasons outside the current step’s product changes, or need a de
 - Reason: Case 8 (reject return on non-DELIVERED) intermittently fails when shared WhatsApp buyer state / order status races with other verifies.
 - Owner step: returns
 - Classification: (c) isolation flake / not quick
-
-## verify-product-knowledge.mjs
-
-- Reason: Allergen `not_provided` / `none_declared` support_reply wording is LLM-flaky under suite load (passes solo; intermittent escalate/wording misses). Product path unchanged; assertion hardened but still not deterministic.
-- Owner step: Step 22 product knowledge
-- Classification: (a/c) new since Step 21 + flaky LLM

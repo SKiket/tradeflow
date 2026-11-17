@@ -12,8 +12,10 @@ import {
   getAcceptOrdersBlockReason,
   ordersPausedBanner,
 } from "@/lib/stripe/billing-gate";
+import { canTakeCardPayments } from "@/lib/stripe/connect-capabilities";
 
 import { BillingPausedBanner } from "./billing-paused-banner";
+import { PaymentsSetupBanner } from "./payments-setup-banner";
 import { DeliveryFailedBanner } from "./delivery-failed-banner";
 import {
   NeedsAttentionBanner,
@@ -168,6 +170,14 @@ export default async function DashboardLayout({
             body={paused.body}
             hasCustomer={Boolean(business.stripe_customer_id)}
           />
+        ) : null}
+        {!canTakeCardPayments({
+          stripe_connected_account_id: business.stripe_connected_account_id,
+          stripe_charges_enabled: business.stripe_charges_enabled,
+          stripe_transfers_capability_active:
+            business.stripe_transfers_capability_active,
+        }) ? (
+          <PaymentsSetupBanner />
         ) : null}
         <PendingReplayBanner count={pendingReplays} />
         <DeliveryFailedBanner

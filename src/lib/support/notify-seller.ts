@@ -83,6 +83,31 @@ export async function notifySellerOfUnmatchedOrder(params: {
 }
 
 /**
+ * WhatsApp the seller when a buyer confirmed a draft but Connect cannot
+ * take card/destination charges yet. Order stays unpaid (PENDING_CONFIRMATION).
+ */
+export async function notifySellerOfPaymentsUnavailable(params: {
+  businessId: string;
+  orderRef: string;
+  supabase: SupabaseClient;
+}): Promise<SellerNotifyResult> {
+  const text = `A buyer confirmed order ${params.orderRef}, but card payments are not ready on your Stripe account. Finish payment setup in TradeFlow Settings → Stripe so you can send a payment link. The order is saved and unpaid.`;
+  return notifySeller({
+    businessId: params.businessId,
+    text,
+    supabase: params.supabase,
+    label: "seller payments unavailable",
+    template: {
+      key: "seller_needs_attention",
+      variables: {
+        buyer: "buyer",
+        ref: params.orderRef,
+      },
+    },
+  });
+}
+
+/**
  * WhatsApp the seller when a cooling-off return was auto-approved.
  * Distinct from notifySellerOfReturnRequest — no approve/decline action.
  */
