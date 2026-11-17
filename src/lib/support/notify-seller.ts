@@ -108,6 +108,31 @@ export async function notifySellerOfPaymentsUnavailable(params: {
 }
 
 /**
+ * WhatsApp the seller once when an unpaid-order payment reminder permanently
+ * failed after retries. Order page also shows a banner.
+ */
+export async function notifySellerOfPaymentReminderFailed(params: {
+  businessId: string;
+  orderRef: string;
+  supabase: SupabaseClient;
+}): Promise<SellerNotifyResult> {
+  const text = `We could not send the unpaid-order payment reminder for ${params.orderRef} after several tries. Open the order in your TradeFlow dashboard — the buyer may still need a payment link.`;
+  return notifySeller({
+    businessId: params.businessId,
+    text,
+    supabase: params.supabase,
+    label: "seller payment reminder failed",
+    template: {
+      key: "seller_needs_attention",
+      variables: {
+        buyer: "buyer",
+        ref: params.orderRef,
+      },
+    },
+  });
+}
+
+/**
  * WhatsApp the seller when a cooling-off return was auto-approved.
  * Distinct from notifySellerOfReturnRequest — no approve/decline action.
  */

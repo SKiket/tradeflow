@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { isVercelProduction } from "@/lib/api/runtime-env";
-import { anyCronJobDegraded } from "@/lib/cron/heartbeat";
+import { getDegradedCronJobs } from "@/lib/cron/heartbeat";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -38,19 +38,29 @@ async function pingDatabase(): Promise<boolean> {
 /**
  * Liveness + shallow DB readiness + cron heartbeat freshness.
  * No secrets, versions, job names, or error details in the response.
+ * Degraded reasons are logged server-side only.
  */
 export async function GET() {
   try {
     const ok = await pingDatabase();
     if (!ok) {
+      console.warn("[health] degraded", {
+        reason: "database_unreachable",
+      });
       return NextResponse.json(
         { status: "degraded" },
         { status: 503, headers: { "Cache-Control": "no-store" } },
       );
     }
 
-    const cronDegraded = await anyCronJobDegraded();
-    if (cronDegraded) {
+    const degradedJobs = await getDegradedCronJobs();
+    if (degradedJobs.length > 0) {
+      console.warn("[health] degraded", {
+        jobs: degradedJobs.map((j) => ({
+          job: j.jobName,
+          reason: j.reason,
+        })),
+      });
       return NextResponse.json(
         { status: "degraded" },
         { status: 503, headers: { "Cache-Control": "no-store" } },
@@ -62,6 +72,7 @@ export async function GET() {
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch {
+    console.warn("[health] degraded", { reason: "handler_exception" });
     return NextResponse.json(
       { status: "degraded" },
       { status: 503, headers: { "Cache-Control": "no-store" } },

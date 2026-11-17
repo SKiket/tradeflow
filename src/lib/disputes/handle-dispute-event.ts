@@ -111,16 +111,21 @@ async function handleCreated(
   const fee = extractDisputeFeePence(dispute);
 
   if (!match.orderId) {
-    Sentry.captureMessage("dispute_unmatched_order", {
-      level: "warning",
-      tags: {
-        stripe_dispute_id: dispute.id,
+    Sentry.captureMessage(
+      "Stripe dispute could not be matched to an order",
+      {
+        level: "warning",
+        tags: {
+          stripe_dispute_id: dispute.id,
+          event: "dispute_unmatched_order",
+        },
+        fingerprint: ["dispute_unmatched_order", dispute.id],
+        extra: {
+          has_charge_id: Boolean(match.chargeId),
+          has_payment_intent: Boolean(match.paymentIntentId),
+        },
       },
-      extra: {
-        charge_id: match.chargeId || null,
-        has_payment_intent: Boolean(match.paymentIntentId),
-      },
-    });
+    );
   }
 
   // Prefer order's business; else resolve via charge transfer destination.

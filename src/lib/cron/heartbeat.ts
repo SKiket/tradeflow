@@ -17,8 +17,10 @@ export type CronHeartbeatStatus =
   | "failure"
   | "auth_failure";
 
-const SENTRY_AUTH_FAIL_MIN_INTERVAL_MS = 15 * 60 * 1000;
-const lastAuthFailSentryAt = new Map<string, number>();
+const SENTRY_AUTH_FAIL_WINDOW_MS = 15 * 60 * 1000;
+const SENTRY_AUTH_FAIL_MIN_COUNT = 3;
+/** Sliding window of auth-failure timestamps per job (Sentry only after 3). */
+const authFailTimestamps = new Map<string, number[]>();
 
 /** Strip anything that might look like a secret or PII from error summaries. */
 export function safeCronErrorSummary(
@@ -67,8 +69,11 @@ export async function markCronStarted(
 export async function markCronSuccess(
   jobName: CronJobName,
   supabase: SupabaseClient = createAdminClient(),
+  runSummary?: string | null,
 ): Promise<void> {
   const now = new Date().toISOString();
+  const summary =
+    runSummary != null ? safeCronErrorSummary(runSummary, 240) : null;
   const { error } = await supabase.from("cron_heartbeats").upsert(
     {
       job_name: jobName,
@@ -76,6 +81,7 @@ export async function markCronSuccess(
       last_success_at: now,
       last_status: "success",
       last_error_summary: null,
+      last_run_summary: summary,
       consecutive_failures: 0,
       updated_at: now,
     },
@@ -133,14 +139,24 @@ export async function markCronFailure(
 export async function recordCronAuthFailure(
   jobName: CronJobName,
 ): Promise<void> {
+  // Always record every auth failure in the heartbeat.
   await markCronFailure(jobName, "unauthorized", "auth_failure");
 
   const now = Date.now();
-  const last = lastAuthFailSentryAt.get(jobName) ?? 0;
-  if (now - last < SENTRY_AUTH_FAIL_MIN_INTERVAL_MS) {
+  const prior = (authFailTimestamps.get(jobName) ?? []).filter(
+    (ts) => now - ts < SENTRY_AUTH_FAIL_WINDOW_MS,
+  );
+  prior.push(now);
+  authFailTimestamps.set(jobName, prior);
+
+  // Sentry only after ≥3 failures for the same job within 15 minutes.
+  if (prior.length < SENTRY_AUTH_FAIL_MIN_COUNT) {
     return;
   }
-  lastAuthFailSentryAt.set(jobName, now);
+  // Emit at most once per window (when count first hits the threshold).
+  if (prior.length !== SENTRY_AUTH_FAIL_MIN_COUNT) {
+    return;
+  }
 
   Sentry.captureException(new Error("cron_auth_failure"), {
     level: "error",
@@ -151,6 +167,7 @@ export async function recordCronAuthFailure(
     extra: {
       jobName,
       reason: "unauthorized",
+      failuresInWindow: prior.length,
       // Explicitly omit request body, headers, and secret material.
     },
   });
@@ -232,10 +249,55 @@ export async function getCronMonitoringStartedAtMs(
   return Number.isFinite(ms) ? ms : null;
 }
 
+export type CronDegradedReason =
+  | "consecutive_failures"
+  | "overdue"
+  | "never_ran";
+
+export type CronDegradedJob = {
+  jobName: CronJobName;
+  reason: CronDegradedReason;
+};
+
+/** List stale jobs with a coarse reason (no personal data). */
+export function listDegradedCronJobs(
+  rows: Map<string, CronHealthRow>,
+  nowMs: number = Date.now(),
+  monitoringStartedAtMs: number | null = null,
+): CronDegradedJob[] {
+  const out: CronDegradedJob[] = [];
+  for (const name of CRON_JOB_NAMES) {
+    const row = rows.get(name);
+    if (!isCronJobStale(name, row, nowMs, monitoringStartedAtMs)) continue;
+
+    let reason: CronDegradedReason = "never_ran";
+    if (
+      row &&
+      (row.consecutive_failures ?? 0) >= CRON_CONSECUTIVE_FAILURE_THRESHOLD
+    ) {
+      reason = "consecutive_failures";
+    } else if (row?.last_success_at) {
+      reason = "overdue";
+    } else {
+      reason = "never_ran";
+    }
+    out.push({ jobName: name, reason });
+  }
+  return out;
+}
+
 /** True when any registered job is stale, never-ran past grace, or failing. */
 export async function anyCronJobDegraded(
   supabase: SupabaseClient = createAdminClient(),
 ): Promise<boolean> {
+  const degraded = await getDegradedCronJobs(supabase);
+  return degraded.length > 0;
+}
+
+/** Fetch heartbeat rows and return degraded jobs (empty on lookup error). */
+export async function getDegradedCronJobs(
+  supabase: SupabaseClient = createAdminClient(),
+): Promise<CronDegradedJob[]> {
   const [{ data, error }, monitoringStartedAtMs] = await Promise.all([
     supabase
       .from("cron_heartbeats")
@@ -249,17 +311,11 @@ export async function anyCronJobDegraded(
   if (error) {
     console.error("[cron/heartbeat] health lookup failed", error.message);
     // Fail open on lookup error — DB probe already covers connectivity.
-    return false;
+    return [];
   }
 
   const byName = new Map(
     (data ?? []).map((row) => [row.job_name as string, row as CronHealthRow]),
   );
-
-  for (const name of CRON_JOB_NAMES) {
-    if (isCronJobStale(name, byName.get(name), Date.now(), monitoringStartedAtMs)) {
-      return true;
-    }
-  }
-  return false;
+  return listDegradedCronJobs(byName, Date.now(), monitoringStartedAtMs);
 }

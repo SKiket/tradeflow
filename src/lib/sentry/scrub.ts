@@ -172,12 +172,18 @@ export function scrubSentryEvent(
   return event;
 }
 
-/** Shared Sentry.init options used by client/server/edge. */
+/**
+ * Shared Sentry.init options used by client/server/edge.
+ * Local development never sends. Vercel production and preview may send.
+ */
 export function sentrySharedOptions() {
   const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN?.trim() || undefined;
+  const vercelEnv = process.env.VERCEL_ENV?.trim() || "";
+  const allowEnv = vercelEnv === "production" || vercelEnv === "preview";
   return {
     dsn,
-    enabled: Boolean(dsn),
+    enabled: Boolean(dsn) && allowEnv,
+    environment: allowEnv ? vercelEnv : undefined,
     tracesSampleRate: 0,
     sendDefaultPii: false,
     beforeSend: scrubSentryEvent,

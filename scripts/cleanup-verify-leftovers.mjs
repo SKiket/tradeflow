@@ -13,9 +13,9 @@ const doDelete = process.argv.includes("--delete");
 
 const PILOT_NAMES = new Set(["EK-Pousser_D"]);
 const TEST_SLUG_RE =
-  /^(pk-|pd-|desc-|csv-|vf-|test-|tmp-|multi-|bill-|rls-|imp-)/i;
+  /^(pk-|pd-|desc-|csv-|vf-|test-|tmp-|multi-|bill-|billing-|rls-|imp-|ag-|gate-|conn-|wa-)/i;
 const TEST_NAME_RE =
-  /(PK Shop|PD Shop|Describe Shop|CSV Import|Verify |Test Shop|tmp-)/i;
+  /(PK Shop|PD Shop|Describe Shop|CSV Import|Verify |Test Shop|tmp-|Billing (trial|active|Enf)|AG Shop|Connect Gate|WA Cart)/i;
 const TEST_EMAIL_RE =
   /@(example\.com|tradeflow-test\.local)$/i;
 const TEST_PHONE_RE = /^\+4477009\d{5}$/; // mock range used by verifies

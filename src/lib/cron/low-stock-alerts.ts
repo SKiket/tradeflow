@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { WhatsAppNotConfiguredError } from "@/lib/channels/send/errors";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
 import {
@@ -151,11 +152,24 @@ export async function runLowStockAlerts(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // Failed row is already persisted by sendWhatsAppMessage (shows in
-      // dashboard delivery banner). Release claim so tomorrow can retry.
+      const noChannel =
+        error instanceof WhatsAppNotConfiguredError ||
+        /whatsapp_phone_e164 is null|WHATSAPP_NOT_CONFIGURED|no WhatsApp number/i.test(
+          message,
+        );
+      if (noChannel) {
+        // Keep claim so we do not retry forever with no channel configured.
+        console.info("[low-stock] alert_skipped", {
+          businessId,
+          reason: "no_channel",
+        });
+        skipped.push(`no_channel:${businessId}`);
+        continue;
+      }
+      // Transient send failure: release claim so a later run can retry.
       console.error("[low-stock] WhatsApp send failed — releasing claim", {
         businessId,
-        error: message,
+        error: message.slice(0, 180),
       });
       await unclaim(supabase, claimed, claimedAt);
       skipped.push(`send_failed:${businessId}`);

@@ -1,19 +1,36 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { isVercelProduction } from "@/lib/api/runtime-env";
+import {
+  WhatsAppNotConfiguredError,
+  WhatsAppSendError,
+} from "@/lib/channels/send/errors";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { t } from "@/lib/i18n";
 import { cancelAwaitingPaymentOrder } from "@/lib/orders/confirm-draft-order";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { getOpenCheckoutUrl } from "@/lib/stripe/checkout";
+import { notifySellerOfPaymentReminderFailed } from "@/lib/support/notify-seller";
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 export const REMINDER_12H_MS = 12 * MS_PER_HOUR;
 export const REMINDER_23H_MS = 23 * MS_PER_HOUR;
 export const AUTO_CANCEL_MS = 24 * MS_PER_HOUR;
+export const MAX_REMINDER_SEND_ATTEMPTS = 3;
 
 type ReminderColumn =
   | "payment_reminder_12h_sent_at"
   | "payment_reminder_23h_sent_at";
+
+type ReminderOutcomeColumn =
+  | "payment_reminder_12h_outcome"
+  | "payment_reminder_23h_outcome";
+
+type ReminderAttemptsColumn =
+  | "payment_reminder_12h_attempts"
+  | "payment_reminder_23h_attempts";
+
+type ReminderOutcome = "sent" | "skipped_no_channel" | "failed";
 
 interface ChaseOrder {
   id: string;
@@ -24,6 +41,11 @@ interface ChaseOrder {
   stripe_checkout_session_id: string | null;
   payment_reminder_12h_sent_at: string | null;
   payment_reminder_23h_sent_at: string | null;
+  payment_reminder_12h_outcome: string | null;
+  payment_reminder_23h_outcome: string | null;
+  payment_reminder_12h_attempts: number;
+  payment_reminder_23h_attempts: number;
+  payment_reminder_seller_alerted_at: string | null;
   status: string;
   awaiting_since: Date;
 }
@@ -54,6 +76,14 @@ export interface PaymentChaseRunResult {
   reminders12h: ReminderResult[];
   reminders23h: ReminderResult[];
   cancelled: CancelResult[];
+  /** Aggregate counts for heartbeat / logs (no personal data). */
+  counts: {
+    sent: number;
+    skipped: number;
+    failed: number;
+    cancelled: number;
+    cancelErrors: number;
+  };
 }
 
 interface CustomerRow {
@@ -66,23 +96,8 @@ interface CustomerRow {
  * Process unpaid AWAITING_PAYMENT orders: 12h/23h WhatsApp reminders, then
  * 24h auto-cancel via the existing cancelAwaitingPaymentOrder path.
  *
- * 24h expiry — who wins:
- *   payment_chase owns the buyer-facing outcome (CANCELLED + timeout
- *   notify). Stripe's checkout.session.expired webhook is the stock-release
- *   backstop (EXPIRED). They land at ~the same instant because Checkout
- *   Session expires_at and reserved_until are both ~24h.
- *
- *   Webhook first: CAS AWAITING_PAYMENT → EXPIRED (stock released once).
- *   Chase then upgrades EXPIRED → CANCELLED (no second stock decrement)
- *   and notifies the buyer.
- *
- *   Chase first: expire session + CAS AWAITING_PAYMENT → CANCELLED + notify.
- *   The subsequent checkout.session.expired webhook sees CANCELLED and
- *   releaseOrderReservation no-ops.
- *
- * Idempotent under overlapping invocations: reminder sends are claimed by an
- * atomic NULL → NOW() update on *_sent_at; cancels rely on the CAS inside
- * releaseOrderReservation / the EXPIRED→CANCELLED update.
+ * Per-order problems never throw out of the run. No-channel reminders are
+ * skipped permanently; send failures retry up to MAX_REMINDER_SEND_ATTEMPTS.
  */
 export async function runPaymentChase(
   supabase: SupabaseClient,
@@ -95,32 +110,78 @@ export async function runPaymentChase(
   const cancelled: CancelResult[] = [];
 
   for (const order of candidates) {
-    const ageMs = now - order.awaiting_since.getTime();
+    try {
+      const ageMs = now - order.awaiting_since.getTime();
 
-    if (ageMs >= AUTO_CANCEL_MS) {
-      cancelled.push(await autoCancelOrder(supabase, order));
-      continue;
-    }
+      if (ageMs >= AUTO_CANCEL_MS) {
+        cancelled.push(await autoCancelOrder(supabase, order));
+        continue;
+      }
 
-    // EXPIRED orders only belong on the 24h cancel path (webhook already ran).
-    if (order.status !== ORDER_STATUS.AWAITING_PAYMENT) {
-      continue;
-    }
+      // EXPIRED orders only belong on the 24h cancel path (webhook already ran).
+      if (order.status !== ORDER_STATUS.AWAITING_PAYMENT) {
+        continue;
+      }
 
-    if (ageMs >= REMINDER_12H_MS && !order.payment_reminder_12h_sent_at) {
-      reminders12h.push(
-        await sendReminder(supabase, order, "12h", "payment_reminder_12h_sent_at"),
-      );
-    }
+      if (
+        ageMs >= REMINDER_12H_MS &&
+        !order.payment_reminder_12h_sent_at &&
+        !order.payment_reminder_12h_outcome
+      ) {
+        reminders12h.push(
+          await sendReminder(supabase, order, "12h", {
+            sentAt: "payment_reminder_12h_sent_at",
+            outcome: "payment_reminder_12h_outcome",
+            attempts: "payment_reminder_12h_attempts",
+          }),
+        );
+      }
 
-    if (ageMs >= REMINDER_23H_MS && !order.payment_reminder_23h_sent_at) {
-      reminders23h.push(
-        await sendReminder(supabase, order, "23h", "payment_reminder_23h_sent_at"),
-      );
+      if (
+        ageMs >= REMINDER_23H_MS &&
+        !order.payment_reminder_23h_sent_at &&
+        !order.payment_reminder_23h_outcome
+      ) {
+        reminders23h.push(
+          await sendReminder(supabase, order, "23h", {
+            sentAt: "payment_reminder_23h_sent_at",
+            outcome: "payment_reminder_23h_outcome",
+            attempts: "payment_reminder_23h_attempts",
+          }),
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[payment-chase] per-order error (continuing)", {
+        orderId: order.id,
+        error: message.slice(0, 180),
+      });
+      cancelled.push({
+        orderId: order.id,
+        orderRef: order.order_ref,
+        via: "cancelAwaitingPaymentOrder",
+        action: "error",
+        error: message.slice(0, 180),
+      });
     }
   }
 
-  return { reminders12h, reminders23h, cancelled };
+  const allReminders = [...reminders12h, ...reminders23h];
+  const counts = {
+    sent: allReminders.filter((r) => r.sent).length,
+    skipped: allReminders.filter(
+      (r) => Boolean(r.skipped) && r.skipped !== "failed_permanent",
+    ).length,
+    failed: allReminders.filter(
+      (r) =>
+        r.skipped === "failed_permanent" ||
+        (Boolean(r.error) && !r.sent && !r.skipped),
+    ).length,
+    cancelled: cancelled.filter((c) => c.action !== "error").length,
+    cancelErrors: cancelled.filter((c) => c.action === "error").length,
+  };
+
+  return { reminders12h, reminders23h, cancelled, counts };
 }
 
 async function loadPaymentChaseCandidates(
@@ -129,7 +190,7 @@ async function loadPaymentChaseCandidates(
   const { data: orders, error } = await supabase
     .from("orders")
     .select(
-      "id, business_id, customer_id, thread_id, order_ref, status, stripe_checkout_session_id, payment_reminder_12h_sent_at, payment_reminder_23h_sent_at",
+      "id, business_id, customer_id, thread_id, order_ref, status, stripe_checkout_session_id, payment_reminder_12h_sent_at, payment_reminder_23h_sent_at, payment_reminder_12h_outcome, payment_reminder_23h_outcome, payment_reminder_12h_attempts, payment_reminder_23h_attempts, payment_reminder_seller_alerted_at",
     )
     .in("status", [ORDER_STATUS.AWAITING_PAYMENT, ORDER_STATUS.EXPIRED])
     .is("deleted_at", null);
@@ -181,6 +242,16 @@ async function loadPaymentChaseCandidates(
         (row.payment_reminder_12h_sent_at as string | null) ?? null,
       payment_reminder_23h_sent_at:
         (row.payment_reminder_23h_sent_at as string | null) ?? null,
+      payment_reminder_12h_outcome:
+        (row.payment_reminder_12h_outcome as string | null) ?? null,
+      payment_reminder_23h_outcome:
+        (row.payment_reminder_23h_outcome as string | null) ?? null,
+      payment_reminder_12h_attempts:
+        Number(row.payment_reminder_12h_attempts ?? 0) || 0,
+      payment_reminder_23h_attempts:
+        Number(row.payment_reminder_23h_attempts ?? 0) || 0,
+      payment_reminder_seller_alerted_at:
+        (row.payment_reminder_seller_alerted_at as string | null) ?? null,
       status: row.status as string,
       awaiting_since: awaitingSince,
     });
@@ -227,13 +298,46 @@ async function unclaimReminder(
     .eq(column, claimedAt);
 }
 
+async function finalizeReminder(
+  supabase: SupabaseClient,
+  orderId: string,
+  cols: {
+    sentAt: ReminderColumn;
+    outcome: ReminderOutcomeColumn;
+    attempts: ReminderAttemptsColumn;
+  },
+  params: {
+    outcome: ReminderOutcome;
+    attempts: number;
+    claimedAt: string;
+  },
+): Promise<void> {
+  await supabase
+    .from("orders")
+    .update({
+      [cols.sentAt]: params.claimedAt,
+      [cols.outcome]: params.outcome,
+      [cols.attempts]: params.attempts,
+    })
+    .eq("id", orderId);
+}
+
 async function sendReminder(
   supabase: SupabaseClient,
   order: ChaseOrder,
   kind: "12h" | "23h",
-  column: ReminderColumn,
+  cols: {
+    sentAt: ReminderColumn;
+    outcome: ReminderOutcomeColumn;
+    attempts: ReminderAttemptsColumn;
+  },
 ): Promise<ReminderResult> {
-  const claimedAt = await claimReminder(supabase, order.id, column);
+  const priorAttempts =
+    kind === "12h"
+      ? order.payment_reminder_12h_attempts
+      : order.payment_reminder_23h_attempts;
+
+  const claimedAt = await claimReminder(supabase, order.id, cols.sentAt);
   if (!claimedAt) {
     return {
       orderId: order.id,
@@ -246,14 +350,24 @@ async function sendReminder(
   }
 
   const customer = await loadCustomer(supabase, order);
-  if (!customer) {
-    await unclaimReminder(supabase, order.id, column, claimedAt);
+  if (!customer?.phone_e164) {
+    await finalizeReminder(supabase, order.id, cols, {
+      outcome: "skipped_no_channel",
+      attempts: priorAttempts,
+      claimedAt,
+    });
+    console.info("[payment-chase] reminder_skipped", {
+      orderId: order.id,
+      kind,
+      reason: "no_channel",
+      detail: "no_customer_phone",
+    });
     return {
       orderId: order.id,
       orderRef: order.order_ref,
       kind,
       sent: false,
-      skipped: "no_customer",
+      skipped: "no_channel",
       checkoutUrlIncluded: false,
     };
   }
@@ -266,7 +380,7 @@ async function sendReminder(
       const message = error instanceof Error ? error.message : String(error);
       console.error("[payment-chase] checkout lookup failed", {
         orderId: order.id,
-        error: message,
+        error: message.slice(0, 180),
       });
     }
   }
@@ -279,6 +393,13 @@ async function sendReminder(
   );
 
   try {
+    // Verification-only hook — never active on Vercel production.
+    if (
+      process.env.PAYMENT_CHASE_FORCE_SEND_ERROR === "1" &&
+      !isVercelProduction()
+    ) {
+      throw new WhatsAppSendError("forced_test_send_failure");
+    }
     const sent = await sendWhatsAppMessage({
       businessId: order.business_id,
       toPhoneE164: customer.phone_e164,
@@ -297,6 +418,11 @@ async function sendReminder(
         },
       },
     });
+    await finalizeReminder(supabase, order.id, cols, {
+      outcome: "sent",
+      attempts: priorAttempts + 1,
+      claimedAt,
+    });
     console.info("[payment-chase] reminder sent", {
       orderId: order.id,
       kind,
@@ -313,21 +439,105 @@ async function sendReminder(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[payment-chase] reminder send failed — releasing claim", {
+    const noChannel =
+      error instanceof WhatsAppNotConfiguredError ||
+      /whatsapp_phone_e164 is null|WHATSAPP_NOT_CONFIGURED|no WhatsApp number/i.test(
+        message,
+      );
+
+    if (noChannel) {
+      await finalizeReminder(supabase, order.id, cols, {
+        outcome: "skipped_no_channel",
+        attempts: priorAttempts,
+        claimedAt,
+      });
+      console.info("[payment-chase] reminder_skipped", {
+        orderId: order.id,
+        kind,
+        reason: "no_channel",
+      });
+      return {
+        orderId: order.id,
+        orderRef: order.order_ref,
+        kind,
+        sent: false,
+        skipped: "no_channel",
+        checkoutUrlIncluded: Boolean(checkoutUrl),
+      };
+    }
+
+    const attempts = priorAttempts + 1;
+    if (attempts >= MAX_REMINDER_SEND_ATTEMPTS) {
+      await finalizeReminder(supabase, order.id, cols, {
+        outcome: "failed",
+        attempts,
+        claimedAt,
+      });
+      await maybeAlertSellerReminderFailed(supabase, order);
+      console.error("[payment-chase] reminder permanently failed", {
+        orderId: order.id,
+        kind,
+        attempts,
+        error: message.slice(0, 180),
+      });
+      return {
+        orderId: order.id,
+        orderRef: order.order_ref,
+        kind,
+        sent: false,
+        skipped: "failed_permanent",
+        checkoutUrlIncluded: Boolean(checkoutUrl),
+        error: message.slice(0, 180),
+      };
+    }
+
+    await supabase
+      .from("orders")
+      .update({ [cols.attempts]: attempts })
+      .eq("id", order.id);
+    await unclaimReminder(supabase, order.id, cols.sentAt, claimedAt);
+    console.error("[payment-chase] reminder send failed — will retry", {
       orderId: order.id,
       kind,
-      error: message,
+      attempts,
+      error: message.slice(0, 180),
     });
-    await unclaimReminder(supabase, order.id, column, claimedAt);
     return {
       orderId: order.id,
       orderRef: order.order_ref,
       kind,
       sent: false,
       checkoutUrlIncluded: Boolean(checkoutUrl),
-      error: message,
+      error: message.slice(0, 180),
     };
   }
+}
+
+async function maybeAlertSellerReminderFailed(
+  supabase: SupabaseClient,
+  order: ChaseOrder,
+): Promise<void> {
+  if (order.payment_reminder_seller_alerted_at) return;
+  const alertedAt = new Date().toISOString();
+  const { data } = await supabase
+    .from("orders")
+    .update({ payment_reminder_seller_alerted_at: alertedAt })
+    .eq("id", order.id)
+    .is("payment_reminder_seller_alerted_at", null)
+    .select("id")
+    .maybeSingle();
+  if (!data) return;
+
+  await notifySellerOfPaymentReminderFailed({
+    businessId: order.business_id,
+    orderRef: order.order_ref,
+    supabase,
+  }).catch((err) => {
+    console.error("[payment-chase] seller alert failed", {
+      orderId: order.id,
+      error: err instanceof Error ? err.message.slice(0, 180) : String(err),
+    });
+  });
 }
 
 function buildReminderText(
@@ -355,47 +565,73 @@ async function autoCancelOrder(
   supabase: SupabaseClient,
   order: ChaseOrder,
 ): Promise<CancelResult> {
-  const customer = order.customer_id
-    ? await loadCustomer(supabase, order)
-    : null;
+  try {
+    const customer = order.customer_id
+      ? await loadCustomer(supabase, order)
+      : null;
 
-  const outcome = await cancelAwaitingPaymentOrder({
-    supabase,
-    businessId: order.business_id,
-    orderId: order.id,
-    notifyBuyer: Boolean(customer),
-    customerId: customer?.id,
-    customerPhoneE164: customer?.phone_e164,
-    threadId: order.thread_id ?? undefined,
-    buyerMessage: t(
-      "confirm.payment_auto_cancelled",
-      customer?.preferred_language,
-    ),
-    template: {
-      key: "order_auto_cancelled",
-      variables: { orderRef: order.order_ref },
-    },
-  });
+    // Only notify when we have a channel; missing WA must not throw the job.
+    let notifyBuyer = Boolean(customer?.phone_e164);
+    if (notifyBuyer) {
+      const { data: biz } = await supabase
+        .from("businesses")
+        .select("whatsapp_phone_e164")
+        .eq("id", order.business_id)
+        .maybeSingle();
+      if (!biz?.whatsapp_phone_e164) notifyBuyer = false;
+    }
 
-  if (outcome.action === "error") {
+    const outcome = await cancelAwaitingPaymentOrder({
+      supabase,
+      businessId: order.business_id,
+      orderId: order.id,
+      notifyBuyer,
+      customerId: customer?.id,
+      customerPhoneE164: customer?.phone_e164,
+      threadId: order.thread_id ?? undefined,
+      buyerMessage: t(
+        "confirm.payment_auto_cancelled",
+        customer?.preferred_language,
+      ),
+      template: {
+        key: "order_auto_cancelled",
+        variables: { orderRef: order.order_ref },
+      },
+    });
+
+    if (outcome.action === "error") {
+      return {
+        orderId: order.id,
+        orderRef: order.order_ref,
+        via: "cancelAwaitingPaymentOrder",
+        action: "error",
+        error: outcome.error,
+      };
+    }
+
+    return {
+      orderId: order.id,
+      orderRef: order.order_ref,
+      via: "cancelAwaitingPaymentOrder",
+      action: outcome.action,
+      performed: outcome.performed,
+      checkoutExpireOutcome: outcome.checkoutExpireOutcome,
+      outboundMessageId: outcome.outboundMessageId,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[payment-chase] auto-cancel error (continuing)", {
+      orderId: order.id,
+      error: message.slice(0, 180),
+    });
     return {
       orderId: order.id,
       orderRef: order.order_ref,
       via: "cancelAwaitingPaymentOrder",
       action: "error",
-      error: outcome.error,
+      error: message.slice(0, 180),
     };
   }
-
-  return {
-    orderId: order.id,
-    orderRef: order.order_ref,
-    via: "cancelAwaitingPaymentOrder",
-    action: outcome.action,
-    performed: outcome.performed,
-    checkoutExpireOutcome: outcome.checkoutExpireOutcome,
-    outboundMessageId: outcome.outboundMessageId,
-  };
 }
 
 async function loadCustomer(
@@ -408,10 +644,12 @@ async function loadCustomer(
     .select("id, phone_e164, preferred_language")
     .eq("id", order.customer_id)
     .maybeSingle();
-  if (error || !data?.phone_e164) return null;
+  if (error || !data) return null;
+  const phone = (data.phone_e164 as string | null)?.trim() || "";
+  if (!phone) return null;
   return {
     id: data.id as string,
-    phone_e164: data.phone_e164 as string,
+    phone_e164: phone,
     preferred_language: (data.preferred_language as string | null) ?? null,
   };
 }

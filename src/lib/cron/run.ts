@@ -28,7 +28,11 @@ export async function runCronJob(
 
   try {
     const result = await handler();
-    await markCronSuccess(jobName);
+    const runSummary =
+      result && typeof result.runSummary === "string"
+        ? result.runSummary
+        : null;
+    await markCronSuccess(jobName, undefined, runSummary);
     return NextResponse.json({ ok: true, ...(result ?? {}) });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

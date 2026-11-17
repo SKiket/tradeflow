@@ -40,7 +40,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, dispute_status, total_pence, refunded_amount_pence, application_fee_pence, pricing_config_id, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, customers(id, phone_e164, name)",
+      "id, order_ref, status, dispute_status, total_pence, refunded_amount_pence, application_fee_pence, pricing_config_id, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, payment_reminder_12h_outcome, payment_reminder_23h_outcome, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
     .eq("business_id", businessId)
@@ -162,6 +162,18 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
             </Link>
             . Refunding while a dispute is open is not offered — Stripe blocks
             it and it risks paying twice.
+          </p>
+        ) : null}
+        {(order.payment_reminder_12h_outcome === "failed" ||
+          order.payment_reminder_23h_outcome === "failed") &&
+        (order.status as string) === "AWAITING_PAYMENT" ? (
+          <p
+            role="status"
+            className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+          >
+            Payment reminder could not be delivered to the buyer after several
+            tries. You may want to follow up another way or resend a payment
+            link.
           </p>
         ) : null}
         {(fraudWarnings ?? [])[0] ? (

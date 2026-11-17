@@ -15,14 +15,20 @@ export async function POST(request: NextRequest) {
   return runCronJob(request, "payment-chase", async () => {
     const result = await runPaymentChase(createAdminClient());
     console.info("[cron/payment-chase] run complete", {
+      sent: result.counts.sent,
+      skipped: result.counts.skipped,
+      failed: result.counts.failed,
+      cancelled: result.counts.cancelled,
+      cancelErrors: result.counts.cancelErrors,
       reminders12h: result.reminders12h.length,
       reminders23h: result.reminders23h.length,
-      cancelled: result.cancelled.length,
     });
     return {
+      counts: result.counts,
       reminders12h: result.reminders12h,
       reminders23h: result.reminders23h,
       cancelled: result.cancelled,
+      runSummary: `sent=${result.counts.sent} skipped=${result.counts.skipped} failed=${result.counts.failed} cancelled=${result.counts.cancelled}`,
     };
   });
 }

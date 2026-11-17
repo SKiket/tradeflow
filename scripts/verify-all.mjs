@@ -78,7 +78,8 @@ const FIXED_ORDER = [
   "verify-confirm-payment.mjs",
   "verify-awaiting-payment-change.mjs",
   "verify-payment-chase.mjs",
-  "verify-reservation-window.mjs",
+  "verify-payment-chase-hardening.mjs",
+  "verify-reservation-window.mjs"
   "verify-dispatch-deliver.mjs",
   "verify-shippo-dispatch.mjs",
   "verify-tracking.mjs",
