@@ -481,18 +481,31 @@ export async function decideReturn(
       };
 }
 
+export type MarkReturnedOptions = {
+  /** When true (default), restock tracked variants. When false, leave stock unchanged. */
+  restock?: boolean;
+};
+
 export type MarkReturnedOutcome =
-  | { action: "returned"; orderId: string; orderRef: string }
+  | {
+      action: "returned";
+      orderId: string;
+      orderRef: string;
+      restocked: boolean | null;
+    }
   | { action: "invalid_status"; orderId: string; status: string }
   | { action: "not_found" };
 
 export async function markReturned(
   supabase: SupabaseClient,
   orderId: string,
+  options: MarkReturnedOptions = {},
 ): Promise<MarkReturnedOutcome> {
+  const wantRestock = options.restock !== false;
+
   const { data: order, error } = await supabase
     .from("orders")
-    .select("id, order_ref, business_id, status")
+    .select("id, order_ref, business_id, status, return_restocked")
     .eq("id", orderId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -500,11 +513,16 @@ export async function markReturned(
   if (error) throw new Error(error.message);
   if (!order) return { action: "not_found" };
 
+  // Idempotent: already RETURNED → never restock again.
   if (order.status === ORDER_STATUS.RETURNED) {
     return {
       action: "returned",
       orderId,
       orderRef: order.order_ref as string,
+      restocked:
+        typeof order.return_restocked === "boolean"
+          ? order.return_restocked
+          : null,
     };
   }
   if (order.status !== ORDER_STATUS.RETURN_APPROVED) {
@@ -515,20 +533,65 @@ export async function markReturned(
     };
   }
 
+  const { data: lines } = await supabase
+    .from("order_items")
+    .select("quantity, product_variant_id, product_variants(track_inventory)")
+    .eq("order_id", orderId)
+    .eq("business_id", order.business_id as string);
+
+  const trackedLines: { variantId: string; qty: number }[] = [];
+  for (const line of lines ?? []) {
+    const variantId = line.product_variant_id as string | null;
+    const qty = (line.quantity as number) ?? 0;
+    if (!variantId || qty <= 0) continue;
+    const variantRaw = line.product_variants as
+      | { track_inventory: boolean | null }
+      | { track_inventory: boolean | null }[]
+      | null;
+    const variant = Array.isArray(variantRaw) ? (variantRaw[0] ?? null) : variantRaw;
+    if (!variant?.track_inventory) continue;
+    trackedLines.push({ variantId, qty });
+  }
+
+  const hasTracked = trackedLines.length > 0;
+  const returnRestocked: boolean | null = hasTracked ? wantRestock : null;
+
+  // Atomic gate: UPDATE … WHERE status = RETURN_APPROVED. Only the first
+  // writer wins; losers must not restock or overwrite return_restocked.
   const { data: updated, error: updateError } = await supabase
     .from("orders")
-    .update({ status: ORDER_STATUS.RETURNED })
+    .update({
+      status: ORDER_STATUS.RETURNED,
+      return_restocked: returnRestocked,
+    })
     .eq("id", orderId)
     .eq("status", ORDER_STATUS.RETURN_APPROVED)
-    .select("id")
+    .select("id, return_restocked")
     .maybeSingle();
 
   if (updateError) throw new Error(updateError.message);
   if (!updated) {
+    // Race: another request already transitioned — re-read, never restock twice.
+    const { data: again } = await supabase
+      .from("orders")
+      .select("status, order_ref, return_restocked")
+      .eq("id", orderId)
+      .maybeSingle();
+    if (again?.status === ORDER_STATUS.RETURNED) {
+      return {
+        action: "returned",
+        orderId,
+        orderRef: (again.order_ref as string) ?? (order.order_ref as string),
+        restocked:
+          typeof again.return_restocked === "boolean"
+            ? again.return_restocked
+            : null,
+      };
+    }
     return {
       action: "invalid_status",
       orderId,
-      status: ORDER_STATUS.RETURN_APPROVED,
+      status: (again?.status as string) ?? ORDER_STATUS.RETURN_APPROVED,
     };
   }
 
@@ -539,38 +602,31 @@ export async function markReturned(
     to_status: ORDER_STATUS.RETURNED,
   });
 
-  // Single safe place: parcel received → restock tracked variants (labels restock_return).
-  const { data: lines } = await supabase
-    .from("order_items")
-    .select("quantity, product_variant_id")
-    .eq("order_id", orderId)
-    .eq("business_id", order.business_id as string);
-
-  for (const line of lines ?? []) {
-    const variantId = line.product_variant_id as string | null;
-    const qty = (line.quantity as number) ?? 0;
-    if (!variantId || qty <= 0) continue;
-    const { data: variant } = await supabase
-      .from("product_variants")
-      .select("id, stock_quantity, track_inventory")
-      .eq("id", variantId)
-      .eq("business_id", order.business_id as string)
-      .maybeSingle();
-    if (!variant?.track_inventory) continue;
-    const next = Math.max(0, (variant.stock_quantity as number) + qty);
-    const { error: stockError } = await supabase.rpc("adjust_variant_stock", {
-      p_variant_id: variantId,
-      p_stock_quantity: next,
-      p_reason: "restock_return",
-      p_order_id: orderId,
-    });
-    if (stockError) throw new Error(stockError.message);
+  if (wantRestock && hasTracked) {
+    for (const line of trackedLines) {
+      const { data: variant } = await supabase
+        .from("product_variants")
+        .select("id, stock_quantity, track_inventory")
+        .eq("id", line.variantId)
+        .eq("business_id", order.business_id as string)
+        .maybeSingle();
+      if (!variant?.track_inventory) continue;
+      const next = Math.max(0, (variant.stock_quantity as number) + line.qty);
+      const { error: stockError } = await supabase.rpc("adjust_variant_stock", {
+        p_variant_id: line.variantId,
+        p_stock_quantity: next,
+        p_reason: "restock_return",
+        p_order_id: orderId,
+      });
+      if (stockError) throw new Error(stockError.message);
+    }
   }
 
   return {
     action: "returned",
     orderId,
     orderRef: order.order_ref as string,
+    restocked: returnRestocked,
   };
 }
 

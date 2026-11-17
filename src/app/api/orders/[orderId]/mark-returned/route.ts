@@ -9,6 +9,7 @@ interface RouteContext {
 
 /**
  * Seller marks a RETURN_APPROVED order as RETURNED (parcel received).
+ * Body: { restock?: boolean } — default true; false skips inventory restock.
  * Authenticated — seller must own the order (enforced by RLS).
  */
 export async function POST(request: NextRequest, context: RouteContext) {
@@ -18,6 +19,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
 
   const { orderId } = await context.params;
+
+  let restock = true;
+  try {
+    const body = (await request.json().catch(() => ({}))) as {
+      restock?: unknown;
+    };
+    if (typeof body.restock === "boolean") {
+      restock = body.restock;
+    }
+  } catch {
+    restock = true;
+  }
 
   try {
     const { data: current } = await auth.supabase
@@ -30,7 +43,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    const outcome = await markReturned(auth.supabase, orderId);
+    const outcome = await markReturned(auth.supabase, orderId, { restock });
 
     switch (outcome.action) {
       case "returned":
