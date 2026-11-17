@@ -23,6 +23,8 @@ export type ReturnListRow = {
   returnReason: string | null;
   returnReasonDetail: string | null;
   returnRequestedAt: string | null;
+  /** null = unset/legacy/untracked; false = seller chose not to restock. */
+  returnRestocked: boolean | null;
   refundedPence: number;
   totalPence: number;
   refundStatus: ReturnsRefundStatus;
@@ -146,7 +148,7 @@ export async function fetchReturnsList(
   let listQuery = supabase
     .from("orders")
     .select(
-      "id, order_ref, status, return_reason, return_reason_detail, return_requested_at, refunded_amount_pence, total_pence, customers(name), order_items(quantity, product_variants(products(name)))",
+      "id, order_ref, status, return_reason, return_reason_detail, return_requested_at, return_restocked, refunded_amount_pence, total_pence, customers(name), order_items(quantity, product_variants(products(name)))",
     )
     .eq("business_id", businessId)
     .in("status", TAB_STATUSES[tab])
@@ -222,6 +224,7 @@ export async function fetchReturnsList(
     }
     const totalPence = (row.total_pence as number) ?? 0;
     const refundedPence = (row.refunded_amount_pence as number) ?? 0;
+    const restockedRaw = row.return_restocked as boolean | null | undefined;
     return {
       id: row.id as string,
       orderRef: row.order_ref as string,
@@ -229,6 +232,8 @@ export async function fetchReturnsList(
       returnReason: (row.return_reason as string | null) ?? null,
       returnReasonDetail: (row.return_reason_detail as string | null) ?? null,
       returnRequestedAt: (row.return_requested_at as string | null) ?? null,
+      returnRestocked:
+        typeof restockedRaw === "boolean" ? restockedRaw : null,
       refundedPence,
       totalPence,
       refundStatus: refundStatus(totalPence, refundedPence),

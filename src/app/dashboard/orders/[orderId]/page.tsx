@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { StatusBadge } from "@/components/orders/status-badge";
+import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
 import { isOpenDisputeStatus } from "@/lib/disputes/constants";
 import {
   formatDateTime,
@@ -10,6 +11,10 @@ import {
   statusLabel,
   unwrapRelation,
 } from "@/lib/orders/display";
+import {
+  resolveReturnsLang,
+  returnsCopy,
+} from "@/lib/returns/returns-copy";
 import { orderTrackingUrl } from "@/lib/storefront/url";
 
 import { requireSeller } from "../../require-seller";
@@ -30,6 +35,7 @@ interface OrderDetailPageProps {
 
 type VariantJoin = {
   label: string | null;
+  track_inventory?: boolean | null;
   products: { name: string } | { name: string }[] | null;
 } | null;
 
@@ -40,7 +46,7 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
   const { data: order } = await supabase
     .from("orders")
     .select(
-      "id, order_ref, status, dispute_status, total_pence, refunded_amount_pence, application_fee_pence, pricing_config_id, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, payment_reminder_12h_outcome, payment_reminder_23h_outcome, customers(id, phone_e164, name)",
+      "id, order_ref, status, dispute_status, total_pence, refunded_amount_pence, application_fee_pence, pricing_config_id, stripe_payment_intent_id, dispatch_tracking_number, dispatch_carrier, dispatch_label_url, tracking_status, tracking_updated_at, delivered_at, shipping_address, created_at, channel, customer_id, return_reason, return_reason_detail, return_notes, return_auto_approved, return_restocked, payment_reminder_12h_outcome, payment_reminder_23h_outcome, customers(id, phone_e164, name)",
     )
     .eq("id", orderId)
     .eq("business_id", businessId)
@@ -53,11 +59,12 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
     { data: history },
     { data: orderDisputes },
     { data: fraudWarnings },
+    sellerLang,
   ] = await Promise.all([
       supabase
         .from("order_items")
         .select(
-          "id, quantity, unit_price_pence, product_variants(label, products(name))",
+          "id, quantity, unit_price_pence, product_variants(label, track_inventory, products(name))",
         )
         .eq("order_id", orderId)
         .eq("business_id", businessId)
@@ -84,7 +91,11 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
         .eq("status", "open")
         .order("created_at", { ascending: false })
         .limit(1),
+      getBusinessSellerLanguage(supabase, businessId),
     ]);
+
+  const returnsLang = resolveReturnsLang(sellerLang);
+  const restockLabels = returnsCopy(returnsLang);
 
   const openDispute = (orderDisputes ?? []).find((d) =>
     isOpenDisputeStatus(d.status as string),
@@ -111,8 +122,14 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
       variantLabel: variant?.label ?? null,
       quantity: item.quantity as number,
       unitPricePence: item.unit_price_pence as number,
+      trackInventory: Boolean(variant?.track_inventory),
     };
   });
+  const hasTrackedInventory = lines.some((line) => line.trackInventory);
+  const returnRestocked =
+    typeof order.return_restocked === "boolean"
+      ? (order.return_restocked as boolean)
+      : null;
 
   const trackingUrl = orderTrackingUrl(order.order_ref as string);
   const trackingStatus = (order.tracking_status as string | null) ?? null;
@@ -260,7 +277,26 @@ export default async function OrderDetailPage({ params }: OrderDetailPageProps) 
         returnReasonDetail={(order.return_reason_detail as string | null) ?? null}
         returnNotes={(order.return_notes as string | null) ?? null}
         returnAutoApproved={Boolean(order.return_auto_approved)}
+        hasTrackedInventory={hasTrackedInventory}
+        restockCopy={{
+          addBackToStock: restockLabels.addBackToStock,
+          addBackHelper: restockLabels.addBackHelper,
+        }}
       />
+
+      {returnRestocked !== null ? (
+        <p
+          className="text-sm text-muted-foreground"
+          data-tf-returned-to-stock={returnRestocked ? "yes" : "no"}
+        >
+          {restockLabels.returnedToStock}:{" "}
+          <span className="font-medium text-foreground">
+            {returnRestocked
+              ? restockLabels.returnedToStockYes
+              : restockLabels.returnedToStockNo}
+          </span>
+        </p>
+      ) : null}
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">

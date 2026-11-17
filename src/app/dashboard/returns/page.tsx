@@ -110,6 +110,14 @@ export default async function ReturnsPage({
                           {row.customerInitials}
                         </span>
                       ) : null}
+                      {row.returnRestocked === false ? (
+                        <span
+                          className="ml-2 align-middle text-[11px] font-normal text-muted-foreground"
+                          data-tf-returns-not-restocked
+                        >
+                          {copy.notRestocked}
+                        </span>
+                      ) : null}
                     </p>
                     {row.itemSummary ? (
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">

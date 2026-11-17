@@ -31,6 +31,12 @@ export type OrderActionsProps = {
   returnReasonDetail: string | null;
   returnNotes: string | null;
   returnAutoApproved: boolean;
+  /** Show restock checkbox when the order has at least one tracked variant. */
+  hasTrackedInventory?: boolean;
+  restockCopy?: {
+    addBackToStock: string;
+    addBackHelper: string;
+  };
 };
 
 function apiErrorMessage(json: unknown, status: number): string {
@@ -91,10 +97,16 @@ export function OrderActions({
   returnReasonDetail,
   returnNotes,
   returnAutoApproved,
+  hasTrackedInventory = false,
+  restockCopy = {
+    addBackToStock: "Add back to stock",
+    addBackHelper: "Untick if the goods are damaged or can't be resold.",
+  },
 }: OrderActionsProps) {
   const router = useRouter();
   const remainingPence = Math.max(0, totalPence - (refundedAmountPence ?? 0));
   const remainingPounds = penceToPoundsInput(remainingPence);
+  const [addBackToStock, setAddBackToStock] = useState(true);
 
   const canDispatch = status === ORDER_STATUS.PAID;
   const canDeliver = status === ORDER_STATUS.DISPATCHED;
@@ -391,7 +403,13 @@ export function OrderActions({
             onSubmit={(event) => {
               event.preventDefault();
               void run("returned", async () => {
-                await postAction(`/api/orders/${orderId}/mark-returned`);
+                const body = hasTrackedInventory
+                  ? { restock: addBackToStock }
+                  : undefined;
+                await postAction(
+                  `/api/orders/${orderId}/mark-returned`,
+                  body,
+                );
                 setSuccess("Order marked as returned.");
               });
             }}
@@ -400,6 +418,26 @@ export function OrderActions({
             <p className="mt-1 text-xs text-muted-foreground">
               Buyer tracking slip: /t/{orderRef}/return-slip
             </p>
+            {hasTrackedInventory ? (
+              <div className="mt-3 space-y-1">
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={addBackToStock}
+                    disabled={pending !== null}
+                    onChange={(event) =>
+                      setAddBackToStock(event.target.checked)
+                    }
+                    data-tf-restock-checkbox
+                  />
+                  <span>{restockCopy.addBackToStock}</span>
+                </label>
+                <p className="pl-6 text-xs text-muted-foreground">
+                  {restockCopy.addBackHelper}
+                </p>
+              </div>
+            ) : null}
             <Button type="submit" className="mt-3" disabled={pending !== null}>
               {pending === "returned" ? "Updating…" : "Mark as Returned"}
             </Button>
