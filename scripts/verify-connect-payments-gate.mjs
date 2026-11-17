@@ -15,7 +15,7 @@ import {
 import { createHmac } from "node:crypto";
 
 loadVerifyEnv();
-const admin = createAdmin();
+const admin = createAdmin({ allowPilotWrites: true });
 const BASE = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
 const ENDPOINT = `${BASE}/api/webhooks/ingress`;
 const SANDBOX = "+14155238886";

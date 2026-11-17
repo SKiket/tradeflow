@@ -12,6 +12,10 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SEED_TAG = "[order_parse_seed]";
 const PILOT_NAME = "EK-Pousser_D";
+const PILOT_SLUG = "ek-pousserd";
+
+/** Cached pilot business id (loaded once per process). */
+let cachedPilotId = undefined;
 
 export function loadVerifyEnv() {
   const envPath = resolve(root, ".env.local");
@@ -38,13 +42,85 @@ export function newRunId(prefix = "vf") {
   return `${prefix}-${Date.now().toString(36)}-${randomUUID().slice(0, 6)}`;
 }
 
-export function createAdmin() {
+export async function getPilotBusinessId(admin) {
+  if (cachedPilotId !== undefined) return cachedPilotId;
+  const { data } = await admin
+    .from("businesses")
+    .select("id")
+    .eq("slug", PILOT_SLUG)
+    .maybeSingle();
+  cachedPilotId = data?.id ?? null;
+  return cachedPilotId;
+}
+
+/**
+ * Throws if businessId is the pilot. Call before inserts/updates that target a shop.
+ * Scripts that still need the Twilio-mapped sandbox must pass
+ * createAdmin({ allowPilotWrites: true }) and are reported in Step 23c.
+ */
+export async function assertNotPilotBusiness(
+  admin,
+  businessId,
+  context = "write",
+) {
+  if (!businessId) return;
+  if (admin?.__allowPilotWrites) return;
+  const pilotId = await getPilotBusinessId(admin);
+  if (pilotId && businessId === pilotId) {
+    throw new Error(
+      `Verify must not write to pilot business ${PILOT_SLUG} (${context})`,
+    );
+  }
+}
+
+/**
+ * createAdmin({ allowPilotWrites: true }) opts into pilot writes (legacy WA E2E).
+ * Default: inserts/upserts with business_id === pilot throw once pilot id is cached.
+ */
+export function createAdmin(options = {}) {
   loadVerifyEnv();
-  return createClient(
+  const allowPilotWrites = options.allowPilotWrites === true;
+  const client = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY,
     { auth: { autoRefreshToken: false, persistSession: false } },
   );
+  client.__allowPilotWrites = allowPilotWrites;
+  if (allowPilotWrites) {
+    console.warn(
+      "[verify-harness] allowPilotWrites=true — may write to EK-Pousser_D",
+    );
+    return client;
+  }
+
+  const originalFrom = client.from.bind(client);
+  client.from = (table) => {
+    const builder = originalFrom(table);
+    for (const method of ["insert", "upsert"]) {
+      const original = builder[method].bind(builder);
+      builder[method] = (payload) => {
+        const rows = Array.isArray(payload) ? payload : payload ? [payload] : [];
+        for (const row of rows) {
+          if (
+            row &&
+            typeof row === "object" &&
+            typeof row.business_id === "string" &&
+            cachedPilotId &&
+            row.business_id === cachedPilotId
+          ) {
+            throw new Error(
+              `Verify must not write to pilot business ${PILOT_SLUG} (${table}.${method})`,
+            );
+          }
+        }
+        return original(payload);
+      };
+    }
+    return builder;
+  };
+
+  void getPilotBusinessId(client);
+  return client;
 }
 
 export function hashTag(runId) {
@@ -160,6 +236,79 @@ export function liveVariants(product) {
   return (product?.product_variants ?? []).filter((v) => !v.deleted_at);
 }
 
+/** Shared cross-tenant fixture used by settings / storage / images / analytics. */
+export const ISOLATION_TENANT_A = {
+  email: "tenant-a@tradeflow-test.local",
+  password: "TestTenantA!123",
+  slug: "tenant-a",
+  name: "Tenant A",
+};
+
+/**
+ * Ensure the isolation tenant user + business exist (create if missing).
+ * Callers MUST clean up via deleteIsolationTenantA (or deleteTestBusiness)
+ * so leftover guard sees only ek-pousserd.
+ */
+export async function ensureIsolationTenantA(admin) {
+  const cfg = ISOLATION_TENANT_A;
+  let userId = null;
+  const { data: listed } = await admin.auth.admin.listUsers({ perPage: 1000 });
+  const existing = listed?.users?.find((u) => u.email === cfg.email);
+  if (existing) {
+    userId = existing.id;
+    await admin.auth.admin.updateUserById(userId, { password: cfg.password });
+  } else {
+    const { data, error } = await admin.auth.admin.createUser({
+      email: cfg.email,
+      password: cfg.password,
+      email_confirm: true,
+    });
+    if (error) throw error;
+    userId = data.user.id;
+  }
+
+  let { data: biz } = await admin
+    .from("businesses")
+    .select("id, slug, name, owner_user_id")
+    .eq("slug", cfg.slug)
+    .maybeSingle();
+  if (!biz) {
+    const { data: created, error } = await admin
+      .from("businesses")
+      .insert({
+        owner_user_id: userId,
+        slug: cfg.slug,
+        name: cfg.name,
+      })
+      .select("id, slug, name, owner_user_id")
+      .single();
+    if (error) throw error;
+    biz = created;
+  } else if (biz.owner_user_id !== userId) {
+    await admin
+      .from("businesses")
+      .update({ owner_user_id: userId, name: cfg.name })
+      .eq("id", biz.id);
+    biz.owner_user_id = userId;
+  }
+  return { business: biz, userId };
+}
+
+export async function deleteIsolationTenantA(admin) {
+  const { data: biz } = await admin
+    .from("businesses")
+    .select("id, owner_user_id, name")
+    .eq("slug", ISOLATION_TENANT_A.slug)
+    .maybeSingle();
+  if (!biz) {
+    const { data: listed } = await admin.auth.admin.listUsers({ perPage: 1000 });
+    const u = listed?.users?.find((x) => x.email === ISOLATION_TENANT_A.email);
+    if (u) await admin.auth.admin.deleteUser(u.id);
+    return;
+  }
+  await deleteTestBusiness(admin, biz.id, { ownerUserId: biz.owner_user_id });
+}
+
 /** Delete a test business created by a verify (never the pilot). */
 export async function deleteTestBusiness(admin, businessId, { ownerUserId } = {}) {
   if (!businessId) return;
@@ -205,4 +354,4 @@ export async function deleteTestBusiness(admin, businessId, { ownerUserId } = {}
   }
 }
 
-export { SEED_TAG, PILOT_NAME, root as VERIFY_ROOT };
+export { SEED_TAG, PILOT_NAME, PILOT_SLUG, root as VERIFY_ROOT };

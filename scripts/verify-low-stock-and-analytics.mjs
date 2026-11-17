@@ -15,14 +15,16 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBrowserClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import {
+  ensureIsolationTenantA,
+  deleteIsolationTenantA,
+  ISOLATION_TENANT_A,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const EK_EMAIL = "sgkiket@gmail.com";
-const TENANT_A = {
-  email: "tenant-a@tradeflow-test.local",
-  password: "TestTenantA!123",
-};
+const TENANT_A = ISOLATION_TENANT_A;
 const SELLER = process.env.SELLER_PHONE ?? "+447733308706";
 const RECOMPUTE_DAYS = 3;
 
@@ -267,6 +269,8 @@ async function restoreCooldowns(held) {
 
 async function main() {
   if (!CRON_SECRET) throw new Error("CRON_SHARED_SECRET missing from .env.local");
+  await ensureIsolationTenantA(admin);
+  try {
 
   const { data: business } = await admin
     .from("businesses")
@@ -514,10 +518,19 @@ async function main() {
       : `LOW-STOCK + ANALYTICS VERIFICATION: ${failed} FAILED`,
   );
   console.log("========================================");
-  process.exit(failed === 0 ? 0 : 1);
+  return failed === 0 ? 0 : 1;
+  } finally {
+    try {
+      await deleteIsolationTenantA(admin);
+    } catch (cleanupErr) {
+      console.warn("tenant-a cleanup:", cleanupErr.message);
+    }
+  }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

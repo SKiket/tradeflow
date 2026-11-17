@@ -15,6 +15,11 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBrowserClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import {
+  ensureIsolationTenantA,
+  deleteIsolationTenantA,
+  ISOLATION_TENANT_A,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
@@ -22,10 +27,7 @@ const ENDPOINT = `${BASE}/api/webhooks/ingress`;
 const SANDBOX_NUMBER = "+14155238886";
 const BUYER = "+447700900084";
 const EK_EMAIL = "sgkiket@gmail.com";
-const TENANT_A = {
-  email: "tenant-a@tradeflow-test.local",
-  password: "TestTenantA!123",
-};
+const TENANT_A = ISOLATION_TENANT_A;
 const NEW_RETURNS =
   "Returns accepted within 21 days if unused and in original packaging. Settings token SETTINGS-D4-20260829.";
 
@@ -178,6 +180,8 @@ async function cleanBuyerState(businessId) {
 }
 
 async function main() {
+  await ensureIsolationTenantA(admin);
+  try {
   const { data: ek, error: ekError } = await admin
     .from("businesses")
     .select(
@@ -348,10 +352,19 @@ async function main() {
   const allPassed = results.every((r) => r.passed);
   console.log(allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
   console.log("========================================");
-  process.exit(allPassed ? 0 : 1);
+  return allPassed ? 0 : 1;
+  } finally {
+    try {
+      await deleteIsolationTenantA(admin);
+    } catch (cleanupErr) {
+      console.warn("tenant-a cleanup:", cleanupErr.message);
+    }
+  }
 }
 
-main().catch((err) => {
-  console.error("FAILED:", err.message);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error("FAILED:", err.message);
+    process.exit(1);
+  });

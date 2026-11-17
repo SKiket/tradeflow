@@ -81,7 +81,7 @@ async function cleanup() {
   const slugs = [TENANT_A.slug, TENANT_B.slug];
   const { data: businesses } = await admin
     .from("businesses")
-    .select("id")
+    .select("id, owner_user_id")
     .in("slug", slugs);
   if (businesses?.length) {
     const ids = businesses.map((b) => b.id);
@@ -100,6 +100,27 @@ async function cleanup() {
     await admin.from("broadcasts").delete().in("business_id", ids);
     await admin.from("message_templates").delete().in("business_id", ids);
     await admin.from("businesses").delete().in("id", ids);
+    for (const b of businesses) {
+      if (b.owner_user_id) {
+        try {
+          await admin.auth.admin.deleteUser(b.owner_user_id);
+        } catch {
+          /* ignore missing users */
+        }
+      }
+    }
+  }
+  // Also drop auth users by email if businesses already gone.
+  for (const email of [TENANT_A.email, TENANT_B.email]) {
+    const { data: listed } = await admin.auth.admin.listUsers();
+    const u = listed?.users?.find((x) => x.email === email);
+    if (u) {
+      try {
+        await admin.auth.admin.deleteUser(u.id);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
@@ -420,10 +441,21 @@ async function main() {
   console.log(passed ? "RLS VERIFICATION: PASSED" : "RLS VERIFICATION: FAILED");
   console.log("========================================");
 
-  process.exit(passed ? 0 : 1);
+  return passed ? 0 : 1;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    console.error(err);
+    return 1;
+  })
+  .then(async (code) => {
+    try {
+      await cleanup();
+      console.log("Cleaned up tenant-a / tenant-b");
+    } catch (cleanupErr) {
+      console.error("tenant cleanup failed", cleanupErr);
+      process.exit(1);
+    }
+    process.exit(code ?? 1);
+  });

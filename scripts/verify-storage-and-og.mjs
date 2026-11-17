@@ -17,15 +17,16 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBrowserClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import {
+  ensureIsolationTenantA,
+  deleteIsolationTenantA,
+  ISOLATION_TENANT_A,
+} from "./lib/verify-harness.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
 const EK_EMAIL = "sgkiket@gmail.com";
-const TENANT_A = {
-  email: "tenant-a@tradeflow-test.local",
-  password: "TestTenantA!123",
-  slug: "tenant-a",
-};
+const TENANT_A = ISOLATION_TENANT_A;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set([
   "image/jpeg",
@@ -207,6 +208,9 @@ async function uploadPng(client, bucket, path, png) {
 }
 
 async function main() {
+  const ensured = await ensureIsolationTenantA(admin);
+  const tenantA = ensured.business;
+  try {
   const { data: ek, error: ekError } = await admin
     .from("businesses")
     .select("id, slug, name, logo_url, banner_url, bio")
@@ -215,15 +219,6 @@ async function main() {
     .maybeSingle();
   if (ekError) throw new Error(ekError.message);
   if (!ek) throw new Error("EK-Pousser_D not found");
-
-  const { data: tenantA, error: tenantError } = await admin
-    .from("businesses")
-    .select("id, slug, name")
-    .eq("slug", TENANT_A.slug)
-    .is("deleted_at", null)
-    .maybeSingle();
-  if (tenantError) throw new Error(tenantError.message);
-  if (!tenantA) throw new Error("tenant-a not found");
 
   const { data: mug, error: mugError } = await admin
     .from("products")
@@ -497,10 +492,19 @@ async function main() {
   const allPassed = results.every((r) => r.passed);
   console.log(allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
   console.log("========================================");
-  process.exit(allPassed ? 0 : 1);
+  return allPassed ? 0 : 1;
+  } finally {
+    try {
+      await deleteIsolationTenantA(admin);
+    } catch (cleanupErr) {
+      console.warn("tenant-a cleanup:", cleanupErr.message);
+    }
+  }
 }
 
-main().catch((err) => {
-  console.error("FAILED:", err.message);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error("FAILED:", err.message);
+    process.exit(1);
+  });

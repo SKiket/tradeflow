@@ -32,7 +32,7 @@ const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const env = loadVerifyEnv();
 const url = env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const admin = createAdmin();
+const admin = createAdmin({ allowPilotWrites: true });
 const runId = newRunId("disp");
 
 const results = [];

@@ -48,6 +48,7 @@ for (const [k, v] of Object.entries(fileEnv)) {
 }
 
 process.env.TWILIO_DRY_RUN = "true";
+process.env.VERIFY_SUITE_STARTED_AT = new Date().toISOString();
 delete process.env.TWILIO_SIMULATE_ERROR;
 delete process.env.FORCE_REAL_SEND;
 
@@ -150,15 +151,24 @@ function extractFailLines(text) {
 
 function runScript(name) {
   const started = Date.now();
+  const SCRIPT_TIMEOUT_MS = 120_000;
   const out = spawnSync(process.execPath, [`scripts/${name}`], {
     cwd: root,
     env: { ...process.env, TWILIO_DRY_RUN: "true" },
     encoding: "utf8",
-    timeout: 600_000,
+    timeout: SCRIPT_TIMEOUT_MS,
+    killSignal: "SIGTERM",
   });
+  const timedOut =
+    out.error?.code === "ETIMEDOUT" ||
+    (out.signal != null && out.status === null);
   const text = `${out.stdout || ""}\n${out.stderr || ""}`;
   const failLines = extractFailLines(text);
+  if (timedOut) {
+    failLines.unshift(`TIMEOUT after ${SCRIPT_TIMEOUT_MS / 1000}s`);
+  }
   const passed =
+    !timedOut &&
     out.status === 0 &&
     !/SOME TESTS FAILED|CSV IMPORT: FAILED|VERIFICATION:.*FAILED|^FAILED:/im.test(
       text,
@@ -166,7 +176,7 @@ function runScript(name) {
   return {
     name,
     passed,
-    status: out.status,
+    status: timedOut ? "timeout" : out.status,
     ms: Date.now() - started,
     failLines,
   };
@@ -268,6 +278,21 @@ if (baseline) {
   console.log(`Wrote ${path}`);
 }
 
-if (realFails.length > 0) process.exit(1);
+// --- Leftover guard (never deletes) ---
+const ALLOWED_BUSINESS_SLUGS = new Set(["ek-pousserd"]);
+const leftoverGuard = spawnSync(
+  process.execPath,
+  ["scripts/check-verify-leftovers.mjs"],
+  { cwd: root, env: process.env, encoding: "utf8", timeout: 120_000 },
+);
+console.log("\n===== LEFTOVER GUARD =====");
+console.log((leftoverGuard.stdout || "").trim());
+if (leftoverGuard.status !== 0) {
+  console.error((leftoverGuard.stderr || "").trim());
+  console.error("LEFTOVER GUARD: FAILED (extra businesses or verify orders remain)");
+}
+const leftoverFailed = leftoverGuard.status !== 0;
+
+if (realFails.length > 0 || leftoverFailed) process.exit(1);
 if (strictKnown && knownFails.length > 0) process.exit(1);
 process.exit(0);

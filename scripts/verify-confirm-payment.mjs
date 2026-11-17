@@ -40,7 +40,7 @@ const SWEEP_BUYER = "+447700900099";
 
 const env = loadVerifyEnv();
 const TWILIO_TOKEN = env.TWILIO_AUTH_TOKEN || process.env.TWILIO_AUTH_TOKEN;
-const admin = createAdmin();
+const admin = createAdmin({ allowPilotWrites: true });
 const runId = newRunId("confirm");
 
 const results = [];

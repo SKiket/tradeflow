@@ -20,7 +20,7 @@ const ENDPOINT = `${BASE}/api/webhooks/ingress`;
 const FR_PHONE = "+447700900301";
 
 const env = loadVerifyEnv();
-const admin = createAdmin();
+const admin = createAdmin({ allowPilotWrites: true });
 const stripe = new Stripe(env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2026-06-24.dahlia",
 });
