@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { OPEN_DISPUTE_STATUSES } from "@/lib/disputes/constants";
 import { ORDER_STATUS } from "@/lib/orders/status";
+import { countReturnsNeedingDecision } from "@/lib/returns/count-pending";
 import { canTakeCardPayments } from "@/lib/stripe/connect-capabilities";
 
 export type SellerAttentionKind =
@@ -117,15 +118,7 @@ export async function fetchSellerAttention(
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle(),
-    countHead(
-      supabase
-        .from("orders")
-        .select("id", { count: "exact", head: true })
-        .eq("business_id", businessId)
-        .eq("status", ORDER_STATUS.RETURN_REQUESTED)
-        .is("deleted_at", null),
-      "returns",
-    ),
+    countReturnsNeedingDecision(supabase, businessId),
     countHead(
       supabase
         .from("orders")
@@ -236,7 +229,7 @@ export async function fetchSellerAttention(
     items.push({
       kind: "returns",
       count: returnsCount,
-      href: "/dashboard/orders?status=RETURN_REQUESTED",
+      href: "/dashboard/returns?tab=needs_decision",
       oldestAt: null,
       detail: null,
     });

@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Inbox,
   Package,
+  RotateCcw,
   Scale,
   Settings,
   Users,
@@ -25,6 +26,12 @@ const NAV = [
     href: "/dashboard/orders",
     label: "Orders",
     icon: ClipboardList,
+    live: true,
+  },
+  {
+    href: "/dashboard/returns",
+    label: "Returns",
+    icon: RotateCcw,
     live: true,
   },
   {
