@@ -494,8 +494,13 @@ export type MarkReturnedOutcome =
       restocked: boolean | null;
     }
   | { action: "invalid_status"; orderId: string; status: string }
-  | { action: "not_found" };
+  | { action: "not_found" }
+  | { action: "mark_returned_failed"; orderId: string; message: string };
 
+/**
+ * Marks RETURN_APPROVED → RETURNED via atomic DB function mark_order_returned
+ * (service_role only). Caller supabase is used only for ownership/visibility.
+ */
 export async function markReturned(
   supabase: SupabaseClient,
   orderId: string,
@@ -503,6 +508,7 @@ export async function markReturned(
 ): Promise<MarkReturnedOutcome> {
   const wantRestock = options.restock !== false;
 
+  // Ownership / RLS: seller must be able to see the order.
   const { data: order, error } = await supabase
     .from("orders")
     .select("id, order_ref, business_id, status, return_restocked")
@@ -513,7 +519,7 @@ export async function markReturned(
   if (error) throw new Error(error.message);
   if (!order) return { action: "not_found" };
 
-  // Idempotent: already RETURNED → never restock again.
+  // Fast path for already RETURNED (also handled inside the RPC).
   if (order.status === ORDER_STATUS.RETURNED) {
     return {
       action: "returned",
@@ -533,100 +539,57 @@ export async function markReturned(
     };
   }
 
-  const { data: lines } = await supabase
-    .from("order_items")
-    .select("quantity, product_variant_id, product_variants(track_inventory)")
-    .eq("order_id", orderId)
-    .eq("business_id", order.business_id as string);
+  const admin = createAdminClient();
+  const { data: raw, error: rpcError } = await admin.rpc("mark_order_returned", {
+    p_order_id: orderId,
+    p_business_id: order.business_id as string,
+    p_restock: wantRestock,
+  });
 
-  const trackedLines: { variantId: string; qty: number }[] = [];
-  for (const line of lines ?? []) {
-    const variantId = line.product_variant_id as string | null;
-    const qty = (line.quantity as number) ?? 0;
-    if (!variantId || qty <= 0) continue;
-    const variantRaw = line.product_variants as
-      | { track_inventory: boolean | null }
-      | { track_inventory: boolean | null }[]
-      | null;
-    const variant = Array.isArray(variantRaw) ? (variantRaw[0] ?? null) : variantRaw;
-    if (!variant?.track_inventory) continue;
-    trackedLines.push({ variantId, qty });
-  }
-
-  const hasTracked = trackedLines.length > 0;
-  const returnRestocked: boolean | null = hasTracked ? wantRestock : null;
-
-  // Atomic gate: UPDATE … WHERE status = RETURN_APPROVED. Only the first
-  // writer wins; losers must not restock or overwrite return_restocked.
-  const { data: updated, error: updateError } = await supabase
-    .from("orders")
-    .update({
-      status: ORDER_STATUS.RETURNED,
-      return_restocked: returnRestocked,
-    })
-    .eq("id", orderId)
-    .eq("status", ORDER_STATUS.RETURN_APPROVED)
-    .select("id, return_restocked")
-    .maybeSingle();
-
-  if (updateError) throw new Error(updateError.message);
-  if (!updated) {
-    // Race: another request already transitioned — re-read, never restock twice.
-    const { data: again } = await supabase
-      .from("orders")
-      .select("status, order_ref, return_restocked")
-      .eq("id", orderId)
-      .maybeSingle();
-    if (again?.status === ORDER_STATUS.RETURNED) {
-      return {
-        action: "returned",
-        orderId,
-        orderRef: (again.order_ref as string) ?? (order.order_ref as string),
-        restocked:
-          typeof again.return_restocked === "boolean"
-            ? again.return_restocked
-            : null,
-      };
-    }
+  if (rpcError) {
     return {
-      action: "invalid_status",
+      action: "mark_returned_failed",
       orderId,
-      status: (again?.status as string) ?? ORDER_STATUS.RETURN_APPROVED,
+      message: rpcError.message,
     };
   }
 
-  await supabase.from("order_status_history").insert({
-    order_id: orderId,
-    business_id: order.business_id,
-    from_status: ORDER_STATUS.RETURN_APPROVED,
-    to_status: ORDER_STATUS.RETURNED,
-  });
+  const payload =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : null;
+  const action = typeof payload?.action === "string" ? payload.action : null;
 
-  if (wantRestock && hasTracked) {
-    for (const line of trackedLines) {
-      const { data: variant } = await supabase
-        .from("product_variants")
-        .select("id, stock_quantity, track_inventory")
-        .eq("id", line.variantId)
-        .eq("business_id", order.business_id as string)
-        .maybeSingle();
-      if (!variant?.track_inventory) continue;
-      const next = Math.max(0, (variant.stock_quantity as number) + line.qty);
-      const { error: stockError } = await supabase.rpc("adjust_variant_stock", {
-        p_variant_id: line.variantId,
-        p_stock_quantity: next,
-        p_reason: "restock_return",
-        p_order_id: orderId,
-      });
-      if (stockError) throw new Error(stockError.message);
-    }
+  if (action === "not_found") {
+    return { action: "not_found" };
+  }
+  if (action === "invalid_status") {
+    return {
+      action: "invalid_status",
+      orderId,
+      status:
+        typeof payload?.status === "string"
+          ? payload.status
+          : ORDER_STATUS.RETURN_APPROVED,
+    };
+  }
+  if (action === "returned") {
+    const restockedRaw = payload?.restocked;
+    return {
+      action: "returned",
+      orderId,
+      orderRef:
+        typeof payload?.order_ref === "string"
+          ? payload.order_ref
+          : (order.order_ref as string),
+      restocked: typeof restockedRaw === "boolean" ? restockedRaw : null,
+    };
   }
 
   return {
-    action: "returned",
+    action: "mark_returned_failed",
     orderId,
-    orderRef: order.order_ref as string,
-    restocked: returnRestocked,
+    message: `Unexpected mark_order_returned payload: ${JSON.stringify(raw)}`,
   };
 }
 

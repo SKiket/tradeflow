@@ -507,7 +507,60 @@ console.log(JSON.stringify(result));
       isoOk,
       isoDetail,
     );
+
+    // --- 7. forced restock failure → full rollback; then retry succeeds ---
+    const { variant: vFail } = await seedVariant(shopA.business.id, {
+      stock: 10,
+    });
+    const oFail = await seedReturnApproved(
+      shopA.business.id,
+      cust.id,
+      vFail.id,
+      1,
+    );
+    const beforeFail = await stockOf(vFail.id);
+    const { error: installErr } = await admin.rpc(
+      "verify_install_restock_fail_trigger",
+    );
+    if (installErr) throw installErr;
+    let failOut;
+    try {
+      failOut = await runMarkReturnedAsync(oFail.id, { restock: true });
+    } finally {
+      await admin.rpc("verify_remove_restock_fail_trigger");
+    }
+    const afterFail = await stockOf(vFail.id);
+    const movesFail = await restockMoves(vFail.id, oFail.id);
+    const flagsFail = await orderFlags(oFail.id);
+    record(
+      "7a. forced restock failure → order unchanged, no movement, mark_returned_failed",
+      failOut.action === "mark_returned_failed" &&
+        afterFail === beforeFail &&
+        movesFail.length === 0 &&
+        flagsFail.status === "RETURN_APPROVED" &&
+        flagsFail.return_restocked === null,
+      `out=${JSON.stringify(failOut)} stock ${beforeFail}→${afterFail} moves=${movesFail.length} flags=${JSON.stringify(flagsFail)}`,
+    );
+
+    const retryOut = await runMarkReturnedAsync(oFail.id, { restock: true });
+    const afterRetry = await stockOf(vFail.id);
+    const movesRetry = await restockMoves(vFail.id, oFail.id);
+    const flagsRetry = await orderFlags(oFail.id);
+    record(
+      "7b. after removing fail trigger, retry restocks exactly once",
+      retryOut.action === "returned" &&
+        afterRetry === beforeFail + 1 &&
+        movesRetry.length === 1 &&
+        flagsRetry.status === "RETURNED" &&
+        flagsRetry.return_restocked === true,
+      `out=${JSON.stringify(retryOut)} stock ${beforeFail}→${afterRetry} moves=${movesRetry.length} flags=${JSON.stringify(flagsRetry)}`,
+    );
   } finally {
+    try {
+      await admin.rpc("verify_remove_restock_fail_trigger");
+    } catch {
+      /* ignore */
+    }
     for (const shop of [shopA, shopB]) {
       if (!shop) continue;
       try {
