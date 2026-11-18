@@ -30,7 +30,16 @@ const syne = Syne({
 export const metadata: Metadata = {
   metadataBase: new URL(publicAppOrigin()),
   title: "TradeFlow",
-  description: "Mobile-first multi-tenant commerce platform",
+  description: "Sell on WhatsApp. Get paid. Stay in control.",
+  icons: {
+    icon: [
+      {
+        url: "/brand/tradeflow-app-icon-512.svg",
+        type: "image/svg+xml",
+      },
+    ],
+    apple: "/brand/tradeflow-app-icon-512.svg",
+  },
 };
 
 export default function RootLayout({
