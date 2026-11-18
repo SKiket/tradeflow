@@ -10,63 +10,44 @@ import {
   RotateCcw,
   Scale,
   Settings,
+  Share2,
   Users,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-const NAV = [
-  {
-    href: "/dashboard/inbox",
-    label: "Inbox",
-    icon: Inbox,
-    live: true,
-  },
-  {
-    href: "/dashboard/orders",
-    label: "Orders",
-    icon: ClipboardList,
-    live: true,
-  },
-  {
-    href: "/dashboard/returns",
-    label: "Returns",
-    icon: RotateCcw,
-    live: true,
-  },
-  {
-    href: "/dashboard/disputes",
-    label: "Disputes",
-    icon: Scale,
-    live: true,
-  },
-  {
-    href: "/dashboard/customers",
-    label: "Customers",
-    icon: Users,
-    live: true,
-  },
-  {
-    href: "/dashboard/products",
-    label: "Products",
-    icon: Package,
-    live: true,
-  },
+type NavItem = {
+  href: string;
+  label: string;
+  icon: typeof Inbox;
+  live: boolean;
+};
+
+const NAV: NavItem[] = [
+  { href: "/dashboard/inbox", label: "Inbox", icon: Inbox, live: true },
+  { href: "/dashboard/orders", label: "Orders", icon: ClipboardList, live: true },
+  { href: "/dashboard/returns", label: "Returns", icon: RotateCcw, live: true },
+  { href: "/dashboard/disputes", label: "Disputes", icon: Scale, live: true },
+  { href: "/dashboard/customers", label: "Customers", icon: Users, live: true },
+  { href: "/dashboard/products", label: "Products", icon: Package, live: true },
+  { href: "/dashboard/share", label: "Share", icon: Share2, live: true },
   {
     href: "/dashboard/performance",
     label: "Performance",
     icon: BarChart3,
     live: true,
   },
-  {
-    href: "/dashboard/settings",
-    label: "Settings",
-    icon: Settings,
-    live: true,
-  },
-] as const;
+  { href: "/dashboard/settings", label: "Settings", icon: Settings, live: true },
+];
 
-export function DashboardNav({ orientation }: { orientation: "side" | "top" }) {
+export function DashboardNav({
+  orientation,
+  shareLabel,
+}: {
+  orientation: "side" | "top";
+  /** Optional seller-language override for Share / Partager. */
+  shareLabel?: string;
+}) {
   const pathname = usePathname();
   const side = orientation === "side";
 
@@ -96,7 +77,9 @@ export function DashboardNav({ orientation }: { orientation: "side" | "top" }) {
             aria-current={active ? "page" : undefined}
           >
             <Icon className="size-4 shrink-0" />
-            {item.label}
+            {item.href === "/dashboard/share" && shareLabel
+              ? shareLabel
+              : item.label}
             {!item.live && (
               <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 Soon

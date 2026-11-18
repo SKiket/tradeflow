@@ -11,6 +11,7 @@ import { resolveAttentionLang } from "@/lib/dashboard/seller-attention-copy";
 import { unwrapRelation } from "@/lib/orders/display";
 
 import { PerformanceHomeLink } from "../performance-home-link";
+import { ShareHomeLink } from "../share-home-link";
 import { SellerAttentionPanel } from "../seller-attention-panel";
 import { requireSeller } from "../require-seller";
 import { OrdersTable, type OrderListRow } from "./orders-table";
@@ -94,6 +95,7 @@ export default async function OrdersPage({
             : `${orders.length} order${orders.length === 1 ? "" : "s"}, newest first.`}
         </p>
         <PerformanceHomeLink salesPence={recentSales} lang={perfLang} />
+        <ShareHomeLink lang={sellerLang} />
       </div>
       <OrdersTable orders={orders} initialStatus={initialStatus} />
     </div>

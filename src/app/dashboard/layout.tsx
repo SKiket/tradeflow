@@ -1,7 +1,9 @@
 import Link from "next/link";
 
 import { LegalLinks } from "@/components/brand/legal-links";
+import { getBusinessSellerLanguage } from "@/lib/channels/templates/business-language";
 import { countPendingReplays } from "@/lib/channels/pending-replay";
+import { shareCopy } from "@/lib/dashboard/share-copy";
 import { fetchSetupProgress } from "@/lib/dashboard/setup-progress";
 import {
   canAcceptOrders,
@@ -25,6 +27,8 @@ export default async function DashboardLayout({
   const { supabase, business, businesses } = await requireSeller();
   const setupProgress = await fetchSetupProgress(supabase, business.id);
   const pendingReplays = await countPendingReplays(supabase, business.id);
+  const sellerLang = await getBusinessSellerLanguage(supabase, business.id);
+  const shareNavLabel = shareCopy(sellerLang).navLabel;
 
   const billingBusiness = {
     stripe_subscription_status:
@@ -72,7 +76,7 @@ export default async function DashboardLayout({
           />
         </div>
         <div className="flex-1 p-3">
-          <DashboardNav orientation="side" />
+          <DashboardNav orientation="side" shareLabel={shareNavLabel} />
         </div>
         <LegalLinks
           className="border-t border-sidebar-border px-4 py-3 text-[11px] text-sidebar-foreground/50"
@@ -95,7 +99,7 @@ export default async function DashboardLayout({
           <SignOutButton />
         </header>
         <div className="border-b border-sidebar-border bg-sidebar px-2 py-2 text-sidebar-foreground md:hidden">
-          <DashboardNav orientation="top" />
+          <DashboardNav orientation="top" shareLabel={shareNavLabel} />
         </div>
         {paused ? (
           <BillingPausedBanner
