@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
+import { AssistedTextbox } from "@/components/assisted-textbox/assisted-textbox";
 import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/lib/orders/display";
 
@@ -20,15 +21,22 @@ function apiErrorMessage(json: unknown, status: number): string {
 export function ThreadReplyForm({
   threadId,
   inServiceWindow,
+  customerLanguage,
+  sellerNeeded,
+  uiLang,
 }: {
   threadId: string;
   inServiceWindow: boolean;
+  customerLanguage: string | null;
+  sellerNeeded: boolean;
+  uiLang?: string | null;
 }) {
   const router = useRouter();
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [windowWarning, setWindowWarning] = useState(!inServiceWindow);
+  const [placeholdersBlock, setPlaceholdersBlock] = useState(false);
 
   async function send(acknowledgeOutsideWindow: boolean) {
     setError(null);
@@ -54,6 +62,7 @@ export function ThreadReplyForm({
         throw new Error(apiErrorMessage(json, response.status));
       }
       setText("");
+      setPlaceholdersBlock(false);
       setWindowWarning(!inServiceWindow);
       router.refresh();
     } catch (caught) {
@@ -65,7 +74,7 @@ export function ThreadReplyForm({
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!text.trim() || pending) return;
+    if (!text.trim() || pending || placeholdersBlock) return;
     void send(windowWarning);
   }
 
@@ -74,14 +83,19 @@ export function ThreadReplyForm({
       <label htmlFor="inbox-reply" className="text-sm font-medium">
         Reply
       </label>
-      <textarea
+      <AssistedTextbox
         id="inbox-reply"
+        contextType="inbox"
+        customerLanguage={customerLanguage}
+        uiLang={uiLang ?? customerLanguage}
+        sellerNeeded={sellerNeeded}
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={setText}
+        assistUrl={`/api/inbox/${threadId}/assist`}
         rows={3}
-        required
-        className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         placeholder="Write a WhatsApp reply…"
+        disabled={pending}
+        onBlockSendChange={setPlaceholdersBlock}
       />
       {windowWarning ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
@@ -91,7 +105,11 @@ export function ThreadReplyForm({
       {error ? (
         <p className="text-sm text-destructive">{error}</p>
       ) : null}
-      <Button type="submit" disabled={pending || !text.trim()}>
+      <Button
+        type="submit"
+        disabled={pending || !text.trim() || placeholdersBlock}
+        data-tf-inbox-send
+      >
         {pending
           ? "Sending…"
           : windowWarning

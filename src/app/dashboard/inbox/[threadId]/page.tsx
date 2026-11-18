@@ -67,7 +67,7 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
   const { data: messages, error } = await supabase
     .from("messages")
     .select(
-      "id, direction, normalised_text, source_kind, ai_parse_result, created_at, customer_id, delivery_status, delivery_error_text, customers(phone_e164, name, last_customer_message_at, ai_paused_until)",
+      "id, direction, normalised_text, source_kind, ai_parse_result, created_at, customer_id, delivery_status, delivery_error_text, customers(phone_e164, name, preferred_language, last_customer_message_at, ai_paused_until)",
     )
     .eq("thread_id", threadId)
     .eq("business_id", businessId)
@@ -113,12 +113,14 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
       | {
           phone_e164: string;
           name: string | null;
+          preferred_language: string | null;
           last_customer_message_at: string | null;
           ai_paused_until: string | null;
         }
       | {
           phone_e164: string;
           name: string | null;
+          preferred_language: string | null;
           last_customer_message_at: string | null;
           ai_paused_until: string | null;
         }[]
@@ -134,6 +136,16 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
   const customerId =
     (messages.find((row) => row.customer_id)?.customer_id as string | null) ??
     null;
+
+  const customerLanguage =
+    (firstCustomer?.preferred_language as string | null) ?? null;
+
+  let sellerNeeded = paused;
+  for (const row of messages) {
+    const parse = formatParse(row.ai_parse_result);
+    if (parse?.escalateToSeller) sellerNeeded = true;
+    if (isAiPausedSkip(row.ai_parse_result)) sellerNeeded = true;
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -308,7 +320,13 @@ export default async function InboxThreadPage({ params }: ThreadPageProps) {
         })}
       </ol>
 
-      <ThreadReplyForm threadId={threadId} inServiceWindow={inServiceWindow} />
+      <ThreadReplyForm
+        threadId={threadId}
+        inServiceWindow={inServiceWindow}
+        customerLanguage={customerLanguage}
+        sellerNeeded={sellerNeeded}
+        uiLang={customerLanguage}
+      />
     </div>
   );
 }
