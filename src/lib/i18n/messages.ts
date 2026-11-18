@@ -238,6 +238,18 @@ export const MESSAGES: Record<MessageId, Record<SupportedLang, string>> = {
     en: "Please confirm with the seller if you have allergies.",
     fr: "Veuillez confirmer auprès du vendeur si vous avez des allergies.",
   },
+  "support.shop_link_line": {
+    en: "Here's our shop: {url}",
+    fr: "Voici notre boutique : {url}",
+  },
+  "support.product_link_line": {
+    en: "Here's the product: {url}",
+    fr: "Voici le produit : {url}",
+  },
+  "support.shop_link_off": {
+    en: "I can't send a shop link from here — the shop owner can share the details with you.",
+    fr: "Je ne peux pas envoyer de lien boutique d'ici — le propriétaire de la boutique pourra vous transmettre les détails.",
+  },
   "confirm.payments_unavailable": {
     en: "This shop cannot take card payments right now; the seller has been told. Your order is saved — they'll follow up here.",
     fr: "Cette boutique ne peut pas accepter les paiements par carte pour le moment ; le vendeur a été prévenu. Votre commande est enregistrée — ils vous répondront ici.",

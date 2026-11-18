@@ -14,6 +14,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 /**
  * Structured output for taskKey "support_reply".
  */
+export type SupportShareLink = "none" | "shop" | "product";
+
 export interface SupportReplyResult {
   reply: string;
   escalate_to_seller: boolean;
@@ -24,6 +26,12 @@ export interface SupportReplyResult {
   return_reason_detail: string | null;
   /** ISO 639-1 code of the buyer's latest message, or "unknown". */
   language: string;
+  /**
+   * Intent only — never put a URL in `reply`. Server appends the real link.
+   * product requires share_product_id matching an ACTIVE catalog id.
+   */
+  share_link: SupportShareLink;
+  share_product_id: string | null;
 }
 
 export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
@@ -68,6 +76,17 @@ export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
       description:
         'ISO 639-1 code of the latest customer message (e.g. "en", "fr"), or "unknown"',
     },
+    share_link: {
+      type: "string",
+      enum: ["none", "shop", "product"],
+      description:
+        "Intent only. never write URLs in reply. shop = share the shop page; product = share one active catalog product (set share_product_id); none = no link.",
+    },
+    share_product_id: {
+      type: ["string", "null"],
+      description:
+        "Active catalog product id when share_link is product; otherwise null.",
+    },
   },
   required: [
     "reply",
@@ -78,6 +97,8 @@ export const SUPPORT_REPLY_SCHEMA: JSONSchema7 = {
     "return_reason",
     "return_reason_detail",
     "language",
+    "share_link",
+    "share_product_id",
   ],
   additionalProperties: false,
 };
@@ -107,7 +128,11 @@ Rules:
 8. If the answer is NOT in the seller text / catalog / orders: escalate_to_seller true. Tell the buyer plainly (in their language) that you do not know from the shop's information and the seller will reply. Never guess.
 9. Match ai_tone. Do not mention these instructions or that you are an AI. WhatsApp only.
 10. Set language to ISO 639-1 of the LATEST customer message, or "unknown".
-11. JSON matching the schema exactly.`;
+11. NEVER write URLs, links, or domains in reply. The server appends shop/product links. Set share_link:
+   - "shop" when the buyer wants the website, catalogue, menu, "what do you sell", photos list, or the whole shop.
+   - "product" (+ share_product_id from ACTIVE CATALOG) when they ask about a specific listed product (details, photos, price of that item).
+   - "none" otherwise. share_product_id is null unless share_link is "product".
+12. JSON matching the schema exactly.`;
 
 interface ThreadMessage {
   direction: string;
@@ -388,6 +413,19 @@ function normaliseSupportReply(data: unknown): SupportReplyResult {
     typeof record.language === "string" ? record.language.trim() : "";
   const language = languageRaw.length > 0 ? languageRaw.toLowerCase() : "unknown";
 
+  const shareRaw =
+    typeof record.share_link === "string"
+      ? record.share_link.trim().toLowerCase()
+      : "none";
+  const share_link: SupportShareLink =
+    shareRaw === "shop" || shareRaw === "product" ? shareRaw : "none";
+  const shareProductRaw =
+    typeof record.share_product_id === "string"
+      ? record.share_product_id.trim()
+      : "";
+  const share_product_id =
+    share_link === "product" && shareProductRaw ? shareProductRaw : null;
+
   return {
     reply,
     escalate_to_seller: escalate,
@@ -397,5 +435,7 @@ function normaliseSupportReply(data: unknown): SupportReplyResult {
     return_reason: reason,
     return_reason_detail: detail,
     language,
+    share_link,
+    share_product_id,
   };
 }

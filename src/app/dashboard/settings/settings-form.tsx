@@ -28,6 +28,24 @@ import {
 
 const AI_TONES = ["friendly", "professional", "concise", "warm"] as const;
 
+const SHOP_LINK_OPTIONS = [
+  {
+    value: "off" as const,
+    labelEn: "Off",
+    labelFr: "Désactivé",
+  },
+  {
+    value: "ask" as const,
+    labelEn: "When customers ask",
+    labelFr: "Quand les clients demandent",
+  },
+  {
+    value: "ask_and_suggest" as const,
+    labelEn: "When customers ask and when it helps",
+    labelFr: "Quand les clients demandent et quand cela aide",
+  },
+];
+
 export type SettingsFormValues = {
   id: string;
   storefrontUrl: string;
@@ -48,6 +66,8 @@ export type SettingsFormValues = {
   stripe_transfers_capability_active?: boolean;
   whatsapp_phone_e164: string | null;
   storefront_accent_color: string | null;
+  /** off | ask | ask_and_suggest */
+  shop_link_in_chats: "off" | "ask" | "ask_and_suggest";
   logo_url: string | null;
   banner_url: string | null;
   stripe_customer_id: string | null;
@@ -80,6 +100,9 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
     String(business.return_window_days ?? DEFAULT_RETURN_WINDOW_DAYS),
   );
   const [aiTone, setAiTone] = useState(business.ai_tone || "friendly");
+  const [shopLinkInChats, setShopLinkInChats] = useState<
+    "off" | "ask" | "ask_and_suggest"
+  >(business.shop_link_in_chats ?? "ask_and_suggest");
   const [deliveryInfo, setDeliveryInfo] = useState(
     business.delivery_info ?? "",
   );
@@ -153,6 +176,7 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             ? Math.trunc(Number.parseInt(returnWindowDays, 10))
             : (business.return_window_days ?? DEFAULT_RETURN_WINDOW_DAYS),
           ai_tone: aiTone.trim() || "friendly",
+          shop_link_in_chats: shopLinkInChats,
           shop_faq: shopNorm.value.shop_faq,
           delivery_info: shopNorm.value.delivery_info,
           default_low_stock_threshold: parseThreshold(
@@ -330,6 +354,33 @@ export function SettingsForm({ business }: { business: SettingsFormValues }) {
             </select>
             <p className="text-xs text-muted-foreground">
               Used when answering buyer questions over WhatsApp.
+            </p>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="shop-link-in-chats">
+              Shop link in chats / Lien boutique dans les chats
+            </Label>
+            <select
+              id="shop-link-in-chats"
+              value={shopLinkInChats}
+              onChange={(event) =>
+                setShopLinkInChats(
+                  event.target.value as "off" | "ask" | "ask_and_suggest",
+                )
+              }
+              disabled={pending}
+              className="flex h-9 w-full rounded-lg border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {SHOP_LINK_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.labelEn} / {option.labelFr}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Controls when WhatsApp replies include your shop or product link.
+              / Définit quand les réponses WhatsApp incluent le lien de votre
+              boutique ou d&apos;un produit.
             </p>
           </div>
           <div className="space-y-2">

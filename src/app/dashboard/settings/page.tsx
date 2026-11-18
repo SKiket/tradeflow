@@ -20,7 +20,7 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
   const { data, error } = await supabase
     .from("businesses")
     .select(
-      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, return_window_days, ai_tone, shop_faq, delivery_info, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_transfers_capability_active, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color, closed_at, purge_after",
+      "id, slug, name, logo_url, banner_url, dispatch_address_line1, dispatch_city, dispatch_postcode, returns_policy_text, return_window_days, ai_tone, shop_link_in_chats, shop_faq, delivery_info, default_low_stock_threshold, stripe_connected_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted, stripe_transfers_capability_active, stripe_customer_id, stripe_subscription_id, stripe_subscription_status, trial_ends_at, whatsapp_phone_e164, storefront_accent_color, closed_at, purge_after",
     )
     .eq("id", businessId)
     .maybeSingle();
@@ -57,6 +57,12 @@ export default async function SettingsPage({ searchParams }: SettingsPageProps) 
     return_window_days:
       (data.return_window_days as number | null) ?? DEFAULT_RETURN_WINDOW_DAYS,
     ai_tone: (data.ai_tone as string) || "friendly",
+    shop_link_in_chats:
+      data.shop_link_in_chats === "off" ||
+      data.shop_link_in_chats === "ask" ||
+      data.shop_link_in_chats === "ask_and_suggest"
+        ? data.shop_link_in_chats
+        : "ask_and_suggest",
     shop_faq: Array.isArray(data.shop_faq)
       ? (data.shop_faq as { question?: string; answer?: string }[])
           .map((item) => ({

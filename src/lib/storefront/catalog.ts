@@ -278,3 +278,108 @@ export function catalogLine(
   }
   return null;
 }
+
+export type PublicProductPage = {
+  storefront: Omit<PublicStorefront, "products">;
+  product: PublicStorefrontProduct & { id: string };
+};
+
+/**
+ * Single active product for a public deep-link. Returns null when the shop or
+ * product is missing, inactive, closed, or not owned by the slug.
+ * Product id appears only on this page (and in the URL), not on the shop listing.
+ */
+export const fetchPublicProduct = cache(
+  async (
+    slug: string,
+    productId: string,
+  ): Promise<PublicProductPage | null> => {
+    const trimmedId = productId.trim();
+    if (!trimmedId) return null;
+    const storefront = await fetchPublicStorefront(slug);
+    if (!storefront || storefront.shopClosed) return null;
+
+    const supabase = createAdminClient();
+    const { data: row, error } = await supabase
+      .from("products")
+      .select(
+        "id, name, description, price_pence, photo_url, usage_instructions, ingredients, storage_and_care, size_and_fit, allergens_status, allergens_text, product_faqs, product_images(image_url, sort_order), product_variants(id, label, deleted_at, track_inventory, stock_quantity, reserved_quantity, low_stock_threshold)",
+      )
+      .eq("id", trimmedId)
+      .eq("business_id", storefront.businessId)
+      .eq("active", true)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    if (error || !row) return null;
+
+    const variants = ((row.product_variants as VariantRow[] | null) ?? [])
+      .filter((variant) => !variant.deleted_at)
+      .map((variant) => {
+        const label = variant.label ?? null;
+        const message = storefrontOrderMessage(row.name as string, label);
+        return {
+          id: variant.id,
+          label,
+          orderUrl: storefront.whatsappPhoneE164
+            ? waMeOrderUrl(storefront.whatsappPhoneE164, message)
+            : null,
+          stockStatus: variantStockStatus(variant),
+        };
+      });
+    if (variants.length === 0) return null;
+
+    const gallery = (
+      (row.product_images as
+        | { image_url: string; sort_order: number }[]
+        | null) ?? []
+    )
+      .slice()
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((image) => image.image_url)
+      .filter((url) => Boolean(url?.trim()));
+
+    const statusRaw = (row.allergens_status as string | null) ?? "not_provided";
+    const allergensStatus =
+      statusRaw === "listed" || statusRaw === "none_declared"
+        ? statusRaw
+        : "not_provided";
+    const faqsRaw = Array.isArray(row.product_faqs) ? row.product_faqs : [];
+    const faqs = faqsRaw
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const rec = item as Record<string, unknown>;
+        const q = typeof rec.question === "string" ? rec.question.trim() : "";
+        const a = typeof rec.answer === "string" ? rec.answer.trim() : "";
+        if (!q || !a) return null;
+        return { question: q, answer: a };
+      })
+      .filter((item): item is PublicStorefrontFaq => Boolean(item));
+
+    const { products: _omit, ...shop } = storefront;
+    void _omit;
+
+    return {
+      storefront: shop,
+      product: {
+        id: row.id as string,
+        name: row.name as string,
+        description: (row.description as string | null) ?? null,
+        pricePence: row.price_pence as number,
+        photoUrl: (row.photo_url as string | null) ?? null,
+        imageUrls: gallery,
+        usageInstructions: (row.usage_instructions as string | null) ?? null,
+        ingredients: (row.ingredients as string | null) ?? null,
+        storageAndCare: (row.storage_and_care as string | null) ?? null,
+        sizeAndFit: (row.size_and_fit as string | null) ?? null,
+        allergensStatus,
+        allergensText:
+          allergensStatus === "listed"
+            ? ((row.allergens_text as string | null) ?? null)
+            : null,
+        faqs,
+        variants,
+      },
+    };
+  },
+);

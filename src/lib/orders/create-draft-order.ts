@@ -15,6 +15,11 @@ import {
 } from "@/lib/orders/confirm-draft-order";
 import { ORDER_STATUS } from "@/lib/orders/status";
 import { canAcceptOrders } from "@/lib/stripe/billing-gate";
+import {
+  applyShopLinkToReply,
+  parseShopLinkMode,
+  resolveShopLinkShare,
+} from "@/lib/support/shop-link-share";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -135,12 +140,29 @@ export async function createDraftOrderFromParse(
 
   const gate = await evaluateConfirmGate(supabase, params.businessId, parse, lang);
   if (!gate.ok) {
-    const message = withReplyPrefix(
-      replyPrefix,
+    const baseClarification =
       parse.clarification_message?.trim() ||
-        gate.fallbackMessage ||
-        t("draft.clarification_unsure", lang),
-    );
+      gate.fallbackMessage ||
+      t("draft.clarification_unsure", lang);
+    const unmatched =
+      /couldn't match|pas pu associer|not in our catalogue|pas trouvé/i.test(
+        baseClarification,
+      );
+    const withLink = unmatched
+      ? await maybeAppendSuggestedShopLink({
+          supabase,
+          businessId: params.businessId,
+          threadId: params.threadId,
+          customerId: params.customerId,
+          messageText: parse.items
+            .map((item) => item.product_query || "")
+            .join(" "),
+          lang,
+          reply: baseClarification,
+          suggestReason: "unmatched",
+        })
+      : baseClarification;
+    const message = withReplyPrefix(replyPrefix, withLink);
     try {
       const sent = await sendWhatsAppMessage({
         businessId: params.businessId,
@@ -184,10 +206,18 @@ export async function createDraftOrderFromParse(
     (line) => line.trackInventory && line.available < line.quantity,
   );
   if (shortages.length > 0) {
-    const message = withReplyPrefix(
-      replyPrefix,
-      formatStockShortageMessage(shortages, lang),
-    );
+    const baseShortage = formatStockShortageMessage(shortages, lang);
+    const withLink = await maybeAppendSuggestedShopLink({
+      supabase,
+      businessId: params.businessId,
+      threadId: params.threadId,
+      customerId: params.customerId,
+      messageText: parse.items.map((item) => item.product_query || "").join(" "),
+      lang,
+      reply: baseShortage,
+      suggestReason: "out_of_stock",
+    });
+    const message = withReplyPrefix(replyPrefix, withLink);
     try {
       const sent = await sendWhatsAppMessage({
         businessId: params.businessId,
@@ -736,6 +766,48 @@ async function insertStatusHistory(
 
 export function generateOrderRef(): string {
   return `TF-${randomBytes(4).toString("hex").toUpperCase()}`;
+}
+
+async function maybeAppendSuggestedShopLink(params: {
+  supabase: SupabaseClient;
+  businessId: string;
+  threadId: string;
+  customerId: string;
+  messageText: string;
+  lang: string;
+  reply: string;
+  suggestReason: "unmatched" | "out_of_stock";
+}): Promise<string> {
+  try {
+    const { data } = await params.supabase
+      .from("businesses")
+      .select("shop_link_in_chats")
+      .eq("id", params.businessId)
+      .maybeSingle();
+    const mode = parseShopLinkMode(data?.shop_link_in_chats);
+    const decision = await resolveShopLinkShare({
+      businessId: params.businessId,
+      threadId: params.threadId,
+      customerId: params.customerId,
+      messageText: params.messageText,
+      lang: params.lang,
+      mode,
+      aiShare: { share_link: "none", share_product_id: null },
+      suggestReason: params.suggestReason,
+      supabase: params.supabase,
+    });
+    return applyShopLinkToReply({
+      reply: params.reply,
+      decision,
+      lang: params.lang,
+    }).reply;
+  } catch (error) {
+    console.error(
+      "[orders] shop link append failed",
+      error instanceof Error ? error.message : String(error),
+    );
+    return params.reply;
+  }
 }
 
 function formatPence(pence: number): string {

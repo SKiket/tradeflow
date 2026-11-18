@@ -1,6 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { generateSupportReply } from "@/lib/ai/tasks/support-reply";
+import {
+  generateSupportReply,
+  type SupportReplyResult,
+} from "@/lib/ai/tasks/support-reply";
 import { sendWhatsAppMessage } from "@/lib/channels/send/twilio-whatsapp";
 import { withReplyPrefix } from "@/lib/channels/voice-note";
 import { t } from "@/lib/i18n";
@@ -26,6 +29,14 @@ import { fetchActiveCatalog } from "@/lib/products/catalog";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { applySupportReplyGuardrail } from "@/lib/support/reply-guardrail";
 import { notifySellerOfQuestion } from "@/lib/support/notify-seller";
+import {
+  applyShopLinkToReply,
+  detectGreeting,
+  parseShopLinkMode,
+  resolveShopLinkShare,
+  stripInventedUrls,
+  type ShopLinkMode,
+} from "@/lib/support/shop-link-share";
 
 /** @deprecated Prefer t("support.other_fallback", lang). */
 export const OTHER_FALLBACK_MESSAGE = t("support.other_fallback", "en");
@@ -63,6 +74,8 @@ export interface HandleSupportParams {
   /** Optional transparency prefix (e.g. voice-note "I heard: … — "). */
   buyerReplyPrefix?: string | null;
   supabase?: SupabaseClient;
+  /** Test-only: skip live AI and use this structured result. */
+  supportReplyOverride?: SupportReplyResult;
 }
 
 /**
@@ -88,16 +101,18 @@ export async function handleQuestionReply(
     params.customerId,
   );
 
-  let generated;
+  let generated: SupportReplyResult;
   try {
-    generated = await generateSupportReply({
-      businessId: params.businessId,
-      messageText: params.messageText,
-      threadId: params.threadId,
-      customerId: params.customerId,
-      preferredLanguage,
-      supabase,
-    });
+    generated =
+      params.supportReplyOverride ??
+      (await generateSupportReply({
+        businessId: params.businessId,
+        messageText: params.messageText,
+        threadId: params.threadId,
+        customerId: params.customerId,
+        preferredLanguage,
+        supabase,
+      }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[support] support_reply failed", {
@@ -128,9 +143,11 @@ export async function handleQuestionReply(
   let escalateToSeller = generated.escalate_to_seller;
   let returnOutcome: SupportInboundOutcome["returnOutcome"];
   let skipBuyerSend = false;
+  let skipShopLink = false;
 
   if (generated.is_return_request) {
     escalateToSeller = false;
+    skipShopLink = true;
     const applied = await applyReturnRequest({
       supabase,
       businessId: params.businessId,
@@ -192,6 +209,53 @@ export async function handleQuestionReply(
         );
       }
     }
+
+    // Strip invented URLs before link append (allowlist filled after resolve).
+    reply = stripInventedUrls(reply, []);
+
+    const mode = await loadShopLinkMode(supabase, params.businessId);
+    const unmatched =
+      escalateToSeller &&
+      generated.share_link === "none" &&
+      !generated.is_return_request;
+    const outOfStockProduct =
+      generated.share_link === "product" &&
+      generated.share_product_id &&
+      catalog.some((p) => {
+        if (p.id !== generated.share_product_id) return false;
+        return p.variants.every(
+          (v) => v.track_inventory && (v.available ?? 0) <= 0,
+        );
+      });
+
+    const decision = await resolveShopLinkShare({
+      businessId: params.businessId,
+      threadId: params.threadId,
+      customerId: params.customerId,
+      messageText: params.messageText,
+      lang,
+      mode,
+      aiShare: {
+        share_link: outOfStockProduct ? "none" : generated.share_link,
+        share_product_id: outOfStockProduct
+          ? null
+          : generated.share_product_id,
+      },
+      suggestReason: outOfStockProduct
+        ? "out_of_stock"
+        : unmatched
+          ? "unmatched"
+          : null,
+      forceBlock:
+        escalateToSeller && detectComplaintFromEscalate(params.messageText),
+      supabase,
+    });
+    const applied = applyShopLinkToReply({ reply, decision, lang });
+    reply = applied.reply;
+  }
+
+  if (skipShopLink) {
+    reply = stripInventedUrls(reply, []);
   }
 
   reply = withReplyPrefix(params.buyerReplyPrefix, reply);
@@ -371,13 +435,37 @@ async function applyReturnRequest(params: {
 
 /**
  * intent: "other" — fixed fallback, no AI call.
+ * May append a suggested shop link on a greeting when the seller allows it.
  */
 export async function handleOtherFallback(
   params: HandleSupportParams,
 ): Promise<SupportInboundOutcome> {
   const supabase = params.supabase ?? createAdminClient();
+
+  await maybeUpdatePreferredLanguage({
+    supabase,
+    customerId: params.customerId,
+    messageText: params.messageText,
+    detectedLanguage: heuristicLanguage(params.messageText),
+  });
   const lang = await getCustomerPreferredLanguage(supabase, params.customerId);
-  const reply = t("support.other_fallback", lang);
+
+  let reply = t("support.other_fallback", lang);
+  const mode = await loadShopLinkMode(supabase, params.businessId);
+  const decision = await resolveShopLinkShare({
+    businessId: params.businessId,
+    threadId: params.threadId,
+    customerId: params.customerId,
+    messageText: params.messageText,
+    lang,
+    mode,
+    aiShare: { share_link: "none", share_product_id: null },
+    suggestReason: detectGreeting(params.messageText) ? "greeting" : null,
+    supabase,
+  });
+  reply = applyShopLinkToReply({ reply, decision, lang }).reply;
+  reply = withReplyPrefix(params.buyerReplyPrefix, reply);
+
   const buyerSend = await trySend({
     businessId: params.businessId,
     toPhoneE164: params.customerPhoneE164,
@@ -396,6 +484,26 @@ export async function handleOtherFallback(
     aiCalled: false,
     buyerSend,
   };
+}
+
+async function loadShopLinkMode(
+  supabase: SupabaseClient,
+  businessId: string,
+): Promise<ShopLinkMode> {
+  const { data } = await supabase
+    .from("businesses")
+    .select("shop_link_in_chats")
+    .eq("id", businessId)
+    .maybeSingle();
+  return parseShopLinkMode(data?.shop_link_in_chats);
+}
+
+function detectComplaintFromEscalate(messageText: string): boolean {
+  // Used only to block *suggested* links when escalate looks like a complaint.
+  // Explicit catalogue asks still share via resolveShopLinkShare.
+  return /\b(complaint|refund|dispute|chargeback|réclamation|remboursement|litige)\b/iu.test(
+    messageText,
+  );
 }
 
 async function trySend(params: {
