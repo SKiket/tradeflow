@@ -56,6 +56,7 @@ const FIXED_ORDER = [
   "verify-auth-flow.mjs",
   "verify-ai-gateway.mjs",
   "verify-rls.mjs",
+  "verify-rls-config.mjs",
   "verify-webhook-ingress.mjs",
   "verify-whatsapp-normalisation.mjs",
   "verify-whatsapp-send.mjs",
